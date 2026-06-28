@@ -1,0 +1,39 @@
+{
+  "name": "Default",
+  "modules": {
+    "mouse": {
+      "enabled": false,
+      "centering_enabled": false,
+      "centering_delay": 5.0,
+      "centering_countdown": 3,
+      "centering_tolerance": 50,
+      "precision_mode_enabled": false,
+      "precision_speed": 3,
+      "click_lock_enabled": false,
+      "keyboard_click_left": "",
+      "keyboard_click_right": "",
+      "keyboard_click_double": "",
+      "screen_zones_enabled": false,
+      "screen_zones": []
+    },
+    "keyboard": {
+      "enabled": false,
+      "delay_enabled": false,
+      "delay_ms": 500,
+      "delay_exceptions": [],
+      "sticky_shift": false,
+      "sticky_ctrl": false,
+      "sticky_alt": false,
+      "sticky_win": false,
+      "sticky_auto_release": true,
+      "show_modifier_status": true
+    },
+    "macros": {
+      "enabled": false,
+      "trigger_key": "",
+      "macros": []
+    }
+  },
+  "actions": {},
+  "emergency_key": "F12"
+}
