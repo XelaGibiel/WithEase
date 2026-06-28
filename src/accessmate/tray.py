@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from accessmate.core.event_bus import bus
@@ -20,9 +20,27 @@ if TYPE_CHECKING:
 ICON_PATH = Path(__file__).parent.parent.parent / "assets" / "icons" / "accessmate.ico"
 
 
+def _make_fallback_icon() -> QIcon:
+    """Generate a simple blue 'AM' icon when no .ico file is present."""
+    px = QPixmap(32, 32)
+    px.fill(QColor("#1565C0"))
+    painter = QPainter(px)
+    painter.setPen(QColor("white"))
+    font = painter.font()
+    font.setBold(True)
+    font.setPixelSize(13)
+    painter.setFont(font)
+    painter.drawText(px.rect(), 0x84, "AM")  # AlignHCenter | AlignVCenter
+    painter.end()
+    return QIcon(px)
+
+
 class TrayIcon(QSystemTrayIcon):
     def __init__(self, app: "AccessMateApp") -> None:
-        icon = QIcon(str(ICON_PATH)) if ICON_PATH.exists() else QIcon()
+        if ICON_PATH.exists():
+            icon = QIcon(str(ICON_PATH))
+        else:
+            icon = _make_fallback_icon()
         super().__init__(icon)
         self._app = app
         self.setToolTip(tr("app.name"))

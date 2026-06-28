@@ -73,10 +73,10 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addStretch()
 
-        emergency_btn = QPushButton(f"⛔  {tr('app.emergency_stop')}")
-        emergency_btn.setObjectName("emergencyButton")
-        emergency_btn.clicked.connect(self._app.emergency_stop)
-        sidebar_layout.addWidget(emergency_btn)
+        self._emergency_btn = QPushButton(f"⛔  {tr('app.emergency_stop')}")
+        self._emergency_btn.setObjectName("emergencyButton")
+        self._emergency_btn.clicked.connect(self._app.emergency_stop)
+        sidebar_layout.addWidget(self._emergency_btn)
 
         root.addWidget(sidebar)
 
@@ -149,8 +149,28 @@ class MainWindow(QMainWindow):
         self._app._app_config["language"] = lang_code
         from accessmate.core import config
         config.save_app_config(self._app._app_config)
-        # Rebuild the window title and nav labels to reflect the new language
+        self._rebuild_ui()
+
+    def _rebuild_ui(self) -> None:
+        """Rebuild the entire window content to reflect a language change."""
+        current_row = self._nav.currentRow()
+
+        # Remove all nav items and stack pages
+        self._nav.clear()
+        while self._stack.count():
+            widget = self._stack.widget(0)
+            self._stack.removeWidget(widget)
+            widget.deleteLater()
+
+        # Rebuild
         self.setWindowTitle(tr("settings.title"))
+        self._populate_nav()
+
+        # Update sidebar buttons that are outside the stack
+        self._emergency_btn.setText(f"⛔  {tr('app.emergency_stop')}")
+
+        # Restore selected page (or go back to General)
+        self._nav.setCurrentRow(max(0, current_row))
 
     def _build_profiles_page(self) -> QWidget:
         widget = QWidget()
