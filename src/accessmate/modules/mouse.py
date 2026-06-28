@@ -12,6 +12,7 @@ Features:
 """
 from __future__ import annotations
 
+import ctypes
 import threading
 from typing import Any
 
@@ -102,11 +103,25 @@ class MouseModule(BaseModule):
 
     def on_settings_changed(self) -> None:
         """Called by the settings UI when any value changes."""
+        # Keep ActionManager in sync with the current hotkey settings
+        action_manager.assign_trigger(
+            "mouse.center",
+            self._settings.get("centering_hotkey", ""),
+        )
+        action_manager.assign_trigger(
+            "mouse.precision_toggle",
+            self._settings.get("precision_hotkey", ""),
+        )
+        action_manager.assign_trigger(
+            "mouse.click_lock_toggle",
+            self._settings.get("clicklock_hotkey", ""),
+        )
         if self._enabled:
             self._schedule_centering()
 
     def load_settings(self, settings: dict[str, Any]) -> None:
         self._settings = settings
+        self.on_settings_changed()
 
     def dump_settings(self) -> dict[str, Any]:
         return self._settings
@@ -121,7 +136,8 @@ class MouseModule(BaseModule):
         self._schedule_centering()
 
     def _on_key_press(self, key: Any) -> None:
-        """Abort countdown on any key press."""
+        """Fire ActionManager hotkeys, then reset the centering timer."""
+        action_manager.fire(str(key))
         self._countdown_abort.set()
         self._schedule_centering()
 
@@ -165,14 +181,12 @@ class MouseModule(BaseModule):
         if not PYNPUT_AVAILABLE:
             return
         try:
-            from PySide6.QtWidgets import QApplication
-
-            screen = QApplication.primaryScreen()
-            if screen is None:
-                return
-            geo = screen.geometry()
-            center = geo.center()
-            cx, cy = center.x(), center.y()
+            # Use physical pixel dimensions so the position is correct
+            # regardless of Windows DPI scaling settings.
+            user32 = ctypes.windll.user32
+            user32.SetProcessDPIAware()
+            cx = user32.GetSystemMetrics(0) // 2
+            cy = user32.GetSystemMetrics(1) // 2
 
             ctrl = pynput_mouse.Controller()
             ctrl.position = (cx, cy)
