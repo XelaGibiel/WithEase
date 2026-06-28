@@ -58,7 +58,8 @@ class HotkeyEdit(QWidget):
     def _start_recording(self) -> None:
         self._recording = True
         self._btn.setText("[ press a key … ]")
-        self._btn.grabKeyboard()
+        self.setFocus()
+        self.grabKeyboard()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if not self._recording:
@@ -80,19 +81,19 @@ class HotkeyEdit(QWidget):
 
         pynput_key = self._qt_key_to_pynput(qt_key, event.text())
         self._recording = False
-        self._btn.releaseKeyboard()
+        self.releaseKeyboard()
         self._key = pynput_key
         self._update_display()
         self.key_changed.emit(self._key)
 
     def _cancel_recording(self) -> None:
         self._recording = False
-        self._btn.releaseKeyboard()
+        self.releaseKeyboard()
         self._update_display()
 
     def _clear(self) -> None:
         self._recording = False
-        self._btn.releaseKeyboard()
+        self.releaseKeyboard()
         self._key = ""
         self._update_display()
         self.key_changed.emit("")

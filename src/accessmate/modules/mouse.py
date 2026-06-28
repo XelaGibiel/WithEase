@@ -165,21 +165,14 @@ class MouseModule(BaseModule):
         if not PYNPUT_AVAILABLE:
             return
         try:
-            from PySide6.QtGui import QCursor
             from PySide6.QtWidgets import QApplication
 
             screen = QApplication.primaryScreen()
             if screen is None:
                 return
             geo = screen.geometry()
-            cx = geo.width() // 2
-            cy = geo.height() // 2
-
-            tolerance = int(self._settings.get("centering_tolerance", 50))
-            pos = QCursor.pos()
-            if abs(pos.x() - cx) < tolerance and abs(pos.y() - cy) < tolerance:
-                self._schedule_centering()
-                return
+            center = geo.center()
+            cx, cy = center.x(), center.y()
 
             ctrl = pynput_mouse.Controller()
             ctrl.position = (cx, cy)

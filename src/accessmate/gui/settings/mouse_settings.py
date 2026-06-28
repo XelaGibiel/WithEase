@@ -78,16 +78,6 @@ class MouseSettingsWidget(QWidget):
         centering_form.addRow(tr("module.mouse.centering.countdown"),
                               self._centering_countdown)
 
-        self._centering_tolerance = QSpinBox()
-        self._centering_tolerance.setRange(0, 500)
-        self._centering_tolerance.setSuffix(" px")
-        self._centering_tolerance.setValue(
-            int(self._settings.get("centering_tolerance", 50)))
-        self._centering_tolerance.valueChanged.connect(
-            lambda v: self._save("centering_tolerance", v))
-        centering_form.addRow(tr("module.mouse.centering.tolerance"),
-                              self._centering_tolerance)
-
         self._centering_hotkey = HotkeyEdit(
             self._settings.get("centering_hotkey", ""))
         self._centering_hotkey.key_changed.connect(
