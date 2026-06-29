@@ -39,6 +39,10 @@ class MouseModule(BaseModule):
     def DISPLAY_NAME(self) -> str:  # type: ignore[override]
         return tr("module.mouse.name")
 
+    # Windows API constants for mouse speed
+    _SPI_GETMOUSESPEED = 0x0070
+    _SPI_SETMOUSESPEED = 0x0071
+
     def __init__(self) -> None:
         super().__init__()
         self._settings: dict[str, Any] = {}
@@ -47,6 +51,7 @@ class MouseModule(BaseModule):
         self._kb_listener: Any = None
         self._countdown_abort = threading.Event()
         self._lock = threading.Lock()
+        self._original_mouse_speed: int | None = None
 
         action_manager.register(Action(
             id="mouse.center",
@@ -93,6 +98,12 @@ class MouseModule(BaseModule):
         if self._kb_listener:
             self._kb_listener.stop()
             self._kb_listener = None
+
+        # Always restore mouse speed if precision mode was active
+        if self._original_mouse_speed is not None:
+            self._set_system_mouse_speed(self._original_mouse_speed)
+            self._original_mouse_speed = None
+        self._settings["precision_mode_enabled"] = False
 
         self._countdown_abort.clear()
         bus.publish("module.stopped", module_id=self.MODULE_ID)
@@ -198,11 +209,35 @@ class MouseModule(BaseModule):
     # Precision mode
     # ------------------------------------------------------------------
 
+    def _get_system_mouse_speed(self) -> int:
+        speed = ctypes.c_int(0)
+        ctypes.windll.user32.SystemParametersInfoW(
+            self._SPI_GETMOUSESPEED, 0, ctypes.byref(speed), 0)
+        return speed.value
+
+    def _set_system_mouse_speed(self, speed: int) -> None:
+        ctypes.windll.user32.SystemParametersInfoW(
+            self._SPI_SETMOUSESPEED, 0, speed, 0)
+
     def _toggle_precision(self) -> None:
-        current = self._settings.get("precision_mode_enabled", False)
-        self._settings["precision_mode_enabled"] = not current
-        bus.publish("mouse.precision_changed",
-                    enabled=self._settings["precision_mode_enabled"])
+        active = not self._settings.get("precision_mode_enabled", False)
+        self._settings["precision_mode_enabled"] = active
+
+        if active:
+            # Save the current system speed before lowering it.
+            self._original_mouse_speed = self._get_system_mouse_speed()
+            # Map precision_speed (1–10) to Windows speed (1–5).
+            # Lower value = slower cursor.
+            precision = int(self._settings.get("precision_speed", 3))
+            slow_speed = max(1, round(precision / 2))
+            self._set_system_mouse_speed(slow_speed)
+        else:
+            # Restore the original speed.
+            if self._original_mouse_speed is not None:
+                self._set_system_mouse_speed(self._original_mouse_speed)
+                self._original_mouse_speed = None
+
+        bus.publish("mouse.precision_changed", enabled=active)
 
     # ------------------------------------------------------------------
     # Click-Lock
