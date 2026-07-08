@@ -183,9 +183,10 @@ class CursorHighlightOverlay(QWidget):
                 painter.setPen(pen)
                 d, x0, y0 = int(radius * 2), int(cx - radius), int(cy - radius)
                 if self._ring_style == "open":
-                    # Open ring like the AccessMate logo: ~300° arc with a gap
-                    # toward the upper right (Qt angles: 0°=east, CCW, 1/16°).
-                    painter.drawArc(x0, y0, d, d, 75 * 16, 300 * 16)
+                    # Open ring like the AccessMate logo: ~300° arc with the gap
+                    # toward the upper LEFT.  Qt angles: 0°=east, 90°=top, CCW,
+                    # in 1/16°; gap centred at 135° → draw 165°…465°(=105°).
+                    painter.drawArc(x0, y0, d, d, 165 * 16, 300 * 16)
                 else:
                     painter.drawEllipse(x0, y0, d, d)
 
