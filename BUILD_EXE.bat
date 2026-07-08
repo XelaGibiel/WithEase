@@ -17,6 +17,10 @@ cd /d "%~dp0"
   --hidden-import pynput.mouse._win32 ^
   --collect-all sounddevice ^
   --collect-all requests ^
+  --hidden-import wave ^
+  --hidden-import audioop ^
+  --hidden-import base64 ^
+  --hidden-import random ^
   --noupx ^
   src\accessmate\__main__.py
 echo.
