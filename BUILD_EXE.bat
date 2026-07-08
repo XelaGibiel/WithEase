@@ -2,8 +2,9 @@
 rem =====================================================================
 rem  Baut die eigenstaendige AccessMate.exe fuer Endnutzer.
 rem  Ergebnis:  dist\AccessMate\AccessMate.exe  (ganzen Ordner weitergeben)
-rem  Voraussetzung: Projekt-venv mit PyInstaller
-rem     .venv\Scripts\python.exe -m pip install pyinstaller
+rem  Voraussetzung: Projekt-venv mit PyInstaller + Cloud-Diktier-Deps
+rem  (sonst schlaegt --collect-all fehl):
+rem     .venv\Scripts\python.exe -m pip install pyinstaller sounddevice requests
 rem =====================================================================
 setlocal
 cd /d "%~dp0"
