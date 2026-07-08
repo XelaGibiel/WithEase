@@ -102,6 +102,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local_model": "Whisper-Modell",
         "local.hint": "Beim ersten Diktat wird das Modell heruntergeladen (tiny ≈ 75 MB … large-v3 ≈ 1,5 GB). Größer = genauer, aber langsamer.",
         "local.not_installed": "Die lokale Erkennung ist auf diesem PC noch nicht installiert. Du kannst sie mit einem Klick automatisch installieren lassen – es sind keine Vorkenntnisse nötig.",
+        "local.frozen_note": "Die lokale Erkennung ist in der App-Version (.exe) nicht verfügbar – dafür nutze bitte das Cloud-Backend oben. Wer die lokale Erkennung möchte, verwendet die Quellcode-Version von AccessMate.",
         "local.install": "Automatisch installieren",
         "local.install.running": "Wird installiert … Das kann einige Minuten dauern. Du kannst das Fenster geöffnet lassen.",
         "local.install.done": "Fertig! Die lokale Spracherkennung ist jetzt installiert und kann verwendet werden.",
@@ -156,6 +157,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local_model": "Whisper model",
         "local.hint": "The model is downloaded on first use (tiny ≈ 75 MB … large-v3 ≈ 1.5 GB). Bigger = more accurate but slower.",
         "local.not_installed": "Local recognition is not installed on this PC yet. You can have it installed automatically with one click – no technical knowledge needed.",
+        "local.frozen_note": "Local recognition is not available in the packaged app (.exe) – please use the cloud backend above instead. If you want local recognition, use the source-code version of AccessMate.",
         "local.install": "Install automatically",
         "local.install.running": "Installing … This may take a few minutes. You can keep this window open.",
         "local.install.done": "Done! Local speech recognition is now installed and ready to use.",
@@ -675,13 +677,19 @@ class DictationSettingsWidget(QWidget):
         self._local_hint.setWordWrap(True)
         form.addRow("", self._local_hint)
 
-        # Local backend not installed yet: offer a fully automatic install
-        # plus a plain-language how-to, so no command line is ever needed.
+        # Local backend not installed yet.  From source we offer a fully
+        # automatic install; in the packaged .exe pip is unavailable, so we
+        # only explain that local recognition needs the source version (cloud
+        # dictation works fine in the .exe).
+        import sys as _sys
+        self._frozen = bool(getattr(_sys, "frozen", False))
         self._install_box = QWidget()
         install_layout = QVBoxLayout(self._install_box)
         install_layout.setContentsMargins(0, 0, 0, 0)
         install_layout.setSpacing(6)
-        install_note = QLabel(_t("local.not_installed"))
+        install_note = QLabel(
+            _t("local.frozen_note") if self._frozen
+            else _t("local.not_installed"))
         install_note.setStyleSheet(_warn_style())
         install_note.setWordWrap(True)
         install_layout.addWidget(install_note)
@@ -689,6 +697,7 @@ class DictationSettingsWidget(QWidget):
         install_btns = QHBoxLayout()
         self._install_btn = QPushButton(_t("local.install"))
         self._install_btn.clicked.connect(self._on_install_local)
+        self._install_btn.setVisible(not self._frozen)   # pip N/A in the .exe
         install_btns.addWidget(self._install_btn)
         howto_btn = QPushButton(_t("local.howto"))
         howto_btn.clicked.connect(self._on_show_howto)

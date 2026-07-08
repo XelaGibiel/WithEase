@@ -153,7 +153,15 @@ def _update_via_zipball(info: ReleaseInfo) -> None:
 
 
 def perform_update(info: ReleaseInfo) -> None:
-    """Apply the update (blocking, raises on failure)."""
+    """Apply the update (blocking, raises on failure).
+
+    Only supported when running from source.  A packaged .exe cannot replace
+    its own bundled files, so callers must steer the user to the download page
+    instead (see UpdateDialog)."""
+    if getattr(sys, "frozen", False):
+        raise RuntimeError(
+            "In-place update is not available in the packaged app – "
+            "please download the new version from the release page.")
     root = _repo_root()
     if root is not None:
         _update_via_git(root)

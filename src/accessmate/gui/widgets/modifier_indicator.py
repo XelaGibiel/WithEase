@@ -57,6 +57,7 @@ class ModifierIndicator(QWidget):
         self._position = "bottom-right"
         self._chip_h = _DEFAULT_CHIP_H
         self._preview = False
+        self._suppressed = False   # hidden over a fullscreen window
 
         self._bridge = _Bridge()
         self._bridge.updated.connect(self._apply_state)
@@ -69,6 +70,8 @@ class ModifierIndicator(QWidget):
         bus.subscribe("keyboard.preview", self._on_preview)
 
         self._update_geometry()
+        from accessmate.gui.widgets.cursor_indicator import IndicatorCoordinator
+        IndicatorCoordinator.get().register_suppressible(self)
 
     # ------------------------------------------------------------------
 
@@ -97,26 +100,33 @@ class ModifierIndicator(QWidget):
     def _apply_chip_size(self, size: int) -> None:
         self.set_chip_size(size)
 
-    def _apply_preview(self, active: bool) -> None:
-        self._preview = active
-        if active:
-            self._update_geometry()
-            self.update()
-            self.show()
-        elif not any(self._state.values()):
-            self.hide()
+    def _should_show(self) -> bool:
+        return self._preview or any(self._state.values())
 
-    def _apply_state(self, state: dict) -> None:
-        self._state = state
-        if self._preview:
-            return  # don't hide during preview
-        active = [m for m in _MODIFIERS if state.get(m[0])]
-        if active:
+    def _reapply(self) -> None:
+        """Visibility = (preview or a modifier is latched) AND not suppressed
+        by a fullscreen window."""
+        if self._should_show() and not self._suppressed:
             self._update_geometry()
             self.update()
             self.show()
         else:
             self.hide()
+
+    def set_suppressed(self, suppressed: bool) -> None:
+        if suppressed != self._suppressed:
+            self._suppressed = suppressed
+            self._reapply()
+
+    def _apply_preview(self, active: bool) -> None:
+        self._preview = active
+        self._reapply()
+
+    def _apply_state(self, state: dict) -> None:
+        self._state = state
+        if self._preview:
+            return  # don't hide during preview
+        self._reapply()
 
     # ------------------------------------------------------------------
 

@@ -73,6 +73,10 @@ class IndicatorCoordinator:
 
     def __init__(self) -> None:
         self._indicators: list[CursorIndicator] = []
+        # Fixed overlays (sticky-keys / macro chips) that should also hide over
+        # a fullscreen window but are NOT repositioned to the cursor.  Any
+        # object with a set_suppressed(bool) method can register.
+        self._suppressibles: list[object] = []
         self._timer = QTimer()
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._reposition)
@@ -87,13 +91,20 @@ class IndicatorCoordinator:
     def register(self, indicator: CursorIndicator) -> None:
         self._indicators.append(indicator)
 
+    def register_suppressible(self, widget: object) -> None:
+        """Register a fixed overlay to be hidden while a fullscreen window is
+        in front (must provide set_suppressed(bool))."""
+        self._suppressibles.append(widget)
+
     def _reposition(self) -> None:
-        # Hide every cursor symbol while a fullscreen window is in front
-        # (video/game) – they keep their logical state and reappear when the
-        # fullscreen window is left.
+        # Hide every cursor symbol AND registered fixed overlay while a
+        # fullscreen window is in front (video/game) – they keep their logical
+        # state and reappear when the fullscreen window is left.
         fullscreen = foreground_is_fullscreen()
         for ind in self._indicators:
             ind.set_suppressed(fullscreen)
+        for w in self._suppressibles:
+            w.set_suppressed(fullscreen)
         if fullscreen:
             return
 

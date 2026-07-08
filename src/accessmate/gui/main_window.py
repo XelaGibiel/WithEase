@@ -335,7 +335,50 @@ class MainWindow(QMainWindow):
                 self._module_pages[module.MODULE_ID] = self._stack.count()
                 self._add_page(module.DISPLAY_NAME, widget)
 
+        self._add_page(tr("settings.nav.about"), self._build_about_page())
+
         self._fit_nav_height()
+
+    def _build_about_page(self) -> QWidget:
+        from PySide6.QtGui import QDesktopServices, QPixmap
+        from PySide6.QtCore import QUrl
+        from accessmate import __version__
+        from accessmate.core.resources import app_icon_path
+
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
+        layout.addWidget(self._page_title("AccessMate"))
+
+        logo = app_icon_path()
+        if logo.exists():
+            pic = QLabel()
+            pic.setPixmap(QPixmap(str(logo)).scaled(
+                96, 96, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
+            layout.addWidget(pic)
+
+        desc = QLabel(tr("about.description"))
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        version = QLabel(f"{tr('about.version')} {__version__}")
+        version.setStyleSheet(theme.hint_style())
+        layout.addWidget(version)
+
+        license_lbl = QLabel(tr("about.license"))
+        license_lbl.setStyleSheet(theme.hint_style())
+        layout.addWidget(license_lbl)
+
+        gh_url = "https://github.com/XelaGibiel/AccessMate"
+        gh = QPushButton(tr("about.github"))
+        gh.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(gh_url)))
+        gh.setMaximumWidth(200)
+        layout.addWidget(gh)
+
+        layout.addStretch()
+        return widget
 
     def set_store_badge(self, count: int) -> None:
         """Show the number of available module updates on the 'Module' nav

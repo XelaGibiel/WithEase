@@ -1,6 +1,7 @@
 """Update dialog – shows release details and performs the self-update."""
 from __future__ import annotations
 
+import sys
 import threading
 
 from PySide6.QtCore import QObject, Signal
@@ -65,9 +66,14 @@ class UpdateDialog(QDialog):
         self._status.setWordWrap(True)
         layout.addWidget(self._status)
 
+        # The in-place self-update replaces the package files – that only works
+        # when running from source.  In the packaged .exe those files live in a
+        # temporary bundle that is discarded on restart, so there we steer the
+        # user to download the new version from the release page instead.
+        self._frozen = bool(getattr(sys, "frozen", False))
+
         btn_row = QHBoxLayout()
         self._install_btn = QPushButton(tr("app.update.install"))
-        self._install_btn.setDefault(True)
         self._install_btn.clicked.connect(self._on_install)
         btn_row.addWidget(self._install_btn)
 
@@ -77,6 +83,15 @@ class UpdateDialog(QDialog):
         btn_row.addWidget(page_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
+
+        if self._frozen:
+            # No in-place update for the .exe – downloading is the way.
+            self._install_btn.hide()
+            page_btn.setDefault(True)
+            self._status.setText(tr("app.update.exe_hint"))
+            self._status.setStyleSheet(theme.hint_style())
+        else:
+            self._install_btn.setDefault(True)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)

@@ -37,9 +37,23 @@ AccessMate runs quietly in the system tray and helps users with limited motor co
 - Guest profile disables all assistance features
 - One-click profile switching from the tray menu
 
+### Cursor Highlight
+- Pulsing rings around the pointer to find it instantly – choose the open,
+  logo-style ring or a closed circle; colour, size and duration configurable
+- Optional direction arrow from the screen centre toward the cursor
+- Automatically hides over fullscreen videos and games
+
+### Add-on Modules (install from the in-app store)
+- **Drink break** – reminds you to drink at a configurable interval, as a
+  discreet pop-up or a full-screen rain overlay
+- **Dictation** – speech to text via Whisper (cloud: OpenRouter / OpenAI /
+  Groq, or local on your PC in the source version)
+
 ### General
 - Emergency stop: one key disables everything instantly (also in tray menu)
-- Autostart, light/dark mode, language, tray settings
+- Autostart, light / dark / high-contrast themes, adjustable font size, language
+- In-app **module store**: browse and one-click install add-on modules
+- Own app logo shown in the taskbar, window and tray
 
 ### Action Manager
 No hardcoded shortcuts. Instead:
@@ -50,56 +64,40 @@ This makes AccessMate input-device agnostic – new devices can be supported wit
 
 ---
 
-## Planned / Future Modules
-- **AI Module** (v2, fully optional): Speech-to-text (local Whisper or cloud), text rewriting, translation, custom AI workflows
-- **Plugin API** (v3): Third-party developers can add new modules (Eye Tracking, Tobii, Xbox Adaptive Controller, Stream Deck, MIDI, Sip-and-Puff, foot switches …)
+## Download & Run (no installation needed)
 
----
+1. Open the [**Releases**](https://github.com/XelaGibiel/AccessMate/releases) page and download `AccessMate-<version>-win64.zip`.
+2. Unpack the ZIP (right-click → *Extract All …*).
+3. Open the `AccessMate` folder and double-click **`AccessMate.exe`**.
 
-## Installation
+AccessMate then runs in the system tray (bottom right). Double-click the tray
+icon for the settings; a single click opens the menu. No Python required.
+
+> Windows SmartScreen may warn about the unsigned app – click *More info* →
+> *Run anyway*.
+
+### Run from source (for developers)
 
 > Requires Python 3.11 or newer.
 
 ```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/accessmate.git
-cd accessmate
-
-# Install dependencies
+git clone https://github.com/XelaGibiel/AccessMate.git
+cd AccessMate
 pip install -r requirements.txt
-
-# Run
 python -m accessmate
 ```
 
-Or install as a package:
-
-```bash
-pip install -e .
-accessmate
-```
+To build the standalone `AccessMate.exe` yourself, run `BUILD_EXE.bat`
+(needs `pip install pyinstaller`); the result is in `dist/AccessMate/`.
 
 ---
 
-## Project Structure
+## Extending AccessMate
 
-```
-src/accessmate/
-├── __main__.py          # Entry point
-├── app.py               # Application controller
-├── tray.py              # System tray
-├── core/
-│   ├── config.py        # JSON settings & profiles
-│   ├── action_manager.py # Trigger → Action mapping
-│   └── event_bus.py     # Module communication
-├── modules/
-│   ├── base.py          # Base class for all modules
-│   ├── mouse.py
-│   ├── keyboard.py
-│   └── macros.py
-└── gui/
-    └── main_window.py   # Settings window
-```
+Every feature is a module. Optional add-ons live in [`examples/`](examples/)
+and are loaded from `%APPDATA%/AccessMate/modules/` – see
+[docs/MODULE_GUIDE.md](docs/MODULE_GUIDE.md). The in-app **module store**
+installs the official add-ons for you.
 
 ---
 

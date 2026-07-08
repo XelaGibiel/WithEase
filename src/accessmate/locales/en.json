@@ -279,6 +279,7 @@
   "app.update.done": "The update is complete. AccessMate will now restart.",
   "app.update.failed": "The update did not work: {err}\nYou can also install the new version from the download page.",
   "app.update.open_page": "Open download page",
+  "app.update.exe_hint": "To update, download the new version from the download page, unpack it and replace your AccessMate folder. Your settings are kept.",
   "about.version": "Version",
   "about.license": "License: MIT",
   "about.github": "GitHub",

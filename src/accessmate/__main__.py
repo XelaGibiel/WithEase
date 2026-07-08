@@ -19,6 +19,7 @@ import sys
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from accessmate import __version__
 from accessmate.app import AccessMateApp
 from accessmate.core import config as _config
 from accessmate.core.resources import app_icon_path
@@ -89,7 +90,7 @@ def main() -> None:
 
     qt_app = QApplication(sys.argv)
     qt_app.setApplicationName("AccessMate")
-    qt_app.setApplicationVersion("0.1.0")
+    qt_app.setApplicationVersion(__version__)
     qt_app.setQuitOnLastWindowClosed(False)
     icon = app_icon_path()
     if icon.exists():

@@ -39,6 +39,8 @@ class MacroModeIndicator(QWidget):
         self._update_size()
 
         self._preview = False
+        self._active = False       # macro mode currently on
+        self._suppressed = False   # hidden over a fullscreen window
 
         self._bridge = _Bridge()
         self._bridge.changed.connect(self._apply)
@@ -49,6 +51,8 @@ class MacroModeIndicator(QWidget):
         bus.subscribe("macros.chip_size",    self._on_chip_size)
         bus.subscribe("macros.preview",      self._on_preview_event)
         self._reposition()
+        from accessmate.gui.widgets.cursor_indicator import IndicatorCoordinator
+        IndicatorCoordinator.get().register_suppressible(self)
 
     # ------------------------------------------------------------------
 
@@ -77,11 +81,7 @@ class MacroModeIndicator(QWidget):
 
     def _on_preview(self, active: bool) -> None:
         self._preview = active
-        if active:
-            self._reposition()
-            self.show()
-        elif not self._preview:
-            self.hide()
+        self._reapply()
 
     # ------------------------------------------------------------------
 
@@ -89,11 +89,25 @@ class MacroModeIndicator(QWidget):
         self._bridge.changed.emit(active)
 
     def _apply(self, active: bool) -> None:
-        if active or self._preview:
+        self._active = active
+        self._reapply()
+
+    def _should_show(self) -> bool:
+        return self._active or self._preview
+
+    def _reapply(self) -> None:
+        """Visibility = (macro mode on or preview) AND not suppressed by a
+        fullscreen window."""
+        if self._should_show() and not self._suppressed:
             self._reposition()
             self.show()
-        elif not self._preview:
+        else:
             self.hide()
+
+    def set_suppressed(self, suppressed: bool) -> None:
+        if suppressed != self._suppressed:
+            self._suppressed = suppressed
+            self._reapply()
 
     def _reposition(self) -> None:
         screen = QApplication.primaryScreen()

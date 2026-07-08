@@ -14,6 +14,8 @@ cd /d "%~dp0"
   --add-data "src\accessmate\assets;accessmate\assets" ^
   --hidden-import pynput.keyboard._win32 ^
   --hidden-import pynput.mouse._win32 ^
+  --collect-all sounddevice ^
+  --collect-all requests ^
   --noupx ^
   src\accessmate\__main__.py
 echo.
