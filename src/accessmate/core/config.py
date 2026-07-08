@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -36,22 +37,31 @@ DEFAULT_PROFILE: dict[str, Any] = {
             "precision_mode_enabled": False,
             "precision_speed": 3,
             "click_lock_enabled": False,
+            "keyboard_clicks_enabled": False,
             "keyboard_click_left": "",
             "keyboard_click_right": "",
             "keyboard_click_double": "",
             "screen_zones_enabled": False,
-            "screen_zones": [],
+            "screen_zone_1_hotkey": "", "screen_zone_2_hotkey": "",
+            "screen_zone_3_hotkey": "", "screen_zone_4_hotkey": "",
+            "screen_zone_5_hotkey": "", "screen_zone_6_hotkey": "",
+            "screen_zone_7_hotkey": "", "screen_zone_8_hotkey": "",
+            "screen_zone_9_hotkey": "",
         },
         "keyboard": {
             "enabled": False,
             "delay_enabled": False,
             "delay_ms": 500,
             "delay_exceptions": [],
+            "sticky_enabled": False,
             "sticky_shift": False,
             "sticky_ctrl": False,
             "sticky_alt": False,
+            "sticky_altgr": False,
             "sticky_win": False,
             "sticky_auto_release": True,
+            "sticky_indicator_position": "bottom-right",
+            "sticky_chip_size": 24,
             "show_modifier_status": True,
         },
         "macros": {
@@ -80,10 +90,24 @@ def load_app_config() -> dict[str, Any]:
     return {**DEFAULT_APP_CONFIG, **data}
 
 
+def _atomic_write(path: Path, data: dict[str, Any]) -> None:
+    """Write JSON atomically: temp file → rename, so a kill mid-write is safe."""
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def save_app_config(config: dict[str, Any]) -> None:
     ensure_dirs()
-    with open(APP_CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2, ensure_ascii=False)
+    _atomic_write(APP_CONFIG_FILE, config)
 
 
 def load_profile(name: str) -> dict[str, Any]:
@@ -94,16 +118,36 @@ def load_profile(name: str) -> dict[str, Any]:
         profile["name"] = name.capitalize()
         save_profile(name, profile)
         return profile
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-    return data
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        # Corrupted file (e.g. killed mid-write) – restore from default
+        profile = DEFAULT_PROFILE.copy()
+        profile["name"] = name.capitalize()
+        save_profile(name, profile)
+        return profile
 
 
 def save_profile(name: str, profile: dict[str, Any]) -> None:
     ensure_dirs()
     path = PROFILES_DIR / f"{name}.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(profile, f, indent=2, ensure_ascii=False)
+    _atomic_write(path, profile)
+    # Verify the write actually landed (security software may silently roll
+    # back writes from processes it deems suspicious, e.g. keyboard hooks).
+    import logging
+    try:
+        with open(path, encoding="utf-8") as f:
+            on_disk = json.load(f)
+        if on_disk != profile:
+            logging.getLogger(__name__).error(
+                "profile write to %s did NOT persist (content mismatch) – "
+                "likely blocked/rolled back by security software", path)
+        else:
+            logging.getLogger(__name__).info("profile write verified: %s", path)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "verifying profile write to %s failed", path)
 
 
 def list_profiles() -> list[str]:

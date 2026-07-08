@@ -30,6 +30,9 @@ dev = [
     "pytest-qt>=4.2",
     "ruff>=0.3",
 ]
+# Note: the Dictation add-on (examples/dictation/) is an external module and
+# documents its own optional dependencies (sounddevice, requests,
+# faster-whisper) – they are intentionally not part of the core package.
 
 [project.gui-scripts]
 accessmate = "accessmate.__main__:main"

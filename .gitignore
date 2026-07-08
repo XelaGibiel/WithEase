@@ -27,8 +27,12 @@ htmlcov/
 Thumbs.db
 .DS_Store
 
-# AccessMate user data (never commit personal settings)
-%APPDATA%/AccessMate/
+# AccessMate user data (never commit personal settings).
+# Real user data lives in %APPDATA%/AccessMate/ (outside the repo) and can
+# never be committed. These patterns additionally guard against accidental
+# local runtime data if the app is ever run from inside the project folder.
+/app.json
+*.log
 
 # Local chat logs / planning notes
 Chatverl*/
@@ -37,3 +41,4 @@ Chatverl*/
 .venv/
 check.ps1
 AccessMate.bat
+AccessMate.vbs

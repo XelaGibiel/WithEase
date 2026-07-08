@@ -40,11 +40,16 @@ class ActionManager:
         action = self._actions.get(action_id)
         if not action:
             return
-        if action.trigger:
-            self._trigger_map.pop(action.trigger, None)
         action.trigger = trigger
-        if trigger:
-            self._trigger_map[trigger] = action_id
+        # Rebuild the whole map so clearing one action never removes another
+        # action's still-valid trigger (which a naive pop would do when two
+        # actions transiently shared the same trigger).
+        self._rebuild_trigger_map()
+
+    def _rebuild_trigger_map(self) -> None:
+        self._trigger_map = {
+            a.trigger: a.id for a in self._actions.values() if a.trigger
+        }
 
     def fire(self, trigger: str) -> bool:
         """Called by input listeners. Returns True if an action was executed."""

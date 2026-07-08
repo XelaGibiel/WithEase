@@ -1,0 +1,8 @@
+{
+  "name": "Beispielmodul",
+  "version": "1.0.0",
+  "author": "AccessMate",
+  "description": "Minimales Beispiel für ein externes AccessMate-Modul.",
+  "entry": "module.py",
+  "class": "ExampleModule"
+}

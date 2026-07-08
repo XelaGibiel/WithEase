@@ -13,8 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from accessmate.core.event_bus import bus
@@ -61,14 +61,24 @@ class TrayIcon(QSystemTrayIcon):
         icon = QIcon(str(ICON_PATH)) if ICON_PATH.exists() else TrayIcon._icon_idle
         super().__init__(icon)
         self._app = app
-        self.setToolTip(tr("app.name"))
         self._build_menu()
+        self._update_tooltip()
+
+        # A single left click opens the menu, a double click opens the
+        # settings.  Windows sends the first Trigger BEFORE the DoubleClick,
+        # so a short timer holds the single-click action back long enough to
+        # see whether a second click turns it into a double click.
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.setInterval(250)
+        self._click_timer.timeout.connect(self._show_menu_at_cursor)
 
         bus.subscribe("module.started",          lambda **_: self._refresh())
         bus.subscribe("module.stopped",          lambda **_: self._refresh())
         bus.subscribe("app.paused",              lambda **_: self._set_paused(True))
         bus.subscribe("app.resumed",             lambda **_: self._set_paused(False))
         bus.subscribe("i18n.language_changed",   lambda **_: self._refresh())
+        bus.subscribe("profiles.changed",        lambda **_: self._on_profile_changed())
 
         self.activated.connect(self._on_activated)
 
@@ -79,11 +89,24 @@ class TrayIcon(QSystemTrayIcon):
     def _set_paused(self, paused: bool) -> None:
         if paused:
             self.setIcon(TrayIcon._icon_paused)
-            self.setToolTip(f"{tr('app.name')} – {tr('app.pause_all')}")
         else:
             self._update_icon()
-            self.setToolTip(tr("app.name"))
+        self._update_tooltip()
         self._build_menu()
+
+    def _on_profile_changed(self) -> None:
+        self._update_tooltip()
+        self._build_menu()
+
+    def _update_tooltip(self) -> None:
+        """Show app name, active profile and running state at a glance, so
+        hovering the tray icon tells the user immediately whether AccessMate
+        is active and which profile is in use."""
+        state = (tr("tray.state.paused") if self._app.is_paused
+                 else tr("tray.state.active"))
+        self.setToolTip(
+            f"{tr('app.name')} – {state}\n"
+            f"{tr('tray.tooltip.profile', name=self._app.active_profile)}")
 
     def _update_icon(self) -> None:
         if ICON_PATH.exists():
@@ -94,6 +117,7 @@ class TrayIcon(QSystemTrayIcon):
 
     def _refresh(self) -> None:
         self._update_icon()
+        self._update_tooltip()
         self._build_menu()
 
     # ------------------------------------------------------------------
@@ -133,6 +157,17 @@ class TrayIcon(QSystemTrayIcon):
 
         self.setContextMenu(menu)
 
+    def _show_menu_at_cursor(self) -> None:
+        menu = self.contextMenu()
+        if menu is not None:
+            menu.popup(QCursor.pos())
+
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+        Reason = QSystemTrayIcon.ActivationReason
+        if reason == Reason.Trigger:
+            # Single left click → open the menu, but wait briefly in case a
+            # second click makes it a double click (handled below).
+            self._click_timer.start()
+        elif reason == Reason.DoubleClick:
+            self._click_timer.stop()   # cancel the pending single-click menu
             self._app.show_settings()

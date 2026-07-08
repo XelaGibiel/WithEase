@@ -4,15 +4,39 @@ Run with:
     python -m accessmate
 or after installation:
     accessmate
+
+Dev flag:
+    python -m accessmate --dev
+    Opens the settings window immediately.
+    Remove before v1.0 release.
 """
 from __future__ import annotations
 
 import ctypes
+import logging
 import sys
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from accessmate.app import AccessMateApp
+from accessmate.core import config as _config
+
+
+def _setup_logging() -> None:
+    """Log to %APPDATA%/AccessMate/accessmate.log.
+
+    The app usually runs under pythonw (no console), so silent stderr logging
+    is invisible – errors like a failing profile save would go unnoticed.
+    """
+    _config.ensure_dirs()
+    logging.basicConfig(
+        filename=str(_config.CONFIG_DIR / "accessmate.log"),
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    # Unhandled exceptions land in the log too instead of vanishing.
+    sys.excepthook = lambda *exc: logging.critical(
+        "unhandled exception", exc_info=exc)
 
 _MUTEX_NAME = "Global\\AccessMate_SingleInstance"
 
@@ -34,11 +58,15 @@ def _acquire_single_instance_mutex() -> object | None:
 
 
 def main() -> None:
-    mutex = _acquire_single_instance_mutex()
+    _setup_logging()
+    logging.info("AccessMate starting (argv=%s)", sys.argv)
+    dev_mode = "--dev" in sys.argv
 
+    # Single-instance check applies in dev mode too: two instances would
+    # each hold the full profile in memory and overwrite each other's saved
+    # settings (last writer wins with stale data).
+    mutex = _acquire_single_instance_mutex()
     if mutex is None:
-        # Another instance is already running – show a brief notice and exit.
-        # QApplication is needed to show the message box.
         app = QApplication(sys.argv)
         app.setApplicationName("AccessMate")
         QMessageBox.information(
@@ -56,11 +84,14 @@ def main() -> None:
 
     _app = AccessMateApp(qt_app)
 
+    if dev_mode:
+        _app.show_settings()
+
     exit_code = qt_app.exec()
 
-    # Release the mutex when the app exits cleanly.
-    ctypes.windll.kernel32.ReleaseMutex(mutex)
-    ctypes.windll.kernel32.CloseHandle(mutex)
+    if mutex is not None:
+        ctypes.windll.kernel32.ReleaseMutex(mutex)
+        ctypes.windll.kernel32.CloseHandle(mutex)
 
     sys.exit(exit_code)
 

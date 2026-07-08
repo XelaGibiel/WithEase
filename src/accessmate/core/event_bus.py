@@ -1,8 +1,11 @@
 """Central event bus for communication between modules."""
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from typing import Any, Callable
+
+_log = logging.getLogger(__name__)
 
 
 class EventBus:
@@ -25,8 +28,14 @@ class EventBus:
             pass
 
     def publish(self, event: str, **kwargs: Any) -> None:
+        # A subscriber must never break the publisher.  Events are frequently
+        # published from pynput listener threads; an uncaught exception there
+        # would terminate that listener (e.g. mouse events would stop firing).
         for callback in list(self._listeners[event]):
-            callback(**kwargs)
+            try:
+                callback(**kwargs)
+            except Exception:
+                _log.exception("event bus subscriber for %r failed", event)
 
 
 bus = EventBus()
