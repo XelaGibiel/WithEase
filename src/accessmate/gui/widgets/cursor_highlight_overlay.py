@@ -36,7 +36,7 @@ _DEFAULT_COLOR = (255, 140, 0)   # orange, matches app accent
 
 class _Bridge(QObject):
     """Relays bus events from any thread to the Qt main thread."""
-    trigger = Signal(bool, object, int, bool, int, int)
+    trigger = Signal(bool, object, int, bool, int, int, str)
 
 
 class CursorHighlightOverlay(QWidget):
@@ -45,6 +45,7 @@ class CursorHighlightOverlay(QWidget):
     def __init__(self) -> None:
         super().__init__(parent=None)
         self._rings = True
+        self._ring_style = "open"   # "open" (logo-style gap) | "closed"
         self._color = _DEFAULT_COLOR
         self._max_radius = _MAX_RADIUS
         self._arrow = False
@@ -75,14 +76,18 @@ class CursorHighlightOverlay(QWidget):
     def _on_highlight(self, rings: bool = True, color: object = None,
                       radius: int = 0, arrow: bool = False,
                       arrow_thickness: int = 0, duration_ms: int = 0,
-                      **_: object) -> None:
+                      ring_style: str = "open", **_: object) -> None:
         self._bridge.trigger.emit(rings, color, radius, arrow,
-                                  arrow_thickness, duration_ms)
+                                  arrow_thickness, duration_ms,
+                                  ring_style or "open")
 
     def _start(self, rings: bool, color: object, radius: int, arrow: bool,
-               arrow_thickness: int, duration_ms: int) -> None:
+               arrow_thickness: int, duration_ms: int,
+               ring_style: str = "open") -> None:
         """Position over the active screen and (re)start the pulse animation."""
         self._rings = bool(rings)
+        self._ring_style = ring_style if ring_style in ("open", "closed") \
+            else "open"
         if isinstance(color, (tuple, list)) and len(color) == 3:
             self._color = tuple(int(c) for c in color)
         else:
@@ -174,11 +179,15 @@ class CursorHighlightOverlay(QWidget):
                     continue
                 pen = QPen(QColor(r, g, b, alpha))
                 pen.setWidth(4)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 painter.setPen(pen)
-                painter.drawEllipse(
-                    int(cx - radius), int(cy - radius),
-                    int(radius * 2), int(radius * 2),
-                )
+                d, x0, y0 = int(radius * 2), int(cx - radius), int(cy - radius)
+                if self._ring_style == "open":
+                    # Open ring like the AccessMate logo: ~300° arc with a gap
+                    # toward the upper right (Qt angles: 0°=east, CCW, 1/16°).
+                    painter.drawArc(x0, y0, d, d, 75 * 16, 300 * 16)
+                else:
+                    painter.drawEllipse(x0, y0, d, d)
 
             # Solid centre dot, fading over the first ring's pulse.
             dot_alpha = int(230 * max(0.0, 1.0 - self._elapsed / _PULSE_MS * 1.6))

@@ -486,13 +486,15 @@ class MouseModule(BaseModule):
     def _highlight_cursor(self) -> None:
         """Trigger the pulsing highlight overlay at the current cursor position."""
         rings = bool(self._settings.get("highlight_rings", True))
+        ring_style = self._settings.get("highlight_ring_style", "open")
         color = self._settings.get("highlight_color", [255, 140, 0])
         radius = int(self._settings.get("highlight_radius", 90))
         arrow = bool(self._settings.get("highlight_arrow", False))
         arrow_thickness = int(self._settings.get("highlight_arrow_thickness", 6))
         duration_ms = int(float(self._settings.get("highlight_duration", 1.6))
                           * 1000)
-        bus.publish("mouse.highlight", rings=rings, color=color, radius=radius,
+        bus.publish("mouse.highlight", rings=rings, ring_style=ring_style,
+                    color=color, radius=radius,
                     arrow=arrow, arrow_thickness=arrow_thickness,
                     duration_ms=duration_ms)
 

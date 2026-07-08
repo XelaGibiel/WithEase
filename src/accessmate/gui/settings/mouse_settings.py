@@ -234,6 +234,20 @@ class MouseSettingsWidget(QWidget):
         self._highlight_rings_cb.toggled.connect(self._on_rings_toggled)
         highlight_form.addRow("", self._highlight_rings_cb)
 
+        # Ring style: open (like the AccessMate logo) or a closed circle.
+        self._highlight_ring_style = QComboBox()
+        self._highlight_ring_style.addItem(
+            tr("module.mouse.highlight.ring_style.open"), "open")
+        self._highlight_ring_style.addItem(
+            tr("module.mouse.highlight.ring_style.closed"), "closed")
+        if self._settings.get("highlight_ring_style", "open") == "closed":
+            self._highlight_ring_style.setCurrentIndex(1)
+        self._highlight_ring_style.currentIndexChanged.connect(
+            lambda i: self._save("highlight_ring_style",
+                                 self._highlight_ring_style.itemData(i)))
+        highlight_form.addRow(tr("module.mouse.highlight.ring_style"),
+                              self._highlight_ring_style)
+
         # Colour picker (applies to rings)
         self._highlight_color = list(
             self._settings.get("highlight_color", [255, 140, 0]))
@@ -431,7 +445,8 @@ class MouseSettingsWidget(QWidget):
 
     def _on_rings_toggled(self, enabled: bool) -> None:
         self._save("highlight_rings", enabled)
-        # Colour + radius only apply to the rings
+        # Style + colour + radius only apply to the rings
+        self._highlight_form.setRowVisible(self._highlight_ring_style, enabled)
         self._highlight_form.setRowVisible(self._highlight_color_btn, enabled)
         self._highlight_form.setRowVisible(self._highlight_radius, enabled)
 
@@ -445,6 +460,7 @@ class MouseSettingsWidget(QWidget):
         from accessmate.core.event_bus import bus
         bus.publish("mouse.highlight",
                     rings=self._highlight_rings_cb.isChecked(),
+                    ring_style=self._highlight_ring_style.currentData(),
                     color=self._highlight_color,
                     radius=self._highlight_radius.value(),
                     arrow=self._highlight_arrow_cb.isChecked(),
@@ -458,6 +474,7 @@ class MouseSettingsWidget(QWidget):
         self._save("highlight_color", self._highlight_color)
 
         self._highlight_rings_cb.setChecked(True)         # fires toggled → saves
+        self._highlight_ring_style.setCurrentIndex(0)     # "open" (default)
         self._highlight_radius.setValue(90)               # fires valueChanged → saves
         self._highlight_duration.setValue(1.6)            # fires valueChanged → saves
         self._highlight_arrow_thickness.setValue(6)       # fires valueChanged → saves
