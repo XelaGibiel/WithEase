@@ -16,11 +16,12 @@ damit es ohne Änderungen am Kern hinzugefügt werden kann.
 """
 from __future__ import annotations
 
+import math
 import random
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -38,7 +39,9 @@ from accessmate.core import config
 from accessmate.core.event_bus import bus
 from accessmate.modules.base import BaseModule
 
-STYLES = ("popup", "rain")
+STYLES = ("popup", "rain", "liquid")
+# Styles that take over the whole screen (vs. the discreet centred pop-up).
+_FULLSCREEN_STYLES = ("rain", "liquid")
 DISMISS_MODES = ("instant", "delay", "confirm")
 
 
@@ -55,12 +58,13 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Erinnert dich in einstellbaren Abständen daran, etwas zu "
             "trinken. Je nach Einstellung erscheint entweder ein dezentes "
             "Fenster in der Bildschirmmitte oder ein bildschirmfüllender "
-            "Regen, der die Arbeit spürbar unterbricht – so, wie du es "
-            "brauchst."),
+            "Regen bzw. ein steigender Flüssigkeitsstand, der die Arbeit "
+            "spürbar unterbricht – so, wie du es brauchst."),
         "interval": "Erinnern alle",
         "style": "Darstellung",
         "style.popup": "Dezentes Fenster (Mitte)",
         "style.rain": "Regen über den ganzen Bildschirm",
+        "style.liquid": "Flüssigkeitsstand (Bildschirm füllt sich)",
         "dismiss": "Wie stark unterbrechen",
         "dismiss.instant": "Sofort wegklickbar",
         "dismiss.delay": "Kurze Wartezeit",
@@ -81,12 +85,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "description": (
             "Reminds you to drink at a configurable interval. Depending on "
             "your setting, either a discreet window appears in the centre of "
-            "the screen or a full-screen rain noticeably interrupts your "
-            "work – whatever you need."),
+            "the screen or a full-screen rain / rising liquid level noticeably "
+            "interrupts your work – whatever you need."),
         "interval": "Remind every",
         "style": "Presentation",
         "style.popup": "Discreet window (centre)",
         "style.rain": "Rain across the whole screen",
+        "style.liquid": "Liquid level (screen fills up)",
         "dismiss": "How strongly to interrupt",
         "dismiss.instant": "Dismiss instantly",
         "dismiss.delay": "Short wait",
@@ -142,7 +147,8 @@ class HydrationReminder(QWidget):
     is needed.
     """
 
-    _FRAME_MS = 33   # ~30 fps for the rain animation
+    _FRAME_MS = 33   # ~30 fps for the rain / liquid animation
+    _LIQUID_TARGET = 0.66   # fills up to ~2/3 of the screen height
 
     def __init__(self) -> None:
         super().__init__(parent=None)
@@ -158,6 +164,10 @@ class HydrationReminder(QWidget):
         self._dismiss_mode = "delay"
         self._remaining = 0
         self._drops: list[list[float]] = []   # [x, y, speed, length]
+        # Liquid-level animation state.
+        self._liquid_level = 0.0              # 0 → _LIQUID_TARGET
+        self._liquid_phase = 0.0             # surface wave phase
+        self._bubbles: list[list[float]] = []  # [x, y, r, speed]
 
         self._anim = QTimer(self)
         self._anim.setInterval(self._FRAME_MS)
@@ -229,9 +239,13 @@ class HydrationReminder(QWidget):
         screen = QApplication.primaryScreen()
         geom = screen.availableGeometry() if screen else self.rect()
 
-        if self._style == "rain":
+        fullscreen = self._style in _FULLSCREEN_STYLES
+        if fullscreen:
             self.setGeometry(geom)
-            self._spawn_drops(geom.width(), geom.height())
+            if self._style == "rain":
+                self._spawn_drops(geom.width(), geom.height())
+            else:
+                self._init_liquid(geom.width(), geom.height())
             self._anim.start()
         else:
             self._anim.stop()
@@ -241,7 +255,7 @@ class HydrationReminder(QWidget):
 
         self._layout_card()
         self._start_dismiss_gate(delay_seconds)
-        if self._style == "rain":
+        if fullscreen:
             self.showFullScreen()
         else:
             self.show()
@@ -249,7 +263,7 @@ class HydrationReminder(QWidget):
         self.activateWindow()
 
     def _layout_card(self) -> None:
-        if self._style == "rain":
+        if self._style in _FULLSCREEN_STYLES:
             cw, ch = 460, 320
             self._card.setFixedSize(cw, ch)
             self._card.move((self.width() - cw) // 2,
@@ -310,7 +324,35 @@ class HydrationReminder(QWidget):
             for _ in range(count)
         ]
 
+    # -- Liquid-level animation --------------------------------------------
+
+    def _init_liquid(self, w: int, h: int) -> None:
+        self._liquid_level = 0.0
+        self._liquid_phase = 0.0
+        count = max(14, w // 90)
+        self._bubbles = [
+            [random.uniform(0, w), random.uniform(0, h),
+             random.uniform(2, 6), random.uniform(0.6, 1.8)]
+            for _ in range(count)
+        ]
+
+    def _liquid_surface_y(self) -> float:
+        return self.height() * (1.0 - self._liquid_level)
+
     def _on_frame(self) -> None:
+        if self._style == "liquid":
+            self._liquid_level = min(self._LIQUID_TARGET,
+                                     self._liquid_level + 0.012)
+            self._liquid_phase += 0.14
+            surface = self._liquid_surface_y()
+            for b in self._bubbles:
+                b[1] -= b[3]
+                if b[1] < surface + 6:   # reached the surface → restart below
+                    b[0] = random.uniform(0, self.width())
+                    b[1] = self.height() - random.uniform(0, 30)
+                    b[2] = random.uniform(2, 6)
+            self.update()
+            return
         h = self.height()
         for d in self._drops:
             d[1] += d[2]
@@ -320,8 +362,12 @@ class HydrationReminder(QWidget):
         self.update()
 
     def paintEvent(self, _event: object) -> None:
-        if self._style != "rain":
-            return
+        if self._style == "rain":
+            self._paint_rain()
+        elif self._style == "liquid":
+            self._paint_liquid()
+
+    def _paint_rain(self) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.fillRect(self.rect(), QColor(10, 30, 50, 180))
@@ -330,6 +376,53 @@ class HydrationReminder(QWidget):
         p.setPen(pen)
         for x, y, _speed, length in self._drops:
             p.drawLine(int(x), int(y), int(x), int(y + length))
+        p.end()
+
+    def _paint_liquid(self) -> None:
+        w, h = self.width(), self.height()
+        surface = self._liquid_surface_y()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Faint dim over the whole screen so it reads as an overlay.
+        p.fillRect(self.rect(), QColor(6, 22, 40, 70))
+
+        # Two overlapping sine waves make the surface look alive.
+        def wave_y(x: float) -> float:
+            return (surface
+                    + 14 * math.sin(x * 0.012 + self._liquid_phase)
+                    + 6 * math.sin(x * 0.03 - self._liquid_phase * 1.5))
+
+        body = QPainterPath()
+        body.moveTo(0, h)
+        body.lineTo(0, wave_y(0))
+        x = 0.0
+        while x <= w:
+            body.lineTo(x, wave_y(x))
+            x += 6
+        body.lineTo(w, wave_y(w))
+        body.lineTo(w, h)
+        body.closeSubpath()
+        p.fillPath(body, QColor(40, 130, 210, 150))
+
+        # Rising bubbles inside the liquid.
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(190, 230, 255, 130))
+        for bx, by, br, _sp in self._bubbles:
+            if by > surface:
+                p.drawEllipse(int(bx - br), int(by - br),
+                              int(br * 2), int(br * 2))
+
+        # Bright surface line on top.
+        pen = QPen(QColor(170, 220, 255, 220))
+        pen.setWidth(3)
+        p.setPen(pen)
+        prev = (0.0, wave_y(0))
+        x = 6.0
+        while x <= w:
+            y = wave_y(x)
+            p.drawLine(int(prev[0]), int(prev[1]), int(x), int(y))
+            prev = (x, y)
+            x += 6
         p.end()
 
     # -- Input --------------------------------------------------------------
@@ -394,8 +487,10 @@ class HydrationSettings(QWidget):
         self._style = QComboBox()
         self._style.addItem(_t("style.popup"), "popup")
         self._style.addItem(_t("style.rain"), "rain")
-        if self._settings.get("style", "popup") == "rain":
-            self._style.setCurrentIndex(1)
+        self._style.addItem(_t("style.liquid"), "liquid")
+        saved_style = self._settings.get("style", "popup")
+        if saved_style in STYLES:
+            self._style.setCurrentIndex(STYLES.index(saved_style))
         self._style.currentIndexChanged.connect(
             lambda i: self._save("style", self._style.itemData(i)))
         form.addRow(_t("style"), self._style)
