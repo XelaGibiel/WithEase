@@ -16,10 +16,12 @@ import ctypes
 import logging
 import sys
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from accessmate.app import AccessMateApp
 from accessmate.core import config as _config
+from accessmate.core.resources import app_icon_path
 
 
 def _setup_logging() -> None:
@@ -77,14 +79,28 @@ def main() -> None:
         )
         sys.exit(0)
 
+    # Distinct taskbar identity so Windows shows OUR icon (not python's) and
+    # groups our windows correctly.
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "AccessMate.App")
+    except Exception:
+        pass
+
     qt_app = QApplication(sys.argv)
     qt_app.setApplicationName("AccessMate")
     qt_app.setApplicationVersion("0.1.0")
     qt_app.setQuitOnLastWindowClosed(False)
+    icon = app_icon_path()
+    if icon.exists():
+        qt_app.setWindowIcon(QIcon(str(icon)))
 
     _app = AccessMateApp(qt_app)
 
-    if dev_mode:
+    # Open the settings window on launch when requested – used by the module
+    # store's restart, so the user lands back where they were instead of a
+    # silent tray start.
+    if dev_mode or "--open-settings" in sys.argv:
         _app.show_settings()
 
     exit_code = qt_app.exec()

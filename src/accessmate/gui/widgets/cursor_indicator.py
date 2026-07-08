@@ -11,6 +11,7 @@ Symbols in use:
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QPainter
@@ -29,6 +30,36 @@ def _cursor_offset() -> int:
         return max(24, size + 4)
     except Exception:
         return 32
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+
+def foreground_is_fullscreen() -> bool:
+    """True if the focused window covers its entire monitor (fullscreen video,
+    game, presentation …).  Our always-on-top cursor symbols must not draw over
+    that – they are hidden while such a window is in front.
+
+    Comparing the window rect to its monitor works regardless of DPI awareness
+    (both rects are in the same coordinate space)."""
+    try:
+        u = ctypes.windll.user32
+        hwnd = u.GetForegroundWindow()
+        if not hwnd or hwnd in (u.GetDesktopWindow(), u.GetShellWindow()):
+            return False
+        rect = wintypes.RECT()
+        u.GetWindowRect(hwnd, ctypes.byref(rect))
+        mon = u.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+        info = _MONITORINFO()
+        info.cbSize = ctypes.sizeof(_MONITORINFO)
+        u.GetMonitorInfoW(mon, ctypes.byref(info))
+        m = info.rcMonitor
+        return (rect.left <= m.left and rect.top <= m.top
+                and rect.right >= m.right and rect.bottom >= m.bottom)
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +88,15 @@ class IndicatorCoordinator:
         self._indicators.append(indicator)
 
     def _reposition(self) -> None:
+        # Hide every cursor symbol while a fullscreen window is in front
+        # (video/game) – they keep their logical state and reappear when the
+        # fullscreen window is left.
+        fullscreen = foreground_is_fullscreen()
+        for ind in self._indicators:
+            ind.set_suppressed(fullscreen)
+        if fullscreen:
+            return
+
         visible = [i for i in self._indicators if i.isVisible()]
         if not visible:
             return
@@ -107,7 +147,9 @@ class CursorIndicator(QWidget):
         self.setFixedSize(size, size)
         self._symbol = symbol
         self._font_size = size - 4
-        self._show_enabled = True
+        self._show_enabled = True      # user setting (per-symbol on/off)
+        self._logical_visible = False  # the feature wants it shown
+        self._suppressed = False       # temporarily hidden (fullscreen)
         self._config_key = config_key
 
         self._bridge = _Bridge()
@@ -141,13 +183,25 @@ class CursorIndicator(QWidget):
 
     def _apply_config(self, enabled: bool) -> None:
         self._show_enabled = enabled
-        if not enabled and self.isVisible():
-            self.hide()
+        self._apply()
+
+    def set_suppressed(self, suppressed: bool) -> None:
+        """Temporarily hide/show without changing the logical state (used by
+        the coordinator to hide symbols over a fullscreen window)."""
+        if suppressed != self._suppressed:
+            self._suppressed = suppressed
+            self._apply()
+
+    def _apply(self) -> None:
+        """Actual visibility = feature wants it AND user allows it AND not
+        currently suppressed by a fullscreen window."""
+        self.setVisible(self._logical_visible and self._show_enabled
+                        and not self._suppressed)
 
     def _guarded_show(self) -> None:
-        """show(), unless the user turned this symbol off."""
-        if self._show_enabled:
-            self.show()
+        """Mark the symbol as logically shown (respects the gates in _apply)."""
+        self._logical_visible = True
+        self._apply()
 
     # Main-thread slots -----------------------------------------------------
 
@@ -155,7 +209,8 @@ class CursorIndicator(QWidget):
         self._guarded_show()
 
     def _do_hide(self) -> None:
-        self.hide()
+        self._logical_visible = False
+        self._apply()
 
     def paintEvent(self, _event: object) -> None:
         p = QPainter(self)
@@ -264,7 +319,7 @@ class CenteringIndicator(CursorIndicator):
 
     def _do_aborted(self) -> None:
         self._stop_pulse()
-        self.hide()
+        self._do_hide()
 
 
 class PrecisionIndicator(CursorIndicator):

@@ -8,8 +8,10 @@ rem =====================================================================
 setlocal
 cd /d "%~dp0"
 ".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --windowed --name AccessMate ^
+  --icon "src\accessmate\assets\icons\accessmate.ico" ^
   --paths src ^
   --add-data "src\accessmate\locales;accessmate\locales" ^
+  --add-data "src\accessmate\assets;accessmate\assets" ^
   --hidden-import pynput.keyboard._win32 ^
   --hidden-import pynput.mouse._win32 ^
   --noupx ^

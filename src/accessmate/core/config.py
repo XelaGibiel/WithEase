@@ -12,7 +12,20 @@ from pathlib import Path
 from typing import Any
 
 
-CONFIG_DIR = Path(os.environ.get("APPDATA", Path.home())) / "AccessMate"
+def _config_dir() -> Path:
+    """Where profiles and settings are stored.
+
+    Normally %APPDATA%/AccessMate.  Set the ACCESSMATE_CONFIG_DIR environment
+    variable to use a different folder – e.g. to try AccessMate as a brand-new
+    user (point it at an empty folder) without touching your real settings.
+    """
+    override = os.environ.get("ACCESSMATE_CONFIG_DIR")
+    if override:
+        return Path(override).expanduser()
+    return Path(os.environ.get("APPDATA", Path.home())) / "AccessMate"
+
+
+CONFIG_DIR = _config_dir()
 PROFILES_DIR = CONFIG_DIR / "profiles"
 APP_CONFIG_FILE = CONFIG_DIR / "app.json"
 

@@ -10,7 +10,6 @@ Icon colors:
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QTimer
@@ -19,11 +18,12 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from accessmate.core.event_bus import bus
 from accessmate.core.i18n import tr
+from accessmate.core.resources import app_icon_path
 
 if TYPE_CHECKING:
     from accessmate.app import AccessMateApp
 
-ICON_PATH = Path(__file__).parent.parent.parent / "assets" / "icons" / "accessmate.ico"
+ICON_PATH = app_icon_path()
 
 
 def _make_icon(color: str) -> QIcon:

@@ -162,15 +162,19 @@ def perform_update(info: ReleaseInfo) -> None:
 
 
 def restart_app() -> None:
-    """Relaunch AccessMate and quit the running instance.
+    """Relaunch AccessMate (reopening the settings window) and quit this one.
 
-    The relaunch is delayed by a helper process so the single-instance
-    mutex of THIS process is released before the new one checks it.
+    The relaunch is delayed via ``ping`` so this process' single-instance
+    mutex is released before the new instance checks it.  ``ping`` needs no
+    console (unlike ``timeout``) and works for the frozen .exe too.
     """
+    if getattr(sys, "frozen", False):
+        target = f'"{sys.executable}" --open-settings'
+    else:
+        target = f'"{sys.executable}" -m accessmate --open-settings'
     subprocess.Popen(
-        [sys.executable, "-c",
-         "import time, subprocess, sys; time.sleep(2); "
-         "subprocess.Popen([sys.executable, '-m', 'accessmate'])"],
+        f'ping -n 3 127.0.0.1 >nul & start "" {target}',
+        shell=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance()
