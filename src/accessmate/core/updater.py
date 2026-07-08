@@ -65,8 +65,10 @@ def fetch_latest() -> ReleaseInfo | None:
             html_url=str(data.get("html_url", RELEASES_URL)),
             zipball_url=str(data.get("zipball_url", "")),
         )
-    except Exception:
-        log.info("update check failed (offline?)", exc_info=True)
+    except Exception as exc:
+        # Expected when offline or before the first GitHub Release exists
+        # (404).  Handled silently – no traceback spam in the user's log.
+        log.info("update check skipped: %s", exc)
         return None
 
 

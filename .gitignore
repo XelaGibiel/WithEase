@@ -42,3 +42,6 @@ Chatverl*/
 check.ps1
 AccessMate.bat
 AccessMate.vbs
+
+# PyInstaller (auto-generiert; Build via BUILD_EXE.bat)
+*.spec

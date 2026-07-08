@@ -12,11 +12,27 @@ Adding a new language:
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from accessmate.core.event_bus import bus
 
-LOCALES_DIR = Path(__file__).parent.parent / "locales"
+
+def _locales_dir() -> Path:
+    """Where the *.json locale files live.
+
+    In a normal run this is the package's locales/ folder.  In a PyInstaller
+    build the files are unpacked next to the frozen app (sys._MEIPASS), so we
+    resolve them there instead.
+    """
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", None)
+        if base:
+            return Path(base) / "accessmate" / "locales"
+    return Path(__file__).parent.parent / "locales"
+
+
+LOCALES_DIR = _locales_dir()
 SUPPORTED_LANGUAGES: dict[str, str] = {
     "en": "English",
     "de": "Deutsch",

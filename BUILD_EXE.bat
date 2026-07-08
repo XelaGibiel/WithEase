@@ -1,0 +1,20 @@
+@echo off
+rem =====================================================================
+rem  Baut die eigenstaendige AccessMate.exe fuer Endnutzer.
+rem  Ergebnis:  dist\AccessMate\AccessMate.exe  (ganzen Ordner weitergeben)
+rem  Voraussetzung: Projekt-venv mit PyInstaller
+rem     .venv\Scripts\python.exe -m pip install pyinstaller
+rem =====================================================================
+setlocal
+cd /d "%~dp0"
+".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --windowed --name AccessMate ^
+  --paths src ^
+  --add-data "src\accessmate\locales;accessmate\locales" ^
+  --hidden-import pynput.keyboard._win32 ^
+  --hidden-import pynput.mouse._win32 ^
+  --noupx ^
+  src\accessmate\__main__.py
+echo.
+echo Fertig. Starten mit:  dist\AccessMate\AccessMate.exe
+pause
+endlocal
