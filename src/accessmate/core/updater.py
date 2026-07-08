@@ -24,7 +24,10 @@ from accessmate import __version__
 log = logging.getLogger(__name__)
 
 GITHUB_REPO = "XelaGibiel/AccessMate"
-_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+# List endpoint (not /releases/latest): the latter hides pre-releases, and
+# AccessMate ships pre-releases during the alpha, so we take the newest
+# published release ourselves – including pre-releases.
+_API_RELEASES = f"https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=20"
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 
 _TIMEOUT = 10  # seconds
@@ -52,19 +55,34 @@ def is_newer(candidate: str, current: str = __version__) -> bool:
 
 
 def fetch_latest() -> ReleaseInfo | None:
-    """Fetch the latest release (blocking).  None on any failure."""
+    """Fetch the newest published release (blocking).  None on any failure.
+
+    Considers pre-releases (alpha), skips drafts, and picks the highest
+    version number rather than relying on GitHub's "latest" (which hides
+    pre-releases).
+    """
     try:
         req = urllib.request.Request(
-            _API_LATEST, headers={"Accept": "application/vnd.github+json",
-                                  "User-Agent": "AccessMate"})
+            _API_RELEASES, headers={"Accept": "application/vnd.github+json",
+                                    "User-Agent": "AccessMate"})
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            data = json.load(resp)
-        return ReleaseInfo(
-            version=str(data.get("tag_name", "")).lstrip("vV"),
-            notes=str(data.get("body", "") or ""),
-            html_url=str(data.get("html_url", RELEASES_URL)),
-            zipball_url=str(data.get("zipball_url", "")),
-        )
+            releases = json.load(resp)
+        best = None
+        for rel in releases:
+            if rel.get("draft"):
+                continue
+            version = str(rel.get("tag_name", "")).lstrip("vV")
+            if not version:
+                continue
+            if best is None or _parse_version(version) > _parse_version(
+                    best.version):
+                best = ReleaseInfo(
+                    version=version,
+                    notes=str(rel.get("body", "") or ""),
+                    html_url=str(rel.get("html_url", RELEASES_URL)),
+                    zipball_url=str(rel.get("zipball_url", "")),
+                )
+        return best
     except Exception as exc:
         # Expected when offline or before the first GitHub Release exists
         # (404).  Handled silently – no traceback spam in the user's log.
