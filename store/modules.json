@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "note": "Kuratierter Modul-Index für den AccessMate In-App-Store. Nur offizielle, von AccessMate geprüfte Module. download_url MUSS auf eine kontrollierte Quelle zeigen (dieses Repo / eigene Releases) – niemals fremde URLs.",
+    "note": "Kuratierter Modul-Index für den WithEase In-App-Store. Nur offizielle, von WithEase geprüfte Module. download_url MUSS auf eine kontrollierte Quelle zeigen (dieses Repo / eigene Releases) – niemals fremde URLs.",
     "index_version": 1
   },
   "modules": [
@@ -8,9 +8,9 @@
       "id": "hydration",
       "name": "Trinkpause",
       "version": "1.1.0",
-      "author": "AccessMate",
+      "author": "WithEase",
       "description": "Erinnert in einstellbaren Abständen an Trinkpausen – dezent, als Regen oder als steigender Flüssigkeitsstand.",
-      "download_url": "https://github.com/XelaGibiel/AccessMate/archive/refs/heads/main.zip",
+      "download_url": "https://github.com/XelaGibiel/WithEase/archive/refs/heads/main.zip",
       "subdir": "examples/hydration",
       "min_app_version": "0.1.0"
     },
@@ -18,9 +18,9 @@
       "id": "dictation",
       "name": "Diktieren",
       "version": "1.0.0",
-      "author": "AccessMate",
+      "author": "WithEase",
       "description": "Sprache zu Text per Whisper – Cloud (OpenRouter/OpenAI/Groq) oder lokal auf diesem PC.",
-      "download_url": "https://github.com/XelaGibiel/AccessMate/archive/refs/heads/main.zip",
+      "download_url": "https://github.com/XelaGibiel/WithEase/archive/refs/heads/main.zip",
       "subdir": "examples/dictation",
       "min_app_version": "0.1.0"
     }

@@ -1,6 +1,6 @@
-# Contributing to AccessMate
+# Contributing to WithEase
 
-Thank you for your interest in AccessMate! Every contribution helps make computers more accessible.
+Thank you for your interest in WithEase! Every contribution helps make computers more accessible.
 
 ## Ways to Contribute
 
@@ -13,8 +13,8 @@ Thank you for your interest in AccessMate! Every contribution helps make compute
 ## Development Setup
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/accessmate.git
-cd accessmate
+git clone https://github.com/YOUR_USERNAME/withease.git
+cd withease
 pip install -e ".[dev]"
 ```
 
@@ -38,7 +38,7 @@ ruff check src/
 
 ## Adding a New Module
 
-1. Create `src/accessmate/modules/your_module.py`
+1. Create `src/withease/modules/your_module.py`
 2. Inherit from `BaseModule`, set `MODULE_ID`, `DISPLAY_NAME`, `DESCRIPTION`
 3. Implement `start()`, `stop()`, `get_settings_widget()`, `load_settings()`, `dump_settings()`
 4. Register your actions in `__init__()` via `action_manager.register()`

@@ -1,7 +1,7 @@
 {
   "name": "Trinkpause",
   "version": "1.1.0",
-  "author": "AccessMate",
+  "author": "WithEase",
   "description": "Erinnert in einstellbaren Abständen an Trinkpausen – dezent, als Regen oder als steigender Flüssigkeitsstand.",
   "entry": "module.py",
   "class": "HydrationModule"

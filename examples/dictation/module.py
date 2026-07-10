@@ -1,7 +1,7 @@
-"""Diktieren – externes AccessMate-Modul (Sprache zu Text per Whisper).
+"""Diktieren – externes WithEase-Modul (Sprache zu Text per Whisper).
 
-Zum Installieren diesen Ordner nach %APPDATA%/AccessMate/modules/ kopieren
-und AccessMate neu starten – „Diktieren“ erscheint dann als eigene Kategorie
+Zum Installieren diesen Ordner nach %APPDATA%/WithEase/modules/ kopieren
+und WithEase neu starten – „Diktieren“ erscheint dann als eigene Kategorie
 unten in den Einstellungen.
 
 Ablauf: Hotkey drücken → Aufnahme (🎙-Chip erscheint) → erneut drücken bzw.
@@ -10,7 +10,7 @@ eingefügt.  Erkennung wahlweise per OpenAI-kompatibler Cloud-API
 (OpenRouter/OpenAI/Groq/eigene URL) oder lokal via faster-whisper.
 
 Dieses Modul ist autark: es bringt seine eigenen deutschen und englischen
-Texte mit und hängt nur an der öffentlichen AccessMate-Erweiterungs-API
+Texte mit und hängt nur an der öffentlichen WithEase-Erweiterungs-API
 (BaseModule, Event-Bus, ActionManager, geteilter Tastatur-Hook, App-Config
 und das wiederverwendbare HotkeyEdit-Widget).  Der Kern weiß nichts von ihm.
 
@@ -45,17 +45,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from accessmate.core import config as app_config
-from accessmate.core.action_manager import Action, action_manager
-from accessmate.core.event_bus import bus
-from accessmate.core.win_keyboard_hook import (
+from withease.core import config as app_config
+from withease.core.action_manager import Action, action_manager
+from withease.core.event_bus import bus
+from withease.core.win_keyboard_hook import (
     current_combo_str,
     is_altgr_fake_lctrl,
     shared_keyboard_hook,
     vk_to_combo_str,
 )
-from accessmate.gui.widgets.hotkey_edit import HotkeyEdit
-from accessmate.modules.base import BaseModule
+from withease.gui.widgets.hotkey_edit import HotkeyEdit
+from withease.modules.base import BaseModule
 
 try:
     from pynput.keyboard import Controller as KeyController
@@ -102,13 +102,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local_model": "Whisper-Modell",
         "local.hint": "Beim ersten Diktat wird das Modell heruntergeladen (tiny ≈ 75 MB … large-v3 ≈ 1,5 GB). Größer = genauer, aber langsamer.",
         "local.not_installed": "Die lokale Erkennung ist auf diesem PC noch nicht installiert. Du kannst sie mit einem Klick automatisch installieren lassen – es sind keine Vorkenntnisse nötig.",
-        "local.frozen_note": "Die lokale Erkennung ist in der App-Version (.exe) nicht verfügbar – dafür nutze bitte das Cloud-Backend oben. Wer die lokale Erkennung möchte, verwendet die Quellcode-Version von AccessMate.",
+        "local.frozen_note": "Die lokale Erkennung ist in der App-Version (.exe) nicht verfügbar – dafür nutze bitte das Cloud-Backend oben. Wer die lokale Erkennung möchte, verwendet die Quellcode-Version von WithEase.",
         "local.install": "Automatisch installieren",
         "local.install.running": "Wird installiert … Das kann einige Minuten dauern. Du kannst das Fenster geöffnet lassen.",
         "local.install.done": "Fertig! Die lokale Spracherkennung ist jetzt installiert und kann verwendet werden.",
         "local.install.failed": "Die Installation hat leider nicht geklappt: {err}\nBitte versuche es erneut oder nutze die Anleitung.",
         "local.howto": "Anleitung anzeigen",
-        "local.howto.text": "So installierst du die lokale Spracherkennung von Hand:\n\n1. Öffne die Eingabeaufforderung (Windows-Taste drücken, „cmd“ eintippen, Enter).\n2. Tippe ein:  pip install faster-whisper\n3. Drücke Enter und warte, bis die Installation fertig ist.\n4. Starte AccessMate neu.\n\nTipp: Der Knopf „Automatisch installieren“ erledigt genau diese Schritte für dich.",
+        "local.howto.text": "So installierst du die lokale Spracherkennung von Hand:\n\n1. Öffne die Eingabeaufforderung (Windows-Taste drücken, „cmd“ eintippen, Enter).\n2. Tippe ein:  pip install faster-whisper\n3. Drücke Enter und warte, bis die Installation fertig ist.\n4. Starte WithEase neu.\n\nTipp: Der Knopf „Automatisch installieren“ erledigt genau diese Schritte für dich.",
         "language": "Sprache",
         "lang.auto": "Automatisch erkennen",
         "insert": "Text einfügen per",
@@ -157,13 +157,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local_model": "Whisper model",
         "local.hint": "The model is downloaded on first use (tiny ≈ 75 MB … large-v3 ≈ 1.5 GB). Bigger = more accurate but slower.",
         "local.not_installed": "Local recognition is not installed on this PC yet. You can have it installed automatically with one click – no technical knowledge needed.",
-        "local.frozen_note": "Local recognition is not available in the packaged app (.exe) – please use the cloud backend above instead. If you want local recognition, use the source-code version of AccessMate.",
+        "local.frozen_note": "Local recognition is not available in the packaged app (.exe) – please use the cloud backend above instead. If you want local recognition, use the source-code version of WithEase.",
         "local.install": "Install automatically",
         "local.install.running": "Installing … This may take a few minutes. You can keep this window open.",
         "local.install.done": "Done! Local speech recognition is now installed and ready to use.",
         "local.install.failed": "The installation did not work: {err}\nPlease try again or use the instructions.",
         "local.howto": "Show instructions",
-        "local.howto.text": "How to install local speech recognition manually:\n\n1. Open the command prompt (press the Windows key, type \"cmd\", press Enter).\n2. Type:  pip install faster-whisper\n3. Press Enter and wait until the installation finishes.\n4. Restart AccessMate.\n\nTip: the \"Install automatically\" button does exactly these steps for you.",
+        "local.howto.text": "How to install local speech recognition manually:\n\n1. Open the command prompt (press the Windows key, type \"cmd\", press Enter).\n2. Type:  pip install faster-whisper\n3. Press Enter and wait until the installation finishes.\n4. Restart WithEase.\n\nTip: the \"Install automatically\" button does exactly these steps for you.",
         "language": "Language",
         "lang.auto": "Detect automatically",
         "insert": "Insert text via",
@@ -235,7 +235,7 @@ def _sync_module_checkbox(widget: QWidget, module: "DictationModule",
                           update_enabled_state: Any) -> None:
     """Keep the page's enable-checkbox in sync when the module is toggled
     elsewhere (emergency stop, tray, profile switch).  Self-contained copy of
-    the core helper so the module needs nothing from accessmate.gui.settings."""
+    the core helper so the module needs nothing from withease.gui.settings."""
 
     def on_state(module_id: str, **_: object) -> None:
         if module_id != module.MODULE_ID:

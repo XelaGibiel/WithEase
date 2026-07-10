@@ -1,15 +1,15 @@
-# AccessMate – Module entwickeln
+# WithEase – Module entwickeln
 
-AccessMate ist modular aufgebaut: Jede Funktion (Maus, Tastatur, Makros, …)
+WithEase ist modular aufgebaut: Jede Funktion (Maus, Tastatur, Makros, …)
 ist ein Modul. Externe Module werden beim Start automatisch geladen und
 erscheinen als eigene Kategorie in den Einstellungen – ohne Änderungen am
 Hauptprogramm.
 
 ## Installation eines Moduls (für Nutzer)
 
-Modulordner nach `%APPDATA%\AccessMate\modules\` kopieren und AccessMate neu
+Modulordner nach `%APPDATA%\WithEase\modules\` kopieren und WithEase neu
 starten. Fertig. Ein fehlerhaftes Modul wird übersprungen und im Log
-(`%APPDATA%\AccessMate\accessmate.log`) vermerkt – es kann die App nicht zum
+(`%APPDATA%\WithEase\withease.log`) vermerkt – es kann die App nicht zum
 Absturz bringen.
 
 > ⚠️ **Sicherheit:** Module sind ausführbarer Python-Code mit Zugriff auf
@@ -44,7 +44,7 @@ am besten als Vorlage kopieren.
 ## Die BaseModule-Schnittstelle
 
 ```python
-from accessmate.modules.base import BaseModule
+from withease.modules.base import BaseModule
 
 class MeinModul(BaseModule):
     MODULE_ID = "mein_modul"        # eindeutig, klein, ohne Leerzeichen
@@ -67,32 +67,32 @@ Wichtige Regeln:
 - `start()`/`stop()` sollen `bus.publish("module.started"/"module.stopped",
   module_id=MODULE_ID)` senden – daran hängen Tray, Profil-Speicherung und
   Live-Aktualisierung der Einstellungsseiten.
-- Einstellungen sind ein einfaches, JSON-serialisierbares Dict. AccessMate
+- Einstellungen sind ein einfaches, JSON-serialisierbares Dict. WithEase
   speichert es **pro Profil** automatisch, sobald das Modul
   `bus.publish("module.settings_changed", module_id=MODULE_ID)` sendet.
 
 ## Die Plugin-API
 
-### Event-Bus (`accessmate.core.event_bus.bus`)
+### Event-Bus (`withease.core.event_bus.bus`)
 
 Module kommunizieren ausschließlich über Events – nie über direkte Referenzen.
 
 ```python
-from accessmate.core.event_bus import bus
+from withease.core.event_bus import bus
 bus.subscribe("mouse.centered", callback)      # kwargs-basiert
 bus.publish("mein_modul.irgendwas", wert=42)
 ```
 
 Exceptions in Subscribern werden abgefangen und geloggt.
 
-### Action-Manager (`accessmate.core.action_manager.action_manager`)
+### Action-Manager (`withease.core.action_manager.action_manager`)
 
 Aktionen registrieren statt Hotkeys hart verdrahten – dadurch bekommt das
 Modul gratis: Hotkey-Zuweisung per `HotkeyEdit`, Konfliktwarnungen,
 Favoriten-Overlay und die Übersicht auf der Seite „Aktionen".
 
 ```python
-from accessmate.core.action_manager import Action, action_manager
+from withease.core.action_manager import Action, action_manager
 action_manager.register(Action(id="mein_modul.tu_was",
                                label="Tu was", callback=self._tu_was))
 # Hotkey (aus den eigenen Einstellungen) zuweisen – leerer String = aus:
@@ -107,7 +107,7 @@ action_manager.assign_trigger("mein_modul.tu_was",
 sich gegenseitig, und pynputs Listener zerstört AltGr/Tote Tasten. Stattdessen:
 
 ```python
-from accessmate.core.win_keyboard_hook import (
+from withease.core.win_keyboard_hook import (
     shared_keyboard_hook,   # der eine Hook für alle
     vk_to_combo_str,        # VK-Code → Hotkey-String ("'a'", "Key.f9", …)
     current_combo_str,      # inkl. gehaltener Modifier ("ctrl+shift+'m'")
@@ -134,14 +134,14 @@ Aufwendiges per `threading.Timer(0.05, …)` verzögern und GUI-Arbeit immer
 
 ### Hotkey-Eingabefelder
 
-`accessmate.gui.widgets.hotkey_edit.HotkeyEdit` wiederverwenden (speichert im
+`withease.gui.widgets.hotkey_edit.HotkeyEdit` wiederverwenden (speichert im
 kompatiblen Format, inkl. Kombinationen, Numpad und Konfliktprüfung – dazu
 `action_id` übergeben).
 
 ### GUI-Konventionen
 
 - Einstellungsseite: `QScrollArea`, `CollapsibleSection`
-  (`accessmate.gui.widgets.collapsible_section`) pro Werkzeug mit
+  (`withease.gui.widgets.collapsible_section`) pro Werkzeug mit
   Beschreibungstext.
 - Alles, was aus Threads kommt, per Qt-Signal in den Main-Thread bringen –
   `QTimer` u. ä. dürfen nur dort laufen.

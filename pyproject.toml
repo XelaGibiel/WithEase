@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "accessmate"
-version = "0.1.1"
+name = "withease"
+version = "0.1.0"
 description = "Modular accessibility assistant for people with motor impairments"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -35,7 +35,7 @@ dev = [
 # faster-whisper) – they are intentionally not part of the core package.
 
 [project.gui-scripts]
-accessmate = "accessmate.__main__:main"
+withease = "withease.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

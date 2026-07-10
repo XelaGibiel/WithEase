@@ -1,7 +1,7 @@
-"""Trinkpause – externes AccessMate-Modul (Trinkpausen-Erinnerung).
+"""Trinkpause – externes WithEase-Modul (Trinkpausen-Erinnerung).
 
-Zum Installieren diesen Ordner nach %APPDATA%/AccessMate/modules/ kopieren
-und AccessMate neu starten – die „Trinkpause“ erscheint dann als eigene
+Zum Installieren diesen Ordner nach %APPDATA%/WithEase/modules/ kopieren
+und WithEase neu starten – die „Trinkpause“ erscheint dann als eigene
 Kategorie unten in den Einstellungen.
 
 Das Modul erinnert in einstellbaren Abständen ans Trinken.  Die Erinnerung
@@ -35,9 +35,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from accessmate.core import config
-from accessmate.core.event_bus import bus
-from accessmate.modules.base import BaseModule
+from withease.core import config
+from withease.core.event_bus import bus
+from withease.modules.base import BaseModule
 
 STYLES = ("popup", "rain", "liquid")
 # Styles that take over the whole screen (vs. the discreet centred pop-up).

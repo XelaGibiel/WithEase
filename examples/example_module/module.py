@@ -1,7 +1,7 @@
-"""Beispielmodul – Minimalvorlage für externe AccessMate-Module.
+"""Beispielmodul – Minimalvorlage für externe WithEase-Module.
 
-Zum Ausprobieren diesen Ordner nach %APPDATA%/AccessMate/modules/ kopieren
-und AccessMate neu starten – das Modul erscheint als eigene Kategorie in den
+Zum Ausprobieren diesen Ordner nach %APPDATA%/WithEase/modules/ kopieren
+und WithEase neu starten – das Modul erscheint als eigene Kategorie in den
 Einstellungen.
 
 Was hier gezeigt wird:
@@ -16,9 +16,9 @@ from typing import Any
 
 from PySide6.QtWidgets import QCheckBox, QLabel, QVBoxLayout, QWidget
 
-from accessmate.core.action_manager import Action, action_manager
-from accessmate.core.event_bus import bus
-from accessmate.modules.base import BaseModule
+from withease.core.action_manager import Action, action_manager
+from withease.core.event_bus import bus
+from withease.modules.base import BaseModule
 
 
 class ExampleModule(BaseModule):
@@ -74,7 +74,7 @@ class ExampleModule(BaseModule):
 
         layout.addWidget(QLabel(
             "Dies ist ein externes Modul aus\n"
-            "%APPDATA%/AccessMate/modules/example_module/"))
+            "%APPDATA%/WithEase/modules/example_module/"))
 
         demo_cb = QCheckBox("Eine Einstellung, die im Profil gespeichert wird")
         demo_cb.setChecked(self._settings.get("demo_option", False))
@@ -86,7 +86,7 @@ class ExampleModule(BaseModule):
         demo_cb.toggled.connect(on_toggled)
         layout.addWidget(demo_cb)
 
-        from accessmate.gui.widgets.hotkey_edit import HotkeyEdit
+        from withease.gui.widgets.hotkey_edit import HotkeyEdit
         hotkey = HotkeyEdit(self._settings.get("hello_hotkey", ""),
                             action_id="example.hello")
 

@@ -1,8 +1,15 @@
-# AccessMate
+# WithEase
 
 **Modular accessibility assistant for people with motor impairments.**
 
-AccessMate runs quietly in the system tray and helps users with limited motor control work more comfortably with mouse and keyboard. Every feature is a separate module that can be switched on or off individually – so the program never feels overloaded.
+> **Built with vibe coding — and proud of it.**
+> I'll be upfront: WithEase was created with AI-assisted "vibe coding". I don't
+> think that's anything to be ashamed of nowadays. Quite the opposite — it's
+> what let me turn my own idea into a program that people can actually use, and
+> share it instead of keeping it to myself. Passing up that chance would have
+> been the worse choice. Feedback and contributions are very welcome.
+
+WithEase runs quietly in the system tray and helps users with limited motor control work more comfortably with mouse and keyboard. Every feature is a separate module that can be switched on or off individually – so the program never feels overloaded.
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
@@ -60,17 +67,17 @@ No hardcoded shortcuts. Instead:
 1. Define an **Action** (e.g. "Center mouse")
 2. Assign any **trigger** to it (keyboard key, mouse button, macro pad, foot switch, voice command, gamepad, eye tracker …)
 
-This makes AccessMate input-device agnostic – new devices can be supported without touching the core logic.
+This makes WithEase input-device agnostic – new devices can be supported without touching the core logic.
 
 ---
 
 ## Download & Run (no installation needed)
 
-1. Open the [**Releases**](https://github.com/XelaGibiel/AccessMate/releases) page and download `AccessMate-<version>-win64.zip`.
+1. Open the [**Releases**](https://github.com/XelaGibiel/WithEase/releases) page and download `WithEase-<version>-win64.zip`.
 2. Unpack the ZIP (right-click → *Extract All …*).
-3. Open the `AccessMate` folder and double-click **`AccessMate.exe`**.
+3. Open the `WithEase` folder and double-click **`WithEase.exe`**.
 
-AccessMate then runs in the system tray (bottom right). Double-click the tray
+WithEase then runs in the system tray (bottom right). Double-click the tray
 icon for the settings; a single click opens the menu. No Python required.
 
 > Windows SmartScreen may warn about the unsigned app – click *More info* →
@@ -81,21 +88,21 @@ icon for the settings; a single click opens the menu. No Python required.
 > Requires Python 3.11 or newer.
 
 ```bash
-git clone https://github.com/XelaGibiel/AccessMate.git
-cd AccessMate
+git clone https://github.com/XelaGibiel/WithEase.git
+cd WithEase
 pip install -r requirements.txt
-python -m accessmate
+python -m withease
 ```
 
-To build the standalone `AccessMate.exe` yourself, run `BUILD_EXE.bat`
-(needs `pip install pyinstaller`); the result is in `dist/AccessMate/`.
+To build the standalone `WithEase.exe` yourself, run `BUILD_EXE.bat`
+(needs `pip install pyinstaller`); the result is in `dist/WithEase/`.
 
 ---
 
-## Extending AccessMate
+## Extending WithEase
 
 Every feature is a module. Optional add-ons live in [`examples/`](examples/)
-and are loaded from `%APPDATA%/AccessMate/modules/` – see
+and are loaded from `%APPDATA%/WithEase/modules/` – see
 [docs/MODULE_GUIDE.md](docs/MODULE_GUIDE.md). The in-app **module store**
 installs the official add-ons for you.
 

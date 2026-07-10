@@ -1,18 +1,18 @@
 @echo off
 rem =====================================================================
-rem  Baut die eigenstaendige AccessMate.exe fuer Endnutzer.
-rem  Ergebnis:  dist\AccessMate\AccessMate.exe  (ganzen Ordner weitergeben)
+rem  Baut die eigenstaendige WithEase.exe fuer Endnutzer.
+rem  Ergebnis:  dist\WithEase\WithEase.exe  (ganzen Ordner weitergeben)
 rem  Voraussetzung: Projekt-venv mit PyInstaller + Cloud-Diktier-Deps
 rem  (sonst schlaegt --collect-all fehl):
 rem     .venv\Scripts\python.exe -m pip install pyinstaller sounddevice requests
 rem =====================================================================
 setlocal
 cd /d "%~dp0"
-".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --windowed --name AccessMate ^
-  --icon "src\accessmate\assets\icons\accessmate.ico" ^
+".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --windowed --name WithEase ^
+  --icon "src\withease\assets\icons\withease.ico" ^
   --paths src ^
-  --add-data "src\accessmate\locales;accessmate\locales" ^
-  --add-data "src\accessmate\assets;accessmate\assets" ^
+  --add-data "src\withease\locales;withease\locales" ^
+  --add-data "src\withease\assets;withease\assets" ^
   --hidden-import pynput.keyboard._win32 ^
   --hidden-import pynput.mouse._win32 ^
   --collect-all sounddevice ^
@@ -22,8 +22,8 @@ cd /d "%~dp0"
   --hidden-import base64 ^
   --hidden-import random ^
   --noupx ^
-  src\accessmate\__main__.py
+  src\withease\__main__.py
 echo.
-echo Fertig. Starten mit:  dist\AccessMate\AccessMate.exe
+echo Fertig. Starten mit:  dist\WithEase\WithEase.exe
 pause
 endlocal

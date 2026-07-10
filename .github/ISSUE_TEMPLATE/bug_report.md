@@ -21,6 +21,6 @@ If applicable, add screenshots or paste the log output.
 **Environment**
 - OS: Windows [version]
 - Python: [version]
-- AccessMate: [version]
+- WithEase: [version]
 - Active modules: [list]
 - Assistive device (if relevant): [e.g. foot switch, eye tracker]

@@ -1,7 +1,7 @@
 {
   "name": "Diktieren",
   "version": "1.0.0",
-  "author": "AccessMate",
+  "author": "WithEase",
   "description": "Sprache zu Text per Whisper – Cloud (OpenRouter/OpenAI/Groq) oder lokal auf diesem PC.",
   "entry": "module.py",
   "class": "DictationModule"

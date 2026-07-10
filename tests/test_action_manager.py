@@ -1,5 +1,5 @@
 """Tests for the ActionManager."""
-from accessmate.core.action_manager import Action, ActionManager
+from withease.core.action_manager import Action, ActionManager
 
 
 def test_register_and_fire():
