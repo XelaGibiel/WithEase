@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings so they run on Linux (CRLF breaks the
+# shebang: "bad interpreter"). Windows .bat files keep CRLF.
+*.sh text eol=lf
+*.bat text eol=crlf
