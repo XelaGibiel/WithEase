@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "note": "Kuratierter Modul-Index für den WithEase In-App-Store. Nur offizielle, von WithEase geprüfte Module. download_url MUSS auf eine kontrollierte Quelle zeigen (dieses Repo / eigene Releases) – niemals fremde URLs.",
+    "note": "Kuratierter Modul-Index für die WithEase In-App-Modul-Bibliothek. Nur offizielle, von WithEase geprüfte Module. download_url MUSS auf eine kontrollierte Quelle zeigen (dieses Repo / eigene Releases) – niemals fremde URLs.",
     "index_version": 1
   },
   "modules": [
@@ -19,7 +19,7 @@
       "name": "Diktieren",
       "version": "1.0.0",
       "author": "WithEase",
-      "description": "Sprache zu Text per Whisper – Cloud (OpenRouter/OpenAI/Groq) oder lokal auf diesem PC. 🧪 Noch früh in der Beta-Phase – funktioniert evtl. nicht auf Anhieb reibungslos.",
+      "description": "Sprache zu Text per Whisper – Cloud (OpenRouter/OpenAI/Groq) oder lokal auf diesem PC.\n\n🧪 Noch früh in der Beta-Phase – funktioniert evtl. nicht auf Anhieb reibungslos.",
       "download_url": "https://github.com/XelaGibiel/WithEase/archive/refs/heads/main.zip",
       "subdir": "examples/dictation",
       "min_app_version": "0.1.0"

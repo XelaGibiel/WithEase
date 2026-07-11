@@ -50,7 +50,7 @@ WithEase runs quietly in the system tray and helps users with limited motor cont
 - Optional direction arrow from the screen centre toward the cursor
 - Automatically hides over fullscreen videos and games
 
-### Add-on Modules (install from the in-app store)
+### Add-on Modules (install from the in-app library)
 - **Drink break** – reminds you to drink at a configurable interval, as a
   discreet pop-up or a full-screen rain overlay
 - **Dictation** – speech to text via Whisper (cloud: OpenRouter / OpenAI /
@@ -60,7 +60,7 @@ WithEase runs quietly in the system tray and helps users with limited motor cont
 ### General
 - Emergency stop: one key disables everything instantly (also in tray menu)
 - Autostart, light / dark / high-contrast themes, adjustable font size, language
-- In-app **module store**: browse and one-click install add-on modules
+- In-app **module library**: browse and one-click install add-on modules
 - Own app logo shown in the taskbar, window and tray
 
 ### Action Manager
@@ -104,7 +104,7 @@ To build the standalone `WithEase.exe` yourself, run `BUILD_EXE.bat`
 
 Every feature is a module. Optional add-ons live in [`examples/`](examples/)
 and are loaded from `%APPDATA%/WithEase/modules/` – see
-[docs/MODULE_GUIDE.md](docs/MODULE_GUIDE.md). The in-app **module store**
+[docs/MODULE_GUIDE.md](docs/MODULE_GUIDE.md). The in-app **module library**
 installs the official add-ons for you.
 
 ---
