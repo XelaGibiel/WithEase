@@ -40,7 +40,7 @@ from PySide6.QtWidgets import QWidget
 from withease.core.action_manager import Action, action_manager
 from withease.core.event_bus import bus
 from withease.core.i18n import tr
-from withease.core.win_keyboard_hook import (
+from withease.core.keyboard_hook import (
     MOD_VK as _MOD_VK,
     NUMPAD_VK as _NUMPAD_VK,
     effective_modifiers,
@@ -330,6 +330,9 @@ class MacrosModule(BaseModule):
         foreground (case-insensitive substring match)."""
         if not title:
             return
+        import sys
+        if sys.platform != "win32":
+            return  # bringing a window to the foreground is Windows-only for now
         import ctypes
         from ctypes import wintypes
         user32 = ctypes.windll.user32

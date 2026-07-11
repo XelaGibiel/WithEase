@@ -13,6 +13,7 @@ Features:
 from __future__ import annotations
 
 import ctypes
+import sys
 import threading
 import time
 from ctypes import wintypes
@@ -23,7 +24,7 @@ from PySide6.QtWidgets import QWidget
 from withease.core.action_manager import Action, action_manager
 from withease.core.event_bus import bus
 from withease.core.i18n import tr
-from withease.core.win_keyboard_hook import (
+from withease.core.keyboard_hook import (
     current_combo_str,
     is_altgr_fake_lctrl,
     shared_keyboard_hook,
@@ -36,6 +37,24 @@ try:
     PYNPUT_AVAILABLE = True
 except ImportError:
     PYNPUT_AVAILABLE = False
+
+
+def _screen_size() -> tuple[int, int]:
+    """Physical primary-screen size in pixels.
+
+    On Windows this is DPI-aware via Win32 so cursor positions land correctly
+    under display scaling; on other platforms it falls back to Qt's screen
+    geometry."""
+    if sys.platform == "win32":
+        user32 = ctypes.windll.user32
+        user32.SetProcessDPIAware()
+        return int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+    try:
+        from PySide6.QtGui import QGuiApplication
+        geo = QGuiApplication.primaryScreen().geometry()
+        return int(geo.width()), int(geo.height())
+    except Exception:
+        return (1920, 1080)
 
 
 class MouseModule(BaseModule):
@@ -279,17 +298,42 @@ class MouseModule(BaseModule):
 
     _CENTER_TOL = 4  # px; cursor must move this far from centre to dismiss target
 
+    def _now_ms(self) -> int:
+        """Monotonic millisecond tick in the same timebase as _last_input_tick."""
+        if sys.platform == "win32":
+            return int(ctypes.windll.kernel32.GetTickCount())
+        return int(time.monotonic() * 1000)
+
     def _last_input_tick(self) -> int:
-        """System-wide tick (ms) of the last keyboard/mouse input."""
-        info = self._LASTINPUTINFO()
-        info.cbSize = ctypes.sizeof(info)
-        ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info))
-        return int(info.dwTime)
+        """Tick (ms) of the last user input.
+
+        On Windows this is the OS-wide GetLastInputInfo (keyboard AND mouse).
+        On other platforms there is no portable system-idle API without extra
+        dependencies, so we approximate it by watching for cursor movement –
+        keyboard-only activity does not reset the idle timer there (Linux
+        limitation; centring still works while the mouse is stationary)."""
+        if sys.platform == "win32":
+            info = self._LASTINPUTINFO()
+            info.cbSize = ctypes.sizeof(info)
+            ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info))
+            return int(info.dwTime)
+        pos = self._cursor_pos()
+        now = self._now_ms()
+        if getattr(self, "_li_pos", None) != pos:
+            self._li_pos = pos
+            self._li_ms = now
+        return int(getattr(self, "_li_ms", now))
 
     def _cursor_pos(self) -> tuple[int, int]:
-        pt = self._POINT()
-        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-        return (int(pt.x), int(pt.y))
+        if sys.platform == "win32":
+            pt = self._POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+            return (int(pt.x), int(pt.y))
+        try:
+            x, y = pynput_mouse.Controller().position
+            return (int(x), int(y))
+        except Exception:
+            return (0, 0)
 
     def _start_centering_loop(self) -> None:
         self._stop_centering_loop()
@@ -340,7 +384,7 @@ class MouseModule(BaseModule):
                     break
                 continue
 
-            idle = (ctypes.windll.kernel32.GetTickCount() - tick) / 1000.0
+            idle = (self._now_ms() - tick) / 1000.0
             delay = float(self._settings.get("centering_delay", 5.0))
             if idle < delay:
                 if stop.wait(min(0.2, max(0.05, delay - idle))):
@@ -371,13 +415,9 @@ class MouseModule(BaseModule):
         if not PYNPUT_AVAILABLE:
             return
         try:
-            # Use physical pixel dimensions so the position is correct
-            # regardless of Windows DPI scaling settings.
-            user32 = ctypes.windll.user32
-            user32.SetProcessDPIAware()
-            cx = user32.GetSystemMetrics(0) // 2
-            cy = user32.GetSystemMetrics(1) // 2
-
+            cx, cy = _screen_size()
+            cx //= 2
+            cy //= 2
             pynput_mouse.Controller().position = (cx, cy)
             # Read back the ACTUAL cursor position as the reference point (pynput
             # and GetCursorPos can disagree slightly under DPI scaling).  The
@@ -393,12 +433,18 @@ class MouseModule(BaseModule):
     # ------------------------------------------------------------------
 
     def _get_system_mouse_speed(self) -> int:
+        # Precision mode changes the OS pointer speed; there is no portable
+        # equivalent, so on non-Windows it is a no-op (returns the neutral 10).
+        if sys.platform != "win32":
+            return 10
         speed = ctypes.c_int(0)
         ctypes.windll.user32.SystemParametersInfoW(
             self._SPI_GETMOUSESPEED, 0, ctypes.byref(speed), 0)
         return speed.value
 
     def _set_system_mouse_speed(self, speed: int) -> None:
+        if sys.platform != "win32":
+            return
         ctypes.windll.user32.SystemParametersInfoW(
             self._SPI_SETMOUSESPEED, 0, speed, 0)
 
@@ -447,10 +493,7 @@ class MouseModule(BaseModule):
         if not self._settings.get("screen_zones_enabled", False):
             return
         try:
-            user32 = ctypes.windll.user32
-            user32.SetProcessDPIAware()
-            w = user32.GetSystemMetrics(0)
-            h = user32.GetSystemMetrics(1)
+            w, h = _screen_size()
             x = int(w * (2 * col + 1) / (2 * cols))
             y = int(h * (2 * row + 1) / (2 * rows))
             pynput_mouse.Controller().position = (x, y)

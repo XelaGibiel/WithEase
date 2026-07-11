@@ -44,20 +44,44 @@ def _setup_logging() -> None:
 _MUTEX_NAME = "Global\\WithEase_SingleInstance"
 
 
-def _acquire_single_instance_mutex() -> object | None:
-    """Create a named Windows mutex to prevent multiple instances.
+def _acquire_single_instance() -> object | None:
+    """Prevent a second instance from running.
 
-    Returns the mutex handle if this is the first instance, or None if
-    WithEase is already running.
+    Returns an opaque handle to hold for the process lifetime if this is the
+    first instance, or None if WithEase is already running.  Windows uses a
+    named mutex; POSIX uses an exclusive ``flock`` on a lock file.
     """
-    mutex = ctypes.windll.kernel32.CreateMutexW(None, True, _MUTEX_NAME)
-    last_error = ctypes.windll.kernel32.GetLastError()
+    if sys.platform == "win32":
+        mutex = ctypes.windll.kernel32.CreateMutexW(None, True, _MUTEX_NAME)
+        ERROR_ALREADY_EXISTS = 183
+        if ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+            ctypes.windll.kernel32.CloseHandle(mutex)
+            return None
+        return mutex
 
-    ERROR_ALREADY_EXISTS = 183
-    if last_error == ERROR_ALREADY_EXISTS:
-        ctypes.windll.kernel32.CloseHandle(mutex)
+    # POSIX: hold an exclusive lock on a file in the config dir.
+    import fcntl
+    lock_path = _config.CONFIG_DIR / "withease.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = open(lock_path, "w")
+        fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+    except OSError:
         return None
-    return mutex
+
+
+def _release_single_instance(handle: object) -> None:
+    if handle is None:
+        return
+    if sys.platform == "win32":
+        ctypes.windll.kernel32.ReleaseMutex(handle)
+        ctypes.windll.kernel32.CloseHandle(handle)
+    else:
+        try:
+            handle.close()
+        except Exception:
+            pass
 
 
 def main() -> None:
@@ -68,8 +92,8 @@ def main() -> None:
     # Single-instance check applies in dev mode too: two instances would
     # each hold the full profile in memory and overwrite each other's saved
     # settings (last writer wins with stale data).
-    mutex = _acquire_single_instance_mutex()
-    if mutex is None:
+    instance = _acquire_single_instance()
+    if instance is None:
         app = QApplication(sys.argv)
         app.setApplicationName("WithEase")
         QMessageBox.information(
@@ -81,12 +105,13 @@ def main() -> None:
         sys.exit(0)
 
     # Distinct taskbar identity so Windows shows OUR icon (not python's) and
-    # groups our windows correctly.
-    try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "WithEase.App")
-    except Exception:
-        pass
+    # groups our windows correctly.  (Windows-only.)
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "WithEase.App")
+        except Exception:
+            pass
 
     qt_app = QApplication(sys.argv)
     qt_app.setApplicationName("WithEase")
@@ -106,9 +131,7 @@ def main() -> None:
 
     exit_code = qt_app.exec()
 
-    if mutex is not None:
-        ctypes.windll.kernel32.ReleaseMutex(mutex)
-        ctypes.windll.kernel32.CloseHandle(mutex)
+    _release_single_instance(instance)
 
     sys.exit(exit_code)
 

@@ -130,7 +130,7 @@ class HotkeyEdit(QWidget):
         mods = event.modifiers()
         held = set()
         try:
-            from withease.core.win_keyboard_hook import effective_modifiers
+            from withease.core.keyboard_hook import effective_modifiers
             held = set(effective_modifiers())
         except Exception:
             pass
@@ -367,7 +367,7 @@ class HotkeyEdit(QWidget):
         # native virtual-key code still identifies the physical key ('M'),
         # which is what the hook compares against at fire time.
         if native_vk:
-            from withease.core.win_keyboard_hook import vk_to_combo_str
+            from withease.core.keyboard_hook import vk_to_combo_str
             mapped = vk_to_combo_str(native_vk)
             if mapped:
                 return mapped

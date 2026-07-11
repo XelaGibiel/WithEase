@@ -13,7 +13,7 @@ WithEase runs quietly in the system tray and helps users with limited motor cont
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-lightgrey)
 ![Status](https://img.shields.io/badge/Status-Alpha-orange)
 
 ---
@@ -74,15 +74,34 @@ This makes WithEase input-device agnostic – new devices can be supported witho
 
 ## Download & Run (no installation needed)
 
-1. Open the [**Releases**](https://github.com/XelaGibiel/WithEase/releases) page and download `WithEase-<version>-win64.zip`.
+Open the [**Releases**](https://github.com/XelaGibiel/WithEase/releases) page
+and download the archive for your system.
+
+### Windows
+
+1. Download `WithEase-<version>-win64.zip`.
 2. Unpack the ZIP (right-click → *Extract All …*).
 3. Open the `WithEase` folder and double-click **`WithEase.exe`**.
 
-WithEase then runs in the system tray (bottom right). Double-click the tray
-icon for the settings; a single click opens the menu. No Python required.
-
 > Windows SmartScreen may warn about the unsigned app – click *More info* →
 > *Run anyway*.
+
+### Linux
+
+1. Download `WithEase-<version>-linux64.tar.gz`.
+2. Unpack it: `tar -xzf WithEase-<version>-linux64.tar.gz`.
+3. Run **`./WithEase/WithEase`** (or make it executable: `chmod +x WithEase/WithEase`).
+
+> **Linux is a new beta.** Use an **X11/Xorg** session for full functionality –
+> under Wayland, global keyboard handling is blocked by the system. Because
+> Linux does not allow selectively *swallowing* a key, features that rely on
+> suppression are limited there: Sticky Keys and key-delay pass the original
+> key through, and precision mode does not change the pointer speed. Everything
+> else (tray, settings, profiles, cursor centring, highlight, hotkeys, macros)
+> works. Feedback is very welcome.
+
+WithEase then runs in the system tray. Double-click the tray icon for the
+settings; a single click opens the menu. No Python required.
 
 ### Run from source (for developers)
 
@@ -95,8 +114,10 @@ pip install -r requirements.txt
 python -m withease
 ```
 
-To build the standalone `WithEase.exe` yourself, run `BUILD_EXE.bat`
-(needs `pip install pyinstaller`); the result is in `dist/WithEase/`.
+To build the standalone app yourself: run `BUILD_EXE.bat` on Windows or
+`./BUILD_LINUX.sh` on Linux (both need `pip install pyinstaller`); the result
+is in `dist/WithEase/`. The GitHub Actions *Build & attach release binaries*
+workflow builds both automatically for every `v*` tag.
 
 ---
 

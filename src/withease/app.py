@@ -15,7 +15,7 @@ from withease.core.action_manager import Action, action_manager
 from withease.core.event_bus import bus
 from withease.core import i18n
 from withease.core.i18n import tr
-from withease.core.win_keyboard_hook import (
+from withease.core.keyboard_hook import (
     current_combo_str,
     shared_keyboard_hook,
 )
@@ -189,7 +189,7 @@ class WithEaseApp:
     def emergency_stop(self) -> None:
         # Rescue any stuck modifiers first (e.g. a latched sticky key whose
         # release got lost) – the panic button must restore a usable keyboard.
-        from withease.core.win_keyboard_hook import release_all_modifiers
+        from withease.core.keyboard_hook import release_all_modifiers
         release_all_modifiers()
         self.pause_all()
         self._tray.showMessage(

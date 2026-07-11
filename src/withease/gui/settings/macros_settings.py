@@ -267,7 +267,7 @@ class _KeyRecorder(QWidget):
         # Ctrl+Alt acts as AltGr on Windows and composes a character
         # (Ctrl+Alt+M → 'µ'); the native VK still names the physical key.
         if native_vk:
-            from withease.core.win_keyboard_hook import vk_to_combo_str
+            from withease.core.keyboard_hook import vk_to_combo_str
             mapped = vk_to_combo_str(native_vk)
             if mapped:
                 return mapped
@@ -461,7 +461,7 @@ class _StepDialog(QDialog):
             return
         self._capturing = True
         self._capture_btn.setText(tr("module.macros.step.mouse.capture.active"))
-        from withease.core.win_keyboard_hook import shared_keyboard_hook
+        from withease.core.keyboard_hook import shared_keyboard_hook
         shared_keyboard_hook.subscribe(self._capture_key_event)
 
     def _capture_key_event(self, vk: int, scan: int, extended: bool,
@@ -487,7 +487,7 @@ class _StepDialog(QDialog):
         if not self._capturing:
             return
         self._capturing = False
-        from withease.core.win_keyboard_hook import shared_keyboard_hook
+        from withease.core.keyboard_hook import shared_keyboard_hook
         shared_keyboard_hook.unsubscribe(self._capture_key_event)
         self._capture_btn.setText(tr("module.macros.step.mouse.capture"))
 

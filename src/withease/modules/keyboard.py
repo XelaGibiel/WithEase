@@ -21,7 +21,7 @@ from withease.core.event_bus import bus
 from withease.core.i18n import tr
 from withease.modules.base import BaseModule
 
-from withease.core.win_keyboard_hook import (
+from withease.core.keyboard_hook import (
     MOD_VK,
     inject_modifier_release,
     is_altgr_fake_lctrl,

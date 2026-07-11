@@ -1,0 +1,92 @@
+name: Build & attach release binaries
+
+# Builds the standalone WithEase app for Windows and Linux and attaches both
+# archives to the GitHub release for the tag.  Runs on every pushed v* tag and
+# can also be triggered manually for an existing tag/release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag / release to build and attach to (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+env:
+  # Resolve the tag from either trigger.
+  REL_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REL_TAG }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller sounddevice requests
+      - name: Build
+        run: >
+          pyinstaller --noconfirm --clean --windowed --name WithEase
+          --icon "src/withease/assets/icons/withease.ico"
+          --paths src
+          --add-data "src/withease/locales;withease/locales"
+          --add-data "src/withease/assets;withease/assets"
+          --hidden-import pynput.keyboard._win32
+          --hidden-import pynput.mouse._win32
+          --collect-all sounddevice --collect-all requests
+          --hidden-import wave --hidden-import audioop
+          --hidden-import base64 --hidden-import random
+          --noupx src/withease/__main__.py
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path dist/WithEase -DestinationPath "WithEase-${{ env.REL_TAG }}-win64.zip"
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.REL_TAG }}
+          files: WithEase-${{ env.REL_TAG }}-win64.zip
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REL_TAG }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2 libxcb-cursor0
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller sounddevice requests
+      - name: Build
+        run: >
+          pyinstaller --noconfirm --clean --windowed --name WithEase
+          --paths src
+          --add-data "src/withease/locales:withease/locales"
+          --add-data "src/withease/assets:withease/assets"
+          --hidden-import pynput.keyboard._xorg
+          --hidden-import pynput.mouse._xorg
+          --collect-all sounddevice --collect-all requests
+          --hidden-import wave --hidden-import audioop
+          --hidden-import base64 --hidden-import random
+          --noupx src/withease/__main__.py
+      - name: Package
+        run: tar -czf "WithEase-${{ env.REL_TAG }}-linux64.tar.gz" -C dist WithEase
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.REL_TAG }}
+          files: WithEase-${{ env.REL_TAG }}-linux64.tar.gz
