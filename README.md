@@ -54,7 +54,8 @@ WithEase runs quietly in the system tray and helps users with limited motor cont
 - **Drink break** – reminds you to drink at a configurable interval, as a
   discreet pop-up or a full-screen rain overlay
 - **Dictation** – speech to text via Whisper (cloud: OpenRouter / OpenAI /
-  Groq, or local on your PC in the source version)
+  Groq, or local on your PC in the source version). 🧪 *Still in an early
+  beta – it may not work flawlessly right away.*
 
 ### General
 - Emergency stop: one key disables everything instantly (also in tray menu)

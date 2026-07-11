@@ -80,6 +80,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "name": "Diktieren",
         "enabled": "Diktiermodul aktivieren",
         "description.long": "Hotkey drücken, sprechen, fertig – der erkannte Text wird in die aktive Anwendung eingefügt. Hinweis: Beim Cloud-Backend wird die Aufnahme an den gewählten Anbieter geschickt; beim lokalen Backend bleibt alles auf diesem PC.",
+        "beta_note": "🧪 Dieses Modul steckt noch früh in der Beta-Phase – es funktioniert nicht unbedingt auf Anhieb reibungslos. Über „Feedback senden“ (Über-Seite) freue ich mich über Rückmeldungen.",
         "deps_missing": "⚠ Für dieses Add-on fehlen Komponenten. Zum Aktivieren im Programmordner ausführen:  pip install sounddevice requests  (für lokale Erkennung zusätzlich: faster-whisper)",
         "action": "Diktat starten/stoppen",
         "hotkey": "Diktier-Taste",
@@ -135,6 +136,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "name": "Dictation",
         "enabled": "Enable dictation module",
         "description.long": "Press the hotkey, speak, done – the recognised text is inserted into the active application. Note: with the cloud backend the recording is sent to the chosen provider; with the local backend everything stays on this PC.",
+        "beta_note": "🧪 This module is still in an early beta – it may not work flawlessly right away. Feedback via “Send feedback” (About page) is very welcome.",
         "deps_missing": "⚠ This add-on is missing components. To enable it, run in the program folder:  pip install sounddevice requests  (for local recognition also: faster-whisper)",
         "action": "Start/stop dictation",
         "hotkey": "Dictation key",
@@ -578,6 +580,11 @@ class DictationSettingsWidget(QWidget):
         desc.setStyleSheet(_hint_style())
         desc.setWordWrap(True)
         layout.addWidget(desc)
+
+        beta = QLabel(_t("beta_note"))
+        beta.setStyleSheet(_warn_style())
+        beta.setWordWrap(True)
+        layout.addWidget(beta)
 
         if not audio_available():
             missing = QLabel(_t("deps_missing"))
