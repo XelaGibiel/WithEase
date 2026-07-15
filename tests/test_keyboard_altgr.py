@@ -67,3 +67,38 @@ def test_real_ctrl_tap_still_latches():
     module, _ = _feed(_STICKY, [(_LCTRL, _OTHER_SCAN, True),
                                 (_LCTRL, _OTHER_SCAN, False)])
     assert "ctrl" in _latched(module)
+
+
+def test_real_ctrl_tap_after_altgr_still_latches():
+    # AltGr must not leave a stale "ctrl used" flag that blocks a later real
+    # Ctrl tap from latching.
+    events = _altgr_tap(_GOOD_SCAN) + [(_LCTRL, _OTHER_SCAN, True),
+                                       (_LCTRL, _OTHER_SCAN, False)]
+    module, _ = _feed({**_STICKY, "sticky_alt": False}, events)
+    assert "ctrl" in _latched(module)
+
+
+# --- Sticky AltGr must actually work (tap AltGr, then the key gets AltGr) -----
+_STICKY_ALTGR = {"sticky_enabled": True, "sticky_auto_release": True,
+                 "sticky_altgr": True}
+
+
+def test_sticky_altgr_holds_ctrl_while_latched_other_scancode():
+    # Tapping AltGr latches it and must KEEP its synthetic Ctrl held (release
+    # suppressed) so the next key still produces '@', even when the scan code
+    # is not the canonical 0x21D.
+    module, suppresses = _feed(_STICKY_ALTGR, _altgr_tap(_OTHER_SCAN))
+    assert "altgr" in _latched(module)
+    assert suppresses[-1] is True   # the left-ctrl release is swallowed (held)
+
+
+def test_sticky_altgr_releases_after_next_key():
+    events = _altgr_tap(_OTHER_SCAN) + [(_Q, 0, True), (_Q, 0, False)]
+    module = kbmod.KeyboardModule()
+    module._settings = _STICKY_ALTGR
+    released = []
+    with patch.object(kbmod, "inject_modifier_release", released.append):
+        for vk, scan, is_press in events:
+            module._on_key_event(vk, scan, False, False, is_press)
+    assert "altgr" in released          # AltGr released after the key
+    assert _latched(module) == set()    # nothing left latched

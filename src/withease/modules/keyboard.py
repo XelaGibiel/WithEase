@@ -32,6 +32,7 @@ from withease.core.keyboard_hook import (
 _MODIFIERS = ("shift", "ctrl", "alt", "win", "altgr")
 
 _VK_RMENU = 0xA5  # right Alt = AltGr on layouts that have it (e.g. German)
+_LCTRL_VKS = (0x11, 0xA2)  # generic / left Ctrl – AltGr's synthetic partner
 
 
 class KeyboardModule(BaseModule):
@@ -56,8 +57,12 @@ class KeyboardModule(BaseModule):
         self._pending_release = False  # release latched mods after the current key-up
         # AltGr auto-detection: right-alt only counts as AltGr on layouts that
         # emit the synthetic left-ctrl (scan 0x21D) right before it.
-        self._altgr_lctrl_seen = False   # fake left-ctrl just arrived
+        self._altgr_lctrl_seen = False   # scan-detected fake left-ctrl just arrived
         self._right_alt_is_altgr = False # last right-alt press was AltGr
+        # True while AltGr's synthetic left-ctrl is held but was NOT recognised
+        # by its scan code (so its release must be handled like the AltGr ctrl,
+        # not a real Ctrl).
+        self._altgr_ctrl_down = False
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -110,32 +115,44 @@ class KeyboardModule(BaseModule):
         if injected:
             return False  # our own injected modifier releases
 
+        # --- AltGr's synthetic left-ctrl, recognised by its scan code (0x21D) ---
         if is_altgr_fake_lctrl(vk, scan):
-            # The synthetic left-ctrl that precedes AltGr.  Its presence is how
-            # we know right-alt is acting as AltGr on this layout.
             if is_press:
                 self._altgr_lctrl_seen = True
                 return False
             self._altgr_lctrl_seen = False
-            # While AltGr is latched we keep this left-ctrl held too.
+            self._altgr_ctrl_down = False
+            # Keep this left-ctrl held while AltGr is latched, release it (pass
+            # through) otherwise.
             return bool(self._sticky_state.get("altgr"))
 
-        # Right-alt → AltGr only if the synthetic left-ctrl preceded it.  We
-        # detect that either by its scan code (0x21D) OR, robustly, by a
-        # left-ctrl being physically held right before this right-alt.  Some
-        # keyboards/drivers report a different scan code for AltGr's fake ctrl,
-        # which used to slip through as a real Ctrl and – with Sticky Keys on –
-        # latched a stuck Ctrl+Alt until the app was closed.
+        # --- AltGr's synthetic left-ctrl, NOT recognised by scan code ---
+        # Some keyboards/drivers report a different scan code, so the fake ctrl
+        # slips through as a real Ctrl.  While AltGr is engaged we tracked it;
+        # handle its RELEASE like the scan-detected one (held while AltGr is
+        # latched, released otherwise) so it never lingers or gets latched.
+        if self._altgr_ctrl_down and not is_press and vk in _LCTRL_VKS:
+            self._altgr_ctrl_down = False
+            with self._lock:
+                self._mod_down["ctrl"] = False
+                self._mod_used["ctrl"] = False
+            return bool(self._sticky_state.get("altgr"))
+
+        # --- Right-alt = AltGr if the synthetic left-ctrl preceded it ---
+        # Detected by scan code OR, robustly, by a left-ctrl held right before.
         if vk == _VK_RMENU:
             if is_press:
-                self._right_alt_is_altgr = (
-                    self._altgr_lctrl_seen or self._mod_down.get("ctrl", False))
+                scan_altgr = self._altgr_lctrl_seen
                 self._altgr_lctrl_seen = False
-                if self._right_alt_is_altgr:
-                    # That left-ctrl is AltGr's synthetic partner, not a real
-                    # Ctrl tap – make sure Sticky Keys never latches it.
+                self._right_alt_is_altgr = (
+                    scan_altgr or self._mod_down.get("ctrl", False))
+                if self._right_alt_is_altgr and self._mod_down.get("ctrl"):
+                    # A real-looking left-ctrl is down but it is AltGr's partner:
+                    # mark it used so Sticky Keys never latches it, and take over
+                    # its release below (scan detection missed it).
                     with self._lock:
                         self._mod_used["ctrl"] = True
+                    self._altgr_ctrl_down = not scan_altgr
             mod = "altgr" if self._right_alt_is_altgr else "alt"
         else:
             mod = MOD_VK.get(vk)
