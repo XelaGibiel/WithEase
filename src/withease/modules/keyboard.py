@@ -120,12 +120,22 @@ class KeyboardModule(BaseModule):
             # While AltGr is latched we keep this left-ctrl held too.
             return bool(self._sticky_state.get("altgr"))
 
-        # Right-alt → AltGr only if the fake left-ctrl preceded it (auto-detect
-        # per layout); otherwise it's a plain right-alt.
+        # Right-alt → AltGr only if the synthetic left-ctrl preceded it.  We
+        # detect that either by its scan code (0x21D) OR, robustly, by a
+        # left-ctrl being physically held right before this right-alt.  Some
+        # keyboards/drivers report a different scan code for AltGr's fake ctrl,
+        # which used to slip through as a real Ctrl and – with Sticky Keys on –
+        # latched a stuck Ctrl+Alt until the app was closed.
         if vk == _VK_RMENU:
             if is_press:
-                self._right_alt_is_altgr = self._altgr_lctrl_seen
+                self._right_alt_is_altgr = (
+                    self._altgr_lctrl_seen or self._mod_down.get("ctrl", False))
                 self._altgr_lctrl_seen = False
+                if self._right_alt_is_altgr:
+                    # That left-ctrl is AltGr's synthetic partner, not a real
+                    # Ctrl tap – make sure Sticky Keys never latches it.
+                    with self._lock:
+                        self._mod_used["ctrl"] = True
             mod = "altgr" if self._right_alt_is_altgr else "alt"
         else:
             mod = MOD_VK.get(vk)
