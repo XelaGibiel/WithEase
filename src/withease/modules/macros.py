@@ -31,7 +31,9 @@ Capture listener (one-shot, suppress=True)
 from __future__ import annotations
 
 import subprocess
+import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -57,6 +59,85 @@ try:
     PYNPUT_AVAILABLE = True
 except ImportError:
     PYNPUT_AVAILABLE = False
+
+
+# ---------------------------------------------------------------------------
+# Windows clipboard helpers – used to insert macro text via Ctrl+V instead of
+# per-character typing.  pynput types non-VK characters (e.g. capitals, umlauts)
+# as KEYEVENTF_UNICODE "packets", which a low-level keyboard hook (ours) can
+# corrupt or drop – e.g. "Alexander" came out as "Llexander".  Pasting sends
+# only ordinary Ctrl+V keystrokes, so nothing gets mangled.
+# ---------------------------------------------------------------------------
+_CF_UNICODETEXT = 13
+_GMEM_MOVEABLE = 0x0002
+
+
+def _clipboard_apis():
+    """user32/kernel32 with the argtypes/restypes needed for 64-bit handles.
+
+    Without these, ctypes defaults to 32-bit ints and truncates HANDLE/pointer
+    values on 64-bit Windows – which crashes the process."""
+    import ctypes
+    from ctypes import wintypes
+    u, k = ctypes.windll.user32, ctypes.windll.kernel32
+    u.OpenClipboard.argtypes = [wintypes.HWND]
+    u.OpenClipboard.restype = wintypes.BOOL
+    u.CloseClipboard.restype = wintypes.BOOL
+    u.EmptyClipboard.restype = wintypes.BOOL
+    u.GetClipboardData.argtypes = [wintypes.UINT]
+    u.GetClipboardData.restype = wintypes.HANDLE
+    u.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    u.SetClipboardData.restype = wintypes.HANDLE
+    k.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    k.GlobalAlloc.restype = wintypes.HGLOBAL
+    k.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    k.GlobalLock.restype = wintypes.LPVOID
+    k.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    k.GlobalFree.argtypes = [wintypes.HGLOBAL]
+    return ctypes, u, k
+
+
+def _clipboard_get_text() -> str | None:
+    ctypes, u, k = _clipboard_apis()
+    if not u.OpenClipboard(None):
+        return None
+    try:
+        handle = u.GetClipboardData(_CF_UNICODETEXT)
+        if not handle:
+            return None
+        ptr = k.GlobalLock(handle)
+        if not ptr:
+            return None
+        try:
+            return ctypes.wstring_at(ptr)
+        finally:
+            k.GlobalUnlock(handle)
+    finally:
+        u.CloseClipboard()
+
+
+def _clipboard_set_text(text: str) -> bool:
+    ctypes, u, k = _clipboard_apis()
+    data = text.encode("utf-16-le") + b"\x00\x00"
+    if not u.OpenClipboard(None):
+        return False
+    try:
+        u.EmptyClipboard()
+        handle = k.GlobalAlloc(_GMEM_MOVEABLE, len(data))
+        if not handle:
+            return False
+        ptr = k.GlobalLock(handle)
+        if not ptr:
+            k.GlobalFree(handle)
+            return False
+        ctypes.memmove(ptr, data, len(data))
+        k.GlobalUnlock(handle)
+        if not u.SetClipboardData(_CF_UNICODETEXT, handle):
+            k.GlobalFree(handle)
+            return False
+        return True
+    finally:
+        u.CloseClipboard()
 
 
 MacroType = Literal["text", "keys", "mouse", "app"]
@@ -262,9 +343,39 @@ class MacrosModule(BaseModule):
             bus.publish("macros.error", macro_id=macro.id, error=str(e))
 
     def _type_text(self, text: str) -> None:
-        if not PYNPUT_AVAILABLE or not text:
+        if not text:
             return
-        KeyController().type(text)
+        # Preferred: paste via the clipboard (only sends Ctrl+V, so the text is
+        # never mangled by the low-level hook).  Falls back to direct typing.
+        if self._paste_text(text):
+            return
+        if PYNPUT_AVAILABLE:
+            KeyController().type(text)
+
+    def _paste_text(self, text: str) -> bool:
+        """Insert text by putting it on the clipboard and sending Ctrl+V.
+
+        Restores the previous clipboard afterwards.  Returns False (so the
+        caller can fall back to typing) if anything goes wrong or we're not on
+        Windows."""
+        if sys.platform != "win32" or not PYNPUT_AVAILABLE:
+            return False
+        try:
+            previous = _clipboard_get_text()
+            if not _clipboard_set_text(text):
+                return False
+            time.sleep(0.03)  # let the clipboard settle before pasting
+            ctrl = KeyController()
+            ctrl.press(pynput_keyboard.Key.ctrl)
+            ctrl.press("v")
+            ctrl.release("v")
+            ctrl.release(pynput_keyboard.Key.ctrl)
+            if previous is not None:
+                time.sleep(0.25)  # let the paste complete before restoring
+                _clipboard_set_text(previous)
+            return True
+        except Exception:
+            return False
 
     def _send_keys(self, combination: str) -> None:
         if not PYNPUT_AVAILABLE or not combination:
