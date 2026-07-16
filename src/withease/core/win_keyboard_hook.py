@@ -130,13 +130,23 @@ MOD_RELEASE_VKS: dict[str, list[int]] = {
 }
 
 _KEYEVENTF_KEYUP = 0x02
+_KEYEVENTF_EXTENDEDKEY = 0x01
+
+# Right Ctrl, right Alt (AltGr) and the Windows keys are "extended" keys.  A
+# key-up sent WITHOUT the extended flag targets the LEFT-hand key instead, so
+# the physical right/Win key stays stuck at the OS level (right Ctrl / AltGr
+# "hanging").  These VKs therefore must carry KEYEVENTF_EXTENDEDKEY on release.
+_EXTENDED_RELEASE_VKS = frozenset({0xA3, 0xA5, 0x5B, 0x5C})
 
 
 def inject_modifier_release(name: str) -> None:
     """Send key-up events for every physical key of the given modifier."""
     for vk in MOD_RELEASE_VKS.get(name, []):
+        flags = _KEYEVENTF_KEYUP
+        if vk in _EXTENDED_RELEASE_VKS:
+            flags |= _KEYEVENTF_EXTENDEDKEY
         try:
-            ctypes.windll.user32.keybd_event(vk, 0, _KEYEVENTF_KEYUP, 0)
+            ctypes.windll.user32.keybd_event(vk, 0, flags, 0)
         except Exception:
             pass
 
