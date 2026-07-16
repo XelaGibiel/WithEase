@@ -11,6 +11,8 @@ Features:
 """
 from __future__ import annotations
 
+import logging
+import os
 import threading
 import time
 from typing import Any
@@ -30,6 +32,10 @@ from withease.core.keyboard_hook import (
 )
 
 _MODIFIERS = ("shift", "ctrl", "alt", "win", "altgr")
+
+# Opt-in raw key diagnostics: set WITHEASE_DEBUG_KEYS=1 to log every key event's
+# vk / scan code / injected+extended flags to withease.log.  Off by default.
+_DEBUG_KEYS = bool(os.environ.get("WITHEASE_DEBUG_KEYS"))
 
 _VK_RMENU = 0xA5  # right Alt = AltGr on layouts that have it (e.g. German)
 _LCTRL_VKS = (0x11, 0xA2)  # generic / left Ctrl – AltGr's synthetic partner
@@ -63,6 +69,11 @@ class KeyboardModule(BaseModule):
         # by its scan code (so its release must be handled like the AltGr ctrl,
         # not a real Ctrl).
         self._altgr_ctrl_down = False
+        # Set when we swallowed AltGr's ctrl-up expecting a latch, but the
+        # right-alt release hasn't confirmed the latch yet (the synthetic ctrl
+        # is often released BEFORE the right-alt).  If the latch then fails, the
+        # held ctrl must be released so it can never get stuck.
+        self._altgr_ctrl_pending_release = False
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -112,6 +123,12 @@ class KeyboardModule(BaseModule):
 
         Runs in the hook thread; must be quick and never block.
         """
+        if _DEBUG_KEYS:
+            logging.getLogger(__name__).info(
+                "KEYDBG vk=%#04x scan=%#06x inj=%d ext=%d %s",
+                vk, scan, int(injected), int(extended),
+                "DOWN" if is_press else "UP")
+
         if injected:
             return False  # our own injected modifier releases
 
@@ -122,21 +139,20 @@ class KeyboardModule(BaseModule):
                 return False
             self._altgr_lctrl_seen = False
             self._altgr_ctrl_down = False
-            # Keep this left-ctrl held while AltGr is latched, release it (pass
-            # through) otherwise.
-            return bool(self._sticky_state.get("altgr"))
+            # Keep this left-ctrl held while AltGr is (or is about to be) latched.
+            return self._altgr_ctrl_stays_held()
 
         # --- AltGr's synthetic left-ctrl, NOT recognised by scan code ---
         # Some keyboards/drivers report a different scan code, so the fake ctrl
         # slips through as a real Ctrl.  While AltGr is engaged we tracked it;
-        # handle its RELEASE like the scan-detected one (held while AltGr is
-        # latched, released otherwise) so it never lingers or gets latched.
+        # handle its RELEASE like the scan-detected one so it never lingers or
+        # gets latched.
         if self._altgr_ctrl_down and not is_press and vk in _LCTRL_VKS:
             self._altgr_ctrl_down = False
             with self._lock:
                 self._mod_down["ctrl"] = False
                 self._mod_used["ctrl"] = False
-            return bool(self._sticky_state.get("altgr"))
+            return self._altgr_ctrl_stays_held()
 
         # --- Right-alt = AltGr if the synthetic left-ctrl preceded it ---
         # Detected by scan code OR, robustly, by a left-ctrl held right before.
@@ -159,7 +175,35 @@ class KeyboardModule(BaseModule):
 
         if is_press:
             return self._handle_press(vk, mod)
-        return self._handle_release(vk, mod)
+
+        result = self._handle_release(vk, mod)
+        # Reconcile AltGr's speculatively-held ctrl once the right-alt release
+        # is in: if the tap latched, the latch now owns the held ctrl; if it did
+        # NOT latch, release the ctrl we left held so it can never get stuck.
+        if mod == "altgr" and vk == _VK_RMENU and self._altgr_ctrl_pending_release:
+            self._altgr_ctrl_pending_release = False
+            if not self._sticky_state.get("altgr"):
+                self._release_modifier("altgr")  # releases right-alt + its ctrl
+        return result
+
+    def _altgr_ctrl_stays_held(self) -> bool:
+        """Whether AltGr's synthetic left-ctrl release must be swallowed.
+
+        The synthetic ctrl is often released BEFORE the right-alt, i.e. before
+        Sticky Keys has latched AltGr.  So we keep the ctrl held when AltGr is
+        already latched OR when its right-alt is still down and the tap is
+        heading for a latch (sticky AltGr on, not yet used with another key).
+        """
+        with self._lock:
+            if self._sticky_state.get("altgr"):
+                return True
+            sticky_on = (self._settings.get("sticky_enabled", True)
+                         and bool(self._settings.get("sticky_altgr")))
+            heading_for_latch = (sticky_on and self._mod_down.get("altgr", False)
+                                 and not self._mod_used.get("altgr", False))
+            if heading_for_latch:
+                self._altgr_ctrl_pending_release = True
+            return heading_for_latch
 
     def _handle_press(self, vk: int, mod: str | None) -> bool:
         # Sticky Keys ---------------------------------------------------
@@ -270,6 +314,7 @@ class KeyboardModule(BaseModule):
             active = {k for k, v in self._sticky_state.items() if v}
             self._sticky_state = {k: False for k in self._sticky_state}
             self._mod_used = {k: False for k in self._mod_used}
+            self._altgr_ctrl_pending_release = False
         for name in active:
             self._release_modifier(name)
         if active:
