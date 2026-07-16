@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -623,16 +624,17 @@ class _MacroDialog(QDialog):
         # Payload area – stacked per type
         self._stack = QStackedWidget()
 
-        # Page 0: text – plain text input
+        # Page 0: text – multi-line block (e.g. an e-mail boilerplate)
+        from withease.gui.ui_utils import em
         text_page = QWidget()
         tl = QVBoxLayout(text_page)
         tl.setContentsMargins(0, 0, 0, 0)
         tl.setSpacing(4)
         tl.addWidget(QLabel(tr("module.macros.dialog.text")))
-        self._text_edit = QLineEdit()
+        self._text_edit = QPlainTextEdit()
         self._text_edit.setPlaceholderText(tr("module.macros.dialog.text.placeholder"))
+        self._text_edit.setMinimumHeight(max(120, em(7)))
         tl.addWidget(self._text_edit)
-        tl.addStretch()
         self._stack.addWidget(text_page)
 
         # Page 1: keys – use _KeyRecorder for reliable input
@@ -787,7 +789,7 @@ class _MacroDialog(QDialog):
         self._type_box.setCurrentIndex(idx)
         self._stack.setCurrentIndex(idx)
         if macro.type == "text":
-            self._text_edit.setText(macro.payload.get("text", ""))
+            self._text_edit.setPlainText(macro.payload.get("text", ""))
         elif macro.type == "keys":
             self._keys_rec.blockSignals(True)
             self._keys_rec.set_key(macro.payload.get("combination", ""))
@@ -802,7 +804,7 @@ class _MacroDialog(QDialog):
     def result_data(self) -> dict[str, Any]:
         t = self._type_box.currentData()
         if t == "text":
-            payload: dict[str, Any] = {"text": self._text_edit.text()}
+            payload: dict[str, Any] = {"text": self._text_edit.toPlainText()}
         elif t == "keys":
             payload = {"combination": self._keys_rec.get_key()}
         elif t == "app":
