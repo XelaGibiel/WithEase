@@ -5,6 +5,7 @@
 
 # Binary assets – never apply line-ending conversion (it would corrupt them).
 *.pdf binary
+*.docx binary
 *.png binary
 *.ico binary
 *.zip binary
