@@ -2,3 +2,10 @@
 # shebang: "bad interpreter"). Windows .bat files keep CRLF.
 *.sh text eol=lf
 *.bat text eol=crlf
+
+# Binary assets – never apply line-ending conversion (it would corrupt them).
+*.pdf binary
+*.png binary
+*.ico binary
+*.zip binary
+*.tar.gz binary
