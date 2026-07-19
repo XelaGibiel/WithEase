@@ -11,6 +11,8 @@ Symbols in use:
 from __future__ import annotations
 
 import ctypes
+import logging
+import os
 from ctypes import wintypes
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
@@ -21,6 +23,11 @@ from withease.core.event_bus import bus
 
 _SIZE = 28
 _GAP = 2
+
+# Opt-in overlay diagnostics: set WITHEASE_DEBUG_OVERLAY=1 to log why a cursor
+# symbol (e.g. the centering target) does or does not appear.  Off by default.
+_DEBUG_OVERLAY = bool(os.environ.get("WITHEASE_DEBUG_OVERLAY"))
+_log = logging.getLogger(__name__)
 
 
 def _cursor_offset() -> int:
@@ -48,6 +55,14 @@ def foreground_is_fullscreen() -> bool:
         u = ctypes.windll.user32
         hwnd = u.GetForegroundWindow()
         if not hwnd or hwnd in (u.GetDesktopWindow(), u.GetShellWindow()):
+            return False
+        # A window with a title bar (WS_CAPTION) is a normal/maximized window,
+        # never a fullscreen video or game – so the cursor symbols must stay
+        # visible over it.  Real fullscreen apps drop the caption (borderless).
+        _GWL_STYLE = -16
+        _WS_CAPTION = 0x00C00000
+        style = u.GetWindowLongW(hwnd, _GWL_STYLE) & 0xFFFFFFFF
+        if style & _WS_CAPTION == _WS_CAPTION:
             return False
         rect = wintypes.RECT()
         u.GetWindowRect(hwnd, ctypes.byref(rect))
@@ -101,6 +116,10 @@ class IndicatorCoordinator:
         # fullscreen window is in front (video/game) – they keep their logical
         # state and reappear when the fullscreen window is left.
         fullscreen = foreground_is_fullscreen()
+        if _DEBUG_OVERLAY and fullscreen != getattr(self, "_last_fullscreen", None):
+            self._last_fullscreen = fullscreen
+            _log.info("coordinator: fullscreen-in-front = %s (symbols %s)",
+                      fullscreen, "hidden" if fullscreen else "shown")
         for ind in self._indicators:
             ind.set_suppressed(fullscreen)
         for w in self._suppressibles:
@@ -222,8 +241,25 @@ class CursorIndicator(QWidget):
     def _apply(self) -> None:
         """Actual visibility = feature wants it AND user allows it AND not
         currently suppressed by a fullscreen window."""
-        self.setVisible(self._logical_visible and self._show_enabled
-                        and not self._suppressed)
+        should = (self._logical_visible and self._show_enabled
+                  and not self._suppressed)
+        self.setVisible(should)
+        if should:
+            # Place at the cursor immediately (don't wait for the coordinator's
+            # next 16 ms tick) and force on top.  This covers the case where the
+            # window was prewarmed off-screen (at -32000) or is hidden behind
+            # another top-most window – the classic "target symbol never
+            # appears" problem after a cold start / display change.
+            offset = _cursor_offset()
+            pos = QCursor.pos()
+            self.move(pos.x() + offset, pos.y() + offset)
+            self.raise_()
+        if _DEBUG_OVERLAY:
+            _log.info("indicator %r: logical=%s enabled=%s suppressed=%s "
+                      "-> visible=%s at %s",
+                      self._symbol, self._logical_visible, self._show_enabled,
+                      self._suppressed, self.isVisible(),
+                      (self.x(), self.y()))
 
     def _guarded_show(self) -> None:
         """Mark the symbol as logically shown (respects the gates in _apply)."""

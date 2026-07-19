@@ -13,6 +13,8 @@ Features:
 from __future__ import annotations
 
 import ctypes
+import logging
+import os
 import sys
 import threading
 import time
@@ -37,6 +39,11 @@ try:
     PYNPUT_AVAILABLE = True
 except ImportError:
     PYNPUT_AVAILABLE = False
+
+# Opt-in diagnostics for the "centering target doesn't appear" issue: set
+# WITHEASE_DEBUG_OVERLAY=1 to log the centering countdown / snap.  Off by default.
+_DEBUG_OVERLAY = bool(os.environ.get("WITHEASE_DEBUG_OVERLAY"))
+_log = logging.getLogger(__name__)
 
 
 def _screen_size() -> tuple[int, int]:
@@ -394,6 +401,9 @@ class MouseModule(BaseModule):
             # Idle long enough → countdown, then centre (abort on any input).
             countdown = int(self._settings.get("centering_countdown", 3))
             if countdown > 0:
+                if _DEBUG_OVERLAY:
+                    _log.info("centering: idle reached -> countdown %ss "
+                              "(show target)", countdown)
                 bus.publish("mouse.centering_countdown", seconds=countdown)
                 end = time.monotonic() + countdown
                 aborted = False
@@ -413,6 +423,8 @@ class MouseModule(BaseModule):
 
     def _center_cursor(self) -> None:
         if not PYNPUT_AVAILABLE:
+            if _DEBUG_OVERLAY:
+                _log.warning("centering: pynput not available – cannot centre")
             return
         try:
             cx, cy = _screen_size()
@@ -424,9 +436,12 @@ class MouseModule(BaseModule):
             # loop keeps the target visible until the cursor leaves this point.
             self._center_pos = self._cursor_pos()
             self._symbol_shown = True
+            if _DEBUG_OVERLAY:
+                _log.info("centering: centred at %s (target stays)",
+                          (cx, cy))
             bus.publish("mouse.centered")
         except Exception:
-            pass
+            _log.exception("centering: _center_cursor failed")
 
     # ------------------------------------------------------------------
     # Precision mode
