@@ -250,3 +250,134 @@ class CursorHighlightOverlay(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(ar, ag, ab, alpha))
         painter.drawPolygon(QPolygonF([tip, left, notch, right]))
+
+
+def _apply_click_through(widget: QWidget) -> None:
+    """Make a window transparent to mouse input (WS_EX_TRANSPARENT|LAYERED)."""
+    if sys.platform != "win32":
+        return
+    try:
+        GWL_EXSTYLE = -20
+        WS_EX_LAYERED = 0x00080000
+        WS_EX_TRANSPARENT = 0x00000020
+        hwnd = int(widget.winId())
+        user32 = ctypes.windll.user32
+        ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE,
+                              ex | WS_EX_LAYERED | WS_EX_TRANSPARENT)
+    except Exception:
+        pass
+
+
+class _ArrowBridge(QObject):
+    config = Signal(bool, str, int, object)   # enabled, corner, size, color
+
+
+class DirectionArrowOverlay(QWidget):
+    """A permanent arrow anchored in a screen corner that always points at the
+    cursor.
+
+    Unlike the pulsing highlight, this stays visible while enabled.  The corner
+    (top-left / top-right / bottom-left / bottom-right) and the size are
+    configurable.  The overlay is full-screen, always-on-top and click-through.
+    """
+
+    _CORNERS = ("top-left", "top-right", "bottom-left", "bottom-right")
+
+    def __init__(self) -> None:
+        super().__init__(parent=None)
+        self._enabled = False
+        self._corner = "bottom-right"
+        self._size = 48
+        self._color = _DEFAULT_COLOR
+        self._last_cursor = (-1, -1)
+
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
+        # Follow the cursor so the arrow keeps pointing at it (~30 fps).
+        self._timer = QTimer(self)
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self._on_tick)
+
+        self._bridge = _ArrowBridge()
+        self._bridge.config.connect(self._apply_config)
+        bus.subscribe("mouse.direction_arrow", self._on_config)
+
+    # ------------------------------------------------------------------
+
+    def _on_config(self, enabled: bool = False, corner: str = "bottom-right",
+                   size: int = 48, color: object = None, **_: object) -> None:
+        self._bridge.config.emit(bool(enabled), str(corner), int(size), color)
+
+    def _apply_config(self, enabled: bool, corner: str, size: int,
+                      color: object) -> None:
+        self._enabled = enabled
+        self._corner = corner if corner in self._CORNERS else "bottom-right"
+        self._size = size if size and size > 0 else 48
+        if isinstance(color, (tuple, list)) and len(color) == 3:
+            self._color = tuple(int(c) for c in color)
+        else:
+            self._color = _DEFAULT_COLOR
+
+        if not enabled:
+            self._timer.stop()
+            self.hide()
+            return
+
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            self.setGeometry(screen.geometry())
+        if not self.isVisible():
+            self.show()
+        _apply_click_through(self)
+        self.raise_()
+        if not self._timer.isActive():
+            self._timer.start()
+        self.update()
+
+    def _on_tick(self) -> None:
+        pos = QCursor.pos()
+        if (pos.x(), pos.y()) != self._last_cursor:
+            self._last_cursor = (pos.x(), pos.y())
+            self.update()
+
+    def paintEvent(self, _event: object) -> None:  # type: ignore[override]
+        if not self._enabled:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        margin = max(30.0, self._size * 0.95)
+        w, h = self.width(), self.height()
+        ax = margin if "left" in self._corner else w - margin
+        ay = margin if "top" in self._corner else h - margin
+
+        pos = QCursor.pos()
+        dx = (pos.x() - self.x()) - ax
+        dy = (pos.y() - self.y()) - ay
+        if math.hypot(dx, dy) < 1:
+            painter.end()
+            return
+        angle = math.degrees(math.atan2(dy, dx))
+
+        r, g, b = self._color
+        length = float(self._size)
+        half_w = self._size * 0.72 / 2
+        tip = QPointF(length * 0.55, 0)
+        base_left = QPointF(-length * 0.45, half_w)
+        notch = QPointF(-length * 0.18, 0)
+        base_right = QPointF(-length * 0.45, -half_w)
+
+        painter.translate(ax, ay)
+        painter.rotate(angle)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(r, g, b, 235))
+        painter.drawPolygon(QPolygonF([tip, base_left, notch, base_right]))
+        painter.end()

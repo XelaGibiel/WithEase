@@ -139,6 +139,7 @@ class MouseModule(BaseModule):
         self._kb_subscribed = True
 
         self._start_centering_loop()
+        self._apply_direction_arrow()
         bus.publish("module.started", module_id=self.MODULE_ID)
 
     def stop(self) -> None:
@@ -165,6 +166,9 @@ class MouseModule(BaseModule):
         if self._settings.get("_click_lock_active", False):
             self._toggle_click_lock()
         self._settings["_click_lock_active"] = False
+
+        # Hide the permanent direction arrow (self.enabled is already False).
+        self._apply_direction_arrow()
 
         bus.publish("module.stopped", module_id=self.MODULE_ID)
 
@@ -203,6 +207,7 @@ class MouseModule(BaseModule):
                 if zones_on and zone_num <= total else "",
             )
         self._publish_indicator_config()
+        self._apply_direction_arrow()
         bus.publish("module.settings_changed", module_id=self.MODULE_ID)
 
     def _publish_indicator_config(self) -> None:
@@ -214,6 +219,20 @@ class MouseModule(BaseModule):
             precision=bool(self._settings.get("precision_show_indicator", True)),
             click_lock=bool(
                 self._settings.get("click_lock_show_indicator", True)),
+        )
+
+    def _apply_direction_arrow(self) -> None:
+        """Show/hide the permanent direction arrow (corner overlay pointing at
+        the cursor).  Active only while the module is enabled and the option is
+        switched on."""
+        enabled = self.enabled and bool(
+            self._settings.get("highlight_arrow_persistent", False))
+        bus.publish(
+            "mouse.direction_arrow",
+            enabled=enabled,
+            corner=self._settings.get("highlight_arrow_corner", "bottom-right"),
+            size=int(self._settings.get("highlight_arrow_size", 48)),
+            color=self._settings.get("highlight_color", [255, 140, 0]),
         )
 
     def load_settings(self, settings: dict[str, Any]) -> None:

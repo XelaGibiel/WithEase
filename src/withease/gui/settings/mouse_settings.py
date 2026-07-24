@@ -310,6 +310,39 @@ class MouseSettingsWidget(QWidget):
         highlight_form.addRow(self._arrow_thickness_row_label,
                               self._highlight_arrow_thickness)
 
+        # Permanent direction arrow (corner overlay pointing at the cursor)
+        self._arrow_persistent_cb = QCheckBox(
+            tr("module.mouse.highlight.arrow_persistent"))
+        self._arrow_persistent_cb.setChecked(
+            bool(self._settings.get("highlight_arrow_persistent", False)))
+        self._arrow_persistent_cb.toggled.connect(self._on_persistent_arrow_toggled)
+        highlight_form.addRow("", self._arrow_persistent_cb)
+
+        self._arrow_corner = QComboBox()
+        for value, key in (("top-left", "top_left"), ("top-right", "top_right"),
+                           ("bottom-left", "bottom_left"),
+                           ("bottom-right", "bottom_right")):
+            self._arrow_corner.addItem(
+                tr(f"module.mouse.highlight.corner.{key}"), value)
+        cur = self._settings.get("highlight_arrow_corner", "bottom-right")
+        idx = self._arrow_corner.findData(cur)
+        self._arrow_corner.setCurrentIndex(idx if idx >= 0 else 3)
+        self._arrow_corner.currentIndexChanged.connect(
+            lambda i: self._save("highlight_arrow_corner",
+                                 self._arrow_corner.itemData(i)))
+        self._arrow_corner_label = QLabel(tr("module.mouse.highlight.corner"))
+        highlight_form.addRow(self._arrow_corner_label, self._arrow_corner)
+
+        self._arrow_size = QSlider(Qt.Orientation.Horizontal)
+        self._arrow_size.setRange(20, 120)
+        self._arrow_size.setValue(int(self._settings.get("highlight_arrow_size", 48)))
+        self._arrow_size.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._arrow_size.setTickInterval(20)
+        self._arrow_size.valueChanged.connect(
+            lambda v: self._save("highlight_arrow_size", v))
+        self._arrow_size_label = QLabel(tr("module.mouse.highlight.arrow_size"))
+        highlight_form.addRow(self._arrow_size_label, self._arrow_size)
+
         # Preview + reset buttons
         btn_row = QVBoxLayout()
         self._highlight_preview_btn = QPushButton(
@@ -335,6 +368,8 @@ class MouseSettingsWidget(QWidget):
         # stray top-level windows (visible as flicker on rebuilds).
         self._on_rings_toggled(self._highlight_rings_cb.isChecked())
         self._on_arrow_toggled(self._highlight_arrow_cb.isChecked())
+        self._on_persistent_arrow_toggled(
+            self._arrow_persistent_cb.isChecked())
 
         # ── Keyboard as mouse buttons ────────────────────────────────
         self._kbclick_sec = CollapsibleSection(
@@ -473,6 +508,12 @@ class MouseSettingsWidget(QWidget):
         if not enabled and not self._highlight_rings_cb.isChecked():
             self._highlight_rings_cb.setChecked(True)
 
+    def _on_persistent_arrow_toggled(self, enabled: bool) -> None:
+        self._save("highlight_arrow_persistent", enabled)
+        # Corner + size only make sense when the permanent arrow is on.
+        self._highlight_form.setRowVisible(self._arrow_corner, enabled)
+        self._highlight_form.setRowVisible(self._arrow_size, enabled)
+
     def _preview_highlight(self) -> None:
         from withease.core.event_bus import bus
         bus.publish("mouse.highlight",
@@ -496,6 +537,8 @@ class MouseSettingsWidget(QWidget):
         self._highlight_duration.setValue(1.6)            # fires valueChanged → saves
         self._highlight_arrow_thickness.setValue(6)       # fires valueChanged → saves
         self._highlight_arrow_cb.setChecked(False)        # fires toggled → saves
+        self._arrow_corner.setCurrentIndex(3)             # bottom-right (default)
+        self._arrow_size.setValue(48)                     # default size
 
     def _on_module_toggled(self, enabled: bool) -> None:
         if enabled:
