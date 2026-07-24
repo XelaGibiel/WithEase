@@ -22,10 +22,16 @@ from __future__ import annotations
 
 import io
 import logging
+import os
+import sys
 import threading
 import time
 import wave
 from typing import Any
+
+# Allow importing this add-on's sibling files (commands_de, editor_actions,
+# dictation_window) both when loaded by WithEase and when run standalone.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PySide6.QtCore import QObject, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath
@@ -112,6 +118,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local.howto.text": "So installierst du die lokale Spracherkennung von Hand:\n\n1. Öffne die Eingabeaufforderung (Windows-Taste drücken, „cmd“ eintippen, Enter).\n2. Tippe ein:  pip install faster-whisper\n3. Drücke Enter und warte, bis die Installation fertig ist.\n4. Starte WithEase neu.\n\nTipp: Der Knopf „Automatisch installieren“ erledigt genau diese Schritte für dich.",
         "language": "Sprache",
         "lang.auto": "Automatisch erkennen",
+        "output": "Ausgabe",
+        "output.window": "Diktierfenster (mit Sprachbefehlen & Korrektur)",
+        "output.direct": "Direkt in die aktive Anwendung einfügen",
         "insert": "Text einfügen per",
         "insert.clipboard": "Zwischenablage + Strg+V (schnell)",
         "insert.type": "Tippen (Zeichen für Zeichen)",
@@ -168,6 +177,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local.howto.text": "How to install local speech recognition manually:\n\n1. Open the command prompt (press the Windows key, type \"cmd\", press Enter).\n2. Type:  pip install faster-whisper\n3. Press Enter and wait until the installation finishes.\n4. Restart WithEase.\n\nTip: the \"Install automatically\" button does exactly these steps for you.",
         "language": "Language",
         "lang.auto": "Detect automatically",
+        "output": "Output",
+        "output.window": "Dictation window (with voice commands & correction)",
+        "output.direct": "Insert directly into the active application",
         "insert": "Insert text via",
         "insert.clipboard": "Clipboard + Ctrl+V (fast)",
         "insert.type": "Typing (character by character)",
@@ -728,6 +740,15 @@ class DictationSettingsWidget(QWidget):
             lambda i: self._save("language", self._lang.itemData(i)))
         form.addRow(_t("language"), self._lang)
 
+        self._output_mode = QComboBox()
+        self._output_mode.addItem(_t("output.window"), "window")
+        self._output_mode.addItem(_t("output.direct"), "direct")
+        if self._settings.get("output_mode", "window") == "direct":
+            self._output_mode.setCurrentIndex(1)
+        self._output_mode.currentIndexChanged.connect(
+            lambda i: self._save("output_mode", self._output_mode.itemData(i)))
+        form.addRow(_t("output"), self._output_mode)
+
         self._insert = QComboBox()
         self._insert.addItem(_t("insert.clipboard"), "clipboard")
         self._insert.addItem(_t("insert.type"), "type")
@@ -965,6 +986,8 @@ class DictationModule(BaseModule):
         self._local_model: Any = None   # lazily loaded faster-whisper model
         self._local_model_name = ""
         self._indicator: DictationIndicator | None = None
+        self._window: Any = None         # DictationWindow (created on the GUI thread)
+        self._target_hwnd: int | None = None   # app to paste into on "einfügen"
 
         # Listed in the actions table / favourites / conflict checks; the key
         # itself is handled by our own hook subscription below.
@@ -980,6 +1003,8 @@ class DictationModule(BaseModule):
 
     def start(self) -> None:
         self._ensure_indicator()
+        if self._window_mode():
+            self._ensure_window()   # created hidden on the GUI thread
         self._refresh_trigger()
         if not self._kb_subscribed:
             shared_keyboard_hook.subscribe(self._on_key_event)
@@ -992,6 +1017,8 @@ class DictationModule(BaseModule):
             self._kb_subscribed = False
         self._abort_recording()
         self._set_state("idle")
+        if self._window is not None:
+            self._window.hide()
         bus.publish("module.stopped", module_id=self.MODULE_ID)
 
     def get_settings_widget(self) -> QWidget:
@@ -1017,6 +1044,48 @@ class DictationModule(BaseModule):
         # overlay window.  It subscribes to dictation.state on creation.
         if self._indicator is None:
             self._indicator = DictationIndicator()
+
+    # ------------------------------------------------------------------
+    # Dictation window (output mode = "window")
+    # ------------------------------------------------------------------
+
+    def _window_mode(self) -> bool:
+        return self._settings.get("output_mode", "window") == "window"
+
+    def _ensure_window(self) -> Any:
+        """Create the dictation window (must run on the Qt main thread)."""
+        if self._window is None:
+            try:
+                from dictation_window import DictationWindow
+                self._window = DictationWindow(
+                    on_insert=self._insert_into_target,
+                    on_copy=self._set_clipboard,
+                    t=_t)
+            except Exception:
+                _log.exception("dictation window unavailable")
+        return self._window
+
+    def _capture_target(self) -> None:
+        """Remember the app that is focused right now (to paste into later).
+        Our window is show-without-activating, so it never steals this focus."""
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            self._target_hwnd = hwnd or None
+        except Exception:
+            self._target_hwnd = None
+
+    def _insert_into_target(self, text: str) -> None:
+        """Paste the finished text into the remembered target application."""
+        try:
+            if self._target_hwnd:
+                import ctypes
+                ctypes.windll.user32.SetForegroundWindow(self._target_hwnd)
+                time.sleep(0.05)
+        except Exception:
+            pass
+        self._paste_via_clipboard(
+            text, keep=bool(self._settings.get("keep_in_clipboard", False)))
 
     # ------------------------------------------------------------------
     # Hotkey handling (shared hook)
@@ -1064,17 +1133,25 @@ class DictationModule(BaseModule):
     def _set_state(self, state: str, detail: str = "") -> None:
         self._state = state
         bus.publish("dictation.state", state=state, detail=detail)
+        if self._window is not None:
+            self._window.set_state(state)
 
     def _error(self, detail: str) -> None:
         _log.error("dictation error: %s", detail)
         self._set_state("idle")
         bus.publish("dictation.state", state="error", detail=detail)
+        if self._window is not None:
+            self._window.set_state("error")
 
     # ------------------------------------------------------------------
     # Recording (sounddevice)
     # ------------------------------------------------------------------
 
     def _start_recording(self) -> None:
+        if self._window_mode():
+            self._capture_target()          # remember the app to paste into
+            if self._window is not None:
+                self._window.request_open()  # show the window (thread-safe)
         with self._state_lock:
             if self._state != "idle":
                 return
@@ -1157,7 +1234,11 @@ class DictationModule(BaseModule):
         self._set_state("idle")
         text = (text or "").strip()
         if text:
-            self._insert_text(text)
+            if self._window_mode() and self._window is not None:
+                # Route into the dictation window: it decides command vs. text.
+                self._window.handle_transcript(text)
+            else:
+                self._insert_text(text)
 
     # ------------------------------------------------------------------
     # Transcription backends

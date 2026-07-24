@@ -56,9 +56,37 @@ _NUMBERS = {
 }
 
 
-def _strip_accents(text: str) -> str:
-    # keep German umlauts/ß meaningful but fold combining marks off ASCII words
-    return text
+# German spelling alphabet (Buchstabiertafel) → letter, for the spell mode.
+SPELL_ALPHABET = {
+    "anton": "A", "ärger": "Ä", "aerger": "Ä", "berta": "B", "cäsar": "C",
+    "caesar": "C", "dora": "D", "emil": "E", "friedrich": "F", "gustav": "G",
+    "heinrich": "H", "ida": "I", "julius": "J", "kaufmann": "K", "ludwig": "L",
+    "martha": "M", "nordpol": "N", "otto": "O", "ökonom": "Ö", "oekonom": "Ö",
+    "paula": "P", "quelle": "Q", "richard": "R", "samuel": "S", "siegfried": "S",
+    "theodor": "T", "ulrich": "U", "übermut": "Ü", "uebermut": "Ü",
+    "viktor": "V", "wilhelm": "W", "xaver": "X", "xanthippe": "X",
+    "ypsilon": "Y", "zacharias": "Z", "zeppelin": "Z", "eszett": "ß",
+}
+
+
+def spell_to_text(transcript: str) -> str:
+    """Convert a spelled-out utterance to a word.
+
+    Accepts single letters ("h a u s"), the German spelling alphabet
+    ("Heinrich Anton Ulrich Samuel") or a mix.  Returns the assembled string
+    with only the first letter capitalised (typical for a dictated name)."""
+    letters: list[str] = []
+    for tok in normalise(transcript).split(" "):
+        if not tok:
+            continue
+        if tok in SPELL_ALPHABET:
+            letters.append(SPELL_ALPHABET[tok])
+        elif len(tok) == 1 and tok.isalpha():
+            letters.append(tok.upper())
+    if not letters:
+        return ""
+    word = "".join(letters)
+    return word[0].upper() + word[1:].lower()
 
 
 def normalise(text: str) -> str:

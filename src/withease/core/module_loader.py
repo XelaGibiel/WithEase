@@ -65,6 +65,12 @@ def _load_module(folder, manifest_path) -> BaseModule:
     if not entry.exists():
         raise FileNotFoundError(f"entry file missing: {entry}")
 
+    # Put the module's own folder on sys.path so multi-file add-ons can import
+    # their sibling files (e.g. `import commands_de` from module.py).
+    folder_str = str(folder)
+    if folder_str not in sys.path:
+        sys.path.insert(0, folder_str)
+
     # Import the entry file under a unique, collision-free module name.
     spec = importlib.util.spec_from_file_location(
         f"withease_external.{folder.name}", entry)
