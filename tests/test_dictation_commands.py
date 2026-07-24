@@ -118,14 +118,14 @@ def test_correction_commands():
     assert k("korrigiere das") == "correct_last"
     assert cde.parse("korrigiere Haus").data["word"] == "haus"
     r = cde.parse("ersetze Haus durch Garten")
-    assert r.kind == "replace" and r.data["from"] == "haus" and r.data["to"] == "garten"
+    assert r.kind == "replace" and r.data["from"] == "Haus" and r.data["to"] == "Garten"
     assert k("rückgängig") == "undo"
 
 
 def test_spell_and_literal():
     assert k("buchstabieren") == "spell_mode"
     lit = cde.parse("wörtlich neue Zeile")
-    assert lit.kind == "literal" and lit.data["text"] == "neue zeile"
+    assert lit.kind == "literal" and lit.data["text"] == "neue Zeile"
 
 
 def test_window_commands():

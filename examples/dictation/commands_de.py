@@ -78,6 +78,14 @@ def _num(word: str) -> int | None:
     return _NUMBERS.get(word)
 
 
+def _orig(transcript: str) -> str:
+    """Whitespace-normalised transcript with ORIGINAL casing kept (for text
+    that gets inserted verbatim, e.g. 'ersetze … durch <Name>')."""
+    text = unicodedata.normalize("NFC", transcript or "").strip()
+    text = text.strip(" \t\r\n.,;:!?…\"'“”„»«()[]")
+    return re.sub(r"\s+", " ", text)
+
+
 def _clean_target(text: str) -> str:
     """A captured <word>/<phrase> target, trimmed of stray punctuation."""
     return text.strip(" \t.,;:!?…\"'“”„»«()[]")
@@ -248,6 +256,19 @@ def parse(transcript: str) -> Command | None:
         return None
     for matcher in _MATCHERS:
         cmd = matcher(t)
-        if cmd is not None:
-            return cmd
+        if cmd is None:
+            continue
+        # For commands that insert verbatim text, keep the ORIGINAL casing
+        # (matching was done on the lower-cased string only for detection).
+        orig = _orig(transcript)
+        if cmd.kind == "literal":
+            m = re.fullmatch(r"(?:wörtlich|woertlich)\s+(.+)", orig, re.IGNORECASE)
+            if m:
+                cmd.data["text"] = _clean_target(m.group(1))
+        elif cmd.kind == "replace":
+            m = re.fullmatch(r"ersetze\s+(.+?)\s+durch\s+(.+)", orig, re.IGNORECASE)
+            if m:
+                cmd.data["from"] = _clean_target(m.group(1))
+                cmd.data["to"] = _clean_target(m.group(2))
+        return cmd
     return None
