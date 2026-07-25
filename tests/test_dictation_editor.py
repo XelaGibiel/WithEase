@@ -57,6 +57,34 @@ def test_cursor_before_word(app):
     assert pos(ed) == 4  # right before 'Haus'
 
 
+def test_cursor_vor_word(app):
+    ed = make(app, "Ein schönes Haus")
+    run(ed, "Cursor vor Haus")
+    assert pos(ed) == 12  # right before 'Haus'
+
+
+def test_cursor_vor_phrase(app):
+    # multi-word target ("das entsprechende Wort ODER der Text")
+    ed = make(app, "Am Anfang steht ein schönes Haus")
+    run(ed, "Cursor vor schönes Haus")
+    assert pos(ed) == 20  # right before 'schönes Haus'
+
+
+def test_select_phrase(app):
+    ed = make(app, "Bitte das kleine rote Auto nehmen")
+    run(ed, "markiere kleine rote Auto")
+    assert sel(ed) == "kleine rote Auto"
+
+
+def test_correction_strips_appended_period(app):
+    # Whisper appends "." to the short correction word; it must not land
+    # in the middle of the sentence.
+    ed = make(app, "Hallo Welt")
+    run(ed, "markiere Welt")
+    run(ed, "Erde.")
+    assert ed.te.toPlainText() == "Hallo Erde"
+
+
 def test_goto_start_end(app):
     ed = make(app, "abc def")
     run(ed, "an den Anfang")

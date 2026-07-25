@@ -137,3 +137,61 @@ def test_window_commands():
 def test_pick_number():
     assert cde.parse("nimm zwei").data["n"] == 2
     assert cde.parse("nimm 3").data["n"] == 3
+
+
+def test_pick_with_filler_words():
+    assert cde.parse("nimm mal eins").data["n"] == 1
+    assert cde.parse("nimm die zwei").data["n"] == 2
+    assert cde.parse("nimm nummer drei").data["n"] == 3
+
+
+def test_command_aliases():
+    assert k("Text einfügen") == "insert"
+    assert k("Text kopieren") == "copy"
+    assert k("Fenster zu") == "close"
+    assert k("An zu Ende") == "goto_end"
+    assert k("an das Ende") == "goto_end"
+    assert k("schreib groß") == "capitalize"
+    assert cde.parse("schreib groß").data["mode"] == "upper"
+
+
+def test_inline_spelling():
+    cmd = cde.parse("buchstabiere Ludwig Emil Ida")
+    assert cmd.kind == "spell_inline"
+    assert cde.spell_to_text(cmd.data["text"]) == "Lei"
+    # bare word still enters spell mode for a following utterance
+    assert k("buchstabieren") == "spell_mode"
+
+
+def test_cursor_homophones_are_mapped():
+    # Whisper mis-hearings of "Cursor" still resolve to the cursor command.
+    for said in ("Kaser vor Haus", "Körzer vor Haus", "Curser vor Haus"):
+        cmd = cde.parse(said)
+        assert cmd is not None and cmd.kind == "cursor_before", said
+        assert cmd.data["word"] == "haus"
+
+
+# --- Whisper auto-punctuation must not break command matching --------------
+# Whisper turns short commands into "little sentences" with inner commas and a
+# trailing period; these must still be recognised as commands, not dictation.
+
+def test_whisper_punctuation_is_ignored():
+    assert k("Markiere, Welt.") == "select_word"
+    assert cde.parse("Markiere, Welt.").data["word"] == "welt"
+    assert k("Cursor, Haus.") == "cursor_before"
+    assert k("An den Anfang.") == "goto_start"
+    assert k("Ans Ende!") == "goto_end"
+    assert k("Neue Zeile.") == "newline"
+    assert k("Neuer Absatz.") == "paragraph"
+    assert k("Lösche das.") == "delete"
+    assert k("Alles löschen.") == "clear"
+    assert k("Einfügen.") == "insert"
+    assert k("Kopieren.") == "copy"
+    assert k("Rückgängig.") == "undo"
+    assert cde.parse("Ersetze Haus, durch Garten.").data["to"] == "Garten"
+
+
+def test_whisper_punctuation_still_lets_dictation_through():
+    # A real sentence stays dictation even after punctuation is stripped.
+    assert cde.parse("Ich gehe zum Anfang der Straße.") is None
+    assert cde.parse("Das markieren wir im Kalender.") is None

@@ -89,7 +89,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "beta_note": "🧪 Dieses Modul steckt noch früh in der Beta-Phase – es funktioniert nicht unbedingt auf Anhieb reibungslos. Über „Feedback senden“ (Über-Seite) freue ich mich über Rückmeldungen.",
         "deps_missing": "⚠ Für dieses Add-on fehlen Komponenten. Zum Aktivieren im Programmordner ausführen:  pip install sounddevice requests  (für lokale Erkennung zusätzlich: faster-whisper)",
         "action": "Diktat starten/stoppen",
+        "action.command": "Sprachbefehl starten/stoppen",
         "hotkey": "Diktier-Taste",
+        "hotkey.command": "Befehls-Taste (optional)",
+        "hotkey.command.hint": "Wenn gesetzt: Diese Taste ist nur für Befehle (Cursor, markiere …), die Diktier-Taste nur für Text. So werden Befehl und Diktat sauber getrennt.",
         "mode": "Aufnahmemodus",
         "mode.toggle": "Umschalten (Taste startet/stoppt)",
         "mode.hold": "Halten (sprechen solange gedrückt)",
@@ -118,6 +121,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local.howto.text": "So installierst du die lokale Spracherkennung von Hand:\n\n1. Öffne die Eingabeaufforderung (Windows-Taste drücken, „cmd“ eintippen, Enter).\n2. Tippe ein:  pip install faster-whisper\n3. Drücke Enter und warte, bis die Installation fertig ist.\n4. Starte WithEase neu.\n\nTipp: Der Knopf „Automatisch installieren“ erledigt genau diese Schritte für dich.",
         "language": "Sprache",
         "lang.auto": "Automatisch erkennen",
+        "glossary": "Eigene Wörter",
+        "glossary.hint": "Namen/Fachbegriffe mit Komma getrennt – Whisper hält sich dann eher daran (z. B. „Leibig, WithEase, Diktierfenster“).",
         "output": "Ausgabe",
         "output.window": "Diktierfenster (mit Sprachbefehlen & Korrektur)",
         "output.direct": "Direkt in die aktive Anwendung einfügen",
@@ -148,7 +153,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "beta_note": "🧪 This module is still in an early beta – it may not work flawlessly right away. Feedback via “Send feedback” (About page) is very welcome.",
         "deps_missing": "⚠ This add-on is missing components. To enable it, run in the program folder:  pip install sounddevice requests  (for local recognition also: faster-whisper)",
         "action": "Start/stop dictation",
+        "action.command": "Start/stop voice command",
         "hotkey": "Dictation key",
+        "hotkey.command": "Command key (optional)",
+        "hotkey.command.hint": "When set: this key is for commands only (Cursor, select …) and the dictation key for text only – a clean split between command and dictation.",
         "mode": "Recording mode",
         "mode.toggle": "Toggle (key starts/stops)",
         "mode.hold": "Hold (speak while pressed)",
@@ -177,6 +185,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local.howto.text": "How to install local speech recognition manually:\n\n1. Open the command prompt (press the Windows key, type \"cmd\", press Enter).\n2. Type:  pip install faster-whisper\n3. Press Enter and wait until the installation finishes.\n4. Restart WithEase.\n\nTip: the \"Install automatically\" button does exactly these steps for you.",
         "language": "Language",
         "lang.auto": "Detect automatically",
+        "glossary": "Custom words",
+        "glossary.hint": "Names/terms, comma-separated – Whisper will favour them (e.g. \"Leibig, WithEase\").",
         "output": "Output",
         "output.window": "Dictation window (with voice commands & correction)",
         "output.direct": "Insert directly into the active application",
@@ -619,6 +629,18 @@ class DictationSettingsWidget(QWidget):
         self._hotkey.key_changed.connect(lambda k: self._save("hotkey", k))
         form.addRow(_t("hotkey"), self._hotkey)
 
+        self._command_hotkey = HotkeyEdit(
+            self._settings.get("command_hotkey", ""),
+            action_id="dictation.command")
+        self._command_hotkey.key_changed.connect(
+            lambda k: self._save("command_hotkey", k))
+        self._command_hotkey.setToolTip(_t("hotkey.command.hint"))
+        form.addRow(_t("hotkey.command"), self._command_hotkey)
+        _cmd_hint = QLabel(_t("hotkey.command.hint"))
+        _cmd_hint.setWordWrap(True)
+        _cmd_hint.setStyleSheet("color: palette(mid); font-size: 11px;")
+        form.addRow("", _cmd_hint)
+
         self._mode = QComboBox()
         self._mode.addItem(_t("mode.toggle"), "toggle")
         self._mode.addItem(_t("mode.hold"), "hold")
@@ -739,6 +761,13 @@ class DictationSettingsWidget(QWidget):
         self._lang.currentIndexChanged.connect(
             lambda i: self._save("language", self._lang.itemData(i)))
         form.addRow(_t("language"), self._lang)
+
+        self._glossary = QLineEdit(self._settings.get("glossary", ""))
+        self._glossary.setPlaceholderText(_t("glossary.hint"))
+        self._glossary.setToolTip(_t("glossary.hint"))
+        self._glossary.editingFinished.connect(
+            lambda: self._save("glossary", self._glossary.text()))
+        form.addRow(_t("glossary"), self._glossary)
 
         self._output_mode = QComboBox()
         self._output_mode.addItem(_t("output.window"), "window")
@@ -977,6 +1006,9 @@ class DictationModule(BaseModule):
         self._settings: dict[str, Any] = {}
         self._kb_subscribed = False
         self._trigger = ""
+        self._command_trigger = ""      # optional 2nd key: force command mode
+        self._active_mode = "auto"      # mode of the recording in progress
+        self._active_trigger = ""       # which key started it (for hold mode)
         self._state = "idle"            # idle | recording | transcribing
         self._state_lock = threading.Lock()
         self._audio_chunks: list[bytes] = []
@@ -994,6 +1026,11 @@ class DictationModule(BaseModule):
         action_manager.register(Action(
             id="dictation.toggle",
             label=_t("action"),
+            callback=lambda: None,
+        ))
+        action_manager.register(Action(
+            id="dictation.command",
+            label=_t("action.command"),
             callback=lambda: None,
         ))
 
@@ -1035,6 +1072,8 @@ class DictationModule(BaseModule):
         self._refresh_trigger()
         action_manager.assign_trigger(
             "dictation.toggle", self._trigger if self.enabled else "")
+        action_manager.assign_trigger(
+            "dictation.command", self._command_trigger if self.enabled else "")
         bus.publish("module.settings_changed", module_id=self.MODULE_ID)
 
     # ------------------------------------------------------------------
@@ -1060,10 +1099,19 @@ class DictationModule(BaseModule):
                 self._window = DictationWindow(
                     on_insert=self._insert_into_target,
                     on_copy=self._set_clipboard,
+                    on_history_changed=self._save_history,
+                    history=list(self._settings.get("history", [])),
                     t=_t)
             except Exception:
                 _log.exception("dictation window unavailable")
         return self._window
+
+    def _save_history(self, items: list[str]) -> None:
+        """Persist the dictation history across sessions (newest first, capped
+        by the window).  Stored in the module's settings, which the core writes
+        to disk on settings change."""
+        self._settings["history"] = list(items)
+        self.on_settings_changed()
 
     def _capture_target(self) -> None:
         """Remember the app that is focused right now (to paste into later).
@@ -1093,11 +1141,12 @@ class DictationModule(BaseModule):
 
     def _refresh_trigger(self) -> None:
         self._trigger = self._settings.get("hotkey", "")
+        self._command_trigger = self._settings.get("command_hotkey", "")
 
     def _on_key_event(self, vk: int, scan: int, extended: bool,
                       injected: bool, is_press: bool) -> bool:
         """Hook-thread callback – must return fast, never block."""
-        if injected or not self._trigger:
+        if injected or (not self._trigger and not self._command_trigger):
             return False
         if is_altgr_fake_lctrl(vk, scan):
             return False
@@ -1110,18 +1159,26 @@ class DictationModule(BaseModule):
                                  daemon=True).start()
                 return True
             combo = current_combo_str(vk)
+            # Dictation key: plain text (or auto-detect when no command key is
+            # set).  Command key: always interpreted as a command.
             if combo == self._trigger:
-                if self._state == "recording" and not hold_mode:
-                    threading.Thread(target=self._stop_and_transcribe,
-                                     daemon=True).start()
-                elif self._state == "idle":
-                    threading.Thread(target=self._start_recording,
-                                     daemon=True).start()
-                return True  # swallow the hotkey
-            return False
+                mode = "text" if self._command_trigger else "auto"
+            elif self._command_trigger and combo == self._command_trigger:
+                mode = "command"
+            else:
+                return False
+            if self._state == "recording" and not hold_mode:
+                threading.Thread(target=self._stop_and_transcribe,
+                                 daemon=True).start()
+            elif self._state == "idle":
+                self._active_mode = mode
+                self._active_trigger = combo
+                threading.Thread(target=self._start_recording,
+                                 daemon=True).start()
+            return True  # swallow the hotkey
 
-        if (hold_mode and self._state == "recording"
-                and vk_to_combo_str(vk) == self._trigger.split("+")[-1]):
+        if (hold_mode and self._state == "recording" and self._active_trigger
+                and vk_to_combo_str(vk) == self._active_trigger.split("+")[-1]):
             threading.Thread(target=self._stop_and_transcribe,
                              daemon=True).start()
         return False
@@ -1235,8 +1292,9 @@ class DictationModule(BaseModule):
         text = (text or "").strip()
         if text:
             if self._window_mode() and self._window is not None:
-                # Route into the dictation window: it decides command vs. text.
-                self._window.handle_transcript(text)
+                # Route into the dictation window with the key's mode
+                # (text / command / auto).
+                self._window.handle_transcript(text, self._active_mode)
             else:
                 self._insert_text(text)
 
@@ -1253,6 +1311,34 @@ class DictationModule(BaseModule):
     def _language(self) -> str | None:
         lang = self._settings.get("language", "auto")
         return None if lang in ("", "auto") else lang
+
+    def _local_language(self) -> str:
+        """German-first module: an unset/'auto' language falls back to German
+        for *local* recognition.  Whisper otherwise drifts to English on short
+        commands ("Cursor" → "Kaser", "markiere Haus" → "Make-A-House")."""
+        return self._language() or "de"
+
+    def glossary_words(self) -> list[str]:
+        """The user's custom words (comma/newline/semicolon separated)."""
+        raw = self._settings.get("glossary", "") or ""
+        for sep in ("\n", ";"):
+            raw = raw.replace(sep, ",")
+        return [w.strip() for w in raw.split(",") if w.strip()]
+
+    def _initial_prompt(self) -> str:
+        """A German biasing prompt ("dictionary") that keeps Whisper decoding
+        German and nudges it toward the command words and the user's glossary."""
+        commands = (
+            "Cursor vor, Cursor hinter, markiere, lösche, entferne, ersetze, "
+            "korrigiere, nimm eins, nimm zwei, einfügen, kopieren, schließen, "
+            "neue Zeile, neuer Absatz, großschreiben, kleinschreiben, "
+            "rückgängig, Punkt, Komma, Fragezeichen, buchstabieren, "
+            "von, bis, alles, Satz, Absatz")
+        prompt = "Deutsches Diktat mit Sprachbefehlen. Befehle: " + commands + "."
+        words = self.glossary_words()
+        if words:
+            prompt += " Eigene Wörter: " + ", ".join(words) + "."
+        return prompt
 
     # -- Cloud (OpenAI-compatible / OpenRouter) --------------------------
 
@@ -1335,8 +1421,17 @@ class DictationModule(BaseModule):
                                              compute_type="auto")
             self._local_model_name = model_name
 
+        language = self._local_language()
+        # German command "dictionary" only makes sense when decoding German.
+        prompt = self._initial_prompt() if language == "de" else None
         segments, _info = self._local_model.transcribe(
-            io.BytesIO(wav_bytes), language=self._language())
+            io.BytesIO(wav_bytes),
+            language=language,
+            initial_prompt=prompt,
+            beam_size=5,
+            temperature=0.0,
+            condition_on_previous_text=False,
+        )
         return " ".join(seg.text.strip() for seg in segments)
 
     # ------------------------------------------------------------------

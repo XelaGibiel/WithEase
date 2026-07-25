@@ -51,9 +51,19 @@ def _levenshtein(a: str, b: str) -> int:
     return prev[-1]
 
 
+def _fuzzy_eq(ft: str, fw: str) -> bool:
+    """True if two *already folded* words match (exact / prefix / small edit)."""
+    if not ft or not fw:
+        return False
+    if fw == ft or fw.startswith(ft) or ft.startswith(fw):
+        return True
+    tol = 1 if len(ft) <= 5 else 2
+    return _levenshtein(fw, ft) <= tol
+
+
 def _word_matches(target: str, tokens: list[tuple[int, int, str]]) -> list[tuple[int, int]]:
-    """Fuzzy-match ``target`` against document tokens; return positions in
-    document order (exact/prefix first, then close edit-distance)."""
+    """Fuzzy-match a single ``target`` word against document tokens; return
+    positions in document order (exact/prefix first, then close edit-distance)."""
     ft = _fold(target)
     if not ft:
         return []
@@ -66,6 +76,25 @@ def _word_matches(target: str, tokens: list[tuple[int, int, str]]) -> list[tuple
         elif _levenshtein(fw, ft) <= tol:
             near.append((start, end))
     return exact or near
+
+
+def _target_spans(target: str, tokens: list[tuple[int, int, str]]) -> list[tuple[int, int]]:
+    """Fuzzy-match a target that may be a single word *or* a multi-word phrase.
+
+    A phrase matches where consecutive document tokens each fuzzy-match the
+    corresponding target word, so „Cursor vor <mehrere Wörter>“ works too."""
+    parts = [p for p in re.split(r"\s+", target.strip()) if p]
+    if not parts:
+        return []
+    if len(parts) == 1:
+        return _word_matches(parts[0], tokens)
+    folded = [_fold(p) for p in parts]
+    n = len(folded)
+    spans: list[tuple[int, int]] = []
+    for i in range(len(tokens) - n + 1):
+        if all(_fuzzy_eq(folded[j], _fold(tokens[i + j][2])) for j in range(n)):
+            spans.append((tokens[i][0], tokens[i + n - 1][1]))
+    return spans
 
 
 class Editor:
@@ -109,7 +138,12 @@ class Editor:
             return ActionResult("info", message="leer")
         cur = self.te.textCursor()
         self._awaiting_correction = False
-        if not cur.hasSelection():
+        if cur.hasSelection():
+            # Replacing a selection = a correction: strip the sentence
+            # punctuation Whisper tends to append to a single spoken word, so
+            # "Testen." doesn't drop a stray period into the middle of a line.
+            text = text.rstrip(" .,;:!?…") or text
+        else:
             # Smart spacing: add a leading space between words.
             prev = self._text()[:cur.position()]
             if prev and prev[-1].isalnum() and (text[0].isalnum() or text[0] in "„("):
@@ -143,8 +177,8 @@ class Editor:
         return self._apply_to_span(op, start, end, extra)
 
     def _resolve(self, op: str, word: str, extra: dict | None = None) -> ActionResult:
-        """Find ``word``; act on it, or defer if several matches exist."""
-        matches = _word_matches(word, self._tokens())
+        """Find ``word`` (or phrase); act on it, or defer if several matches."""
+        matches = _target_spans(word, self._tokens())
         if not matches:
             self._pending = None
             return ActionResult("not_found", message=f"„{word}“ nicht gefunden")
@@ -218,8 +252,8 @@ class Editor:
     def _do_delete_range(self, d): return self._range("delete", d)
 
     def _range(self, op: str, d: dict) -> ActionResult:
-        a = _word_matches(d["from"], self._tokens())
-        b = _word_matches(d["to"], self._tokens())
+        a = _target_spans(d["from"], self._tokens())
+        b = _target_spans(d["to"], self._tokens())
         if not a or not b:
             missing = d["from"] if not a else d["to"]
             return ActionResult("not_found", message=f"„{missing}“ nicht gefunden")

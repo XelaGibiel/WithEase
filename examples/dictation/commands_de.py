@@ -35,9 +35,18 @@ _HOMOPHONES = {
     "kursor": "cursor",
     "korsor": "cursor",
     "cursa": "cursor",
+    "kaser": "cursor",
+    "körzer": "cursor",
+    "koerzer": "cursor",
+    "curser": "cursor",
+    "kurser": "cursor",
+    "köser": "cursor",
     "markieren": "markiere",
+    "markier": "markiere",
     "lösch": "lösche",
     "loesche": "lösche",
+    "lesche": "lösche",
+    "löshe": "lösche",
     "korrigier": "korrigiere",
 }
 
@@ -89,13 +98,22 @@ def spell_to_text(transcript: str) -> str:
     return word[0].upper() + word[1:].lower()
 
 
+# Any punctuation Whisper might sprinkle into a short command utterance.
+_PUNCT_CHARS = r"[.,;:!?…·\"'“”„‚‘’»«›‹()\[\]{}/\\–—-]+"
+
+
 def normalise(text: str) -> str:
-    """Lower-case, drop surrounding punctuation/quotes, collapse whitespace and
-    apply the homophone map word-by-word."""
+    """Lower-case, neutralise *all* punctuation, collapse whitespace and apply
+    the homophone map word-by-word.
+
+    Whisper auto-punctuates even one- and two-word commands ("Markiere, Welt."),
+    so we replace every punctuation mark – inner ones included – with a space.
+    Otherwise a stray comma would stop a command pattern from matching and the
+    utterance would be inserted as dictation text instead of being executed."""
     text = unicodedata.normalize("NFC", text or "").strip().lower()
-    text = text.strip(" \t\r\n.,;:!?…\"'“”„»«()[]")
-    text = re.sub(r"\s+", " ", text)
-    words = [_HOMOPHONES.get(w, w) for w in text.split(" ")]
+    text = re.sub(_PUNCT_CHARS, " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    words = [_HOMOPHONES.get(w, w) for w in text.split(" ") if w]
     return " ".join(words)
 
 
@@ -124,14 +142,17 @@ def _clean_target(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _m_window(t: str) -> Command | None:
-    if t in ("einfügen", "einfuegen", "übernehmen", "uebernehmen", "fertig"):
+    if t in ("einfügen", "einfuegen", "text einfügen", "text einfuegen",
+             "übernehmen", "uebernehmen", "fertig"):
         return Command("insert")
-    if t in ("kopieren", "in die zwischenablage"):
+    if t in ("kopieren", "text kopieren", "in die zwischenablage"):
         return Command("copy")
     if t in ("alles löschen", "alles loeschen", "text löschen", "leeren"):
         return Command("clear")
-    if t in ("abbrechen", "schließen", "schliessen", "fenster schließen",
-             "fenster schliessen", "diktierfenster schließen"):
+    if t in ("abbrechen", "schließen", "schliessen", "schließe", "schliesse",
+             "fenster schließen", "fenster schliessen", "fenster zu",
+             "diktierfenster schließen", "diktierfenster schliessen",
+             "diktierfenster zu", "diktat schließen", "diktat schliessen"):
         return Command("close")
     return None
 
@@ -140,7 +161,12 @@ def _m_mode(t: str) -> Command | None:
     m = re.fullmatch(r"wörtlich (.+)|woertlich (.+)", t)
     if m:
         return Command("literal", {"text": _clean_target(m.group(1) or m.group(2))})
-    if t in ("buchstabieren", "buchstabiermodus", "buchstabier modus"):
+    # Inline spelling in one breath: "buchstabiere Ludwig Emil Ida …".
+    m = re.fullmatch(r"(?:buchstabiere|buchstabiern|buchstabieren) (.+)", t)
+    if m:
+        return Command("spell_inline", {"text": m.group(1)})
+    if t in ("buchstabieren", "buchstabiere", "buchstabiermodus",
+             "buchstabier modus"):
         return Command("spell_mode")
     return None
 
@@ -164,7 +190,10 @@ def _m_correct(t: str) -> Command | None:
 
 
 def _m_pick(t: str) -> Command | None:
-    m = re.fullmatch(r"(?:nimm|nummer|wähle|waehle) (\w+)", t)
+    # tolerate filler words: "nimm mal eins", "nimm die zwei", "nimm nummer 3"
+    m = re.fullmatch(
+        r"(?:nimm|nummer|wähle|waehle)(?: mal| bitte| die| den| das| nummer)* (\w+)",
+        t)
     if m:
         n = _num(m.group(1))
         if n is not None:
@@ -227,9 +256,11 @@ def _m_select(t: str) -> Command | None:
 
 
 def _m_navigate(t: str) -> Command | None:
-    if t in ("an den anfang", "zum anfang", "ganz nach oben", "textanfang"):
+    if t in ("an den anfang", "zum anfang", "an den start", "zum start",
+             "ganz nach oben", "textanfang"):
         return Command("goto_start")
-    if t in ("ans ende", "zum ende", "ganz nach unten", "textende"):
+    if t in ("ans ende", "an das ende", "an zu ende", "zum ende",
+             "zum schluss", "an den schluss", "ganz nach unten", "textende"):
         return Command("goto_end")
     if t in ("zeilenanfang", "an den zeilenanfang", "zum zeilenanfang"):
         return Command("line_start")
@@ -253,9 +284,13 @@ def _m_format(t: str) -> Command | None:
     if t in ("neuer absatz", "neue absatz", "absatz"):
         return Command("paragraph")
     if t in ("großschreiben", "gross schreiben", "groß schreiben",
-             "großbuchstabe"):
+             "großbuchstabe", "schreib groß", "schreibe groß", "schreib gross",
+             "schreib das groß", "schreibe das groß", "mach groß",
+             "mach das groß", "das groß"):
         return Command("capitalize", {"mode": "upper"})
-    if t in ("kleinschreiben", "klein schreiben", "kleinbuchstabe"):
+    if t in ("kleinschreiben", "klein schreiben", "kleinbuchstabe",
+             "schreib klein", "schreibe klein", "schreib das klein",
+             "mach klein", "das klein"):
         return Command("capitalize", {"mode": "lower"})
     if t in PUNCT_WORDS:
         return Command("punct", {"char": PUNCT_WORDS[t]})
