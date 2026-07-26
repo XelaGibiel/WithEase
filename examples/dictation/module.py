@@ -122,7 +122,25 @@ _STRINGS: dict[str, dict[str, str]] = {
         "language": "Sprache",
         "lang.auto": "Automatisch erkennen",
         "glossary": "Eigene Wörter",
-        "glossary.hint": "Namen/Fachbegriffe mit Komma getrennt – Whisper hält sich dann eher daran (z. B. „Leibig, WithEase, Diktierfenster“).",
+        "glossary.hint": "Namen/Fachbegriffe, die Whisper besser erkennen soll (z. B. „Leibig“, „WithEase“, „Diktierfenster“).",
+        "glossary.empty": "Noch keine eigenen Wörter.",
+        "glossary.count": "{n} Wörter hinterlegt",
+        "glossary.add": "Neues Wort eingeben und Enter drücken",
+        "memory": "Fehler-Gedächtnis",
+        "memory.empty": "Noch nichts gelernt.",
+        "memory.count": "{n} gelernte Korrekturen",
+        "memory.reset": "Alles zurücksetzen",
+        "memory.hint": "Korrigierte Wörter werden nach der 2. gleichen Korrektur automatisch angewandt.",
+        "edit": "Bearbeiten…",
+        "add": "Hinzufügen",
+        "ai": "KI-Nachbearbeitung",
+        "ai.enable": "Diktierten Text von einer KI glätten (optional, aus)",
+        "ai.hint": "Korrigiert nur Grammatik/Zeichensetzung, ändert die Bedeutung nicht. Läuft nur bei reinem Diktat (nicht bei Befehlen); Ergebnis erscheint im Diktierfenster.",
+        "ai.backend": "KI läuft",
+        "ai.local": "Lokal (Ollama, bleibt auf dem PC)",
+        "ai.cloud": "Cloud (Text wird an den Anbieter gesendet)",
+        "ai.model": "KI-Modell",
+        "ai.model.hint": "z. B. „llama3.2“ (lokal) oder „gpt-4o-mini“ (Cloud)",
         "output": "Ausgabe",
         "output.window": "Diktierfenster (mit Sprachbefehlen & Korrektur)",
         "output.direct": "Direkt in die aktive Anwendung einfügen",
@@ -131,6 +149,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "insert.type": "Tippen (Zeichen für Zeichen)",
         "keep_clipboard": "Erkannten Text zusätzlich in der Zwischenablage behalten",
         "max_seconds": "Max. Aufnahmedauer",
+        "max_seconds.off": "Endlos (kein Limit)",
         "device": "Mikrofon",
         "device.default": "Standardgerät",
         "test": "Test: 3 Sekunden aufnehmen und erkennen",
@@ -139,6 +158,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "test.error": "Test fehlgeschlagen:\n\n{err}",
         "chip.recording": "Aufnahme … (Esc bricht ab)",
         "chip.transcribing": "Erkenne Text …",
+        "chip.dictation": "Diktat",
+        "chip.command": "Befehl",
         "chip.error": "Diktat-Fehler",
         "err.no_audio_lib": "Audio-Bibliothek (sounddevice) fehlt",
         "err.mic": "Mikrofon-Fehler: {err}",
@@ -186,7 +207,25 @@ _STRINGS: dict[str, dict[str, str]] = {
         "language": "Language",
         "lang.auto": "Detect automatically",
         "glossary": "Custom words",
-        "glossary.hint": "Names/terms, comma-separated – Whisper will favour them (e.g. \"Leibig, WithEase\").",
+        "glossary.hint": "Names/terms Whisper should recognise better (e.g. \"Leibig\", \"WithEase\").",
+        "glossary.empty": "No custom words yet.",
+        "glossary.count": "{n} words saved",
+        "glossary.add": "Type a new word and press Enter",
+        "memory": "Error memory",
+        "memory.empty": "Nothing learned yet.",
+        "memory.count": "{n} learned corrections",
+        "memory.reset": "Reset all",
+        "memory.hint": "A corrected word is applied automatically after the 2nd identical correction.",
+        "edit": "Edit…",
+        "add": "Add",
+        "ai": "AI cleanup",
+        "ai.enable": "Smooth dictated text with an AI (optional, off)",
+        "ai.hint": "Fixes only grammar/punctuation, never the meaning. Runs on plain dictation (not commands); result appears in the dictation window.",
+        "ai.backend": "AI runs",
+        "ai.local": "Local (Ollama, stays on this PC)",
+        "ai.cloud": "Cloud (text is sent to the provider)",
+        "ai.model": "AI model",
+        "ai.model.hint": "e.g. \"llama3.2\" (local) or \"gpt-4o-mini\" (cloud)",
         "output": "Output",
         "output.window": "Dictation window (with voice commands & correction)",
         "output.direct": "Insert directly into the active application",
@@ -195,6 +234,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "insert.type": "Typing (character by character)",
         "keep_clipboard": "Also keep the recognised text in the clipboard",
         "max_seconds": "Max. recording length",
+        "max_seconds.off": "Endless (no limit)",
         "device": "Microphone",
         "device.default": "Default device",
         "test": "Test: record 3 seconds and transcribe",
@@ -203,6 +243,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "test.error": "Test failed:\n\n{err}",
         "chip.recording": "Recording … (Esc cancels)",
         "chip.transcribing": "Transcribing …",
+        "chip.dictation": "Dictation",
+        "chip.command": "Command",
         "chip.error": "Dictation error",
         "err.no_audio_lib": "Audio library (sounddevice) missing",
         "err.mic": "Microphone error: {err}",
@@ -504,10 +546,13 @@ class DictationIndicator(QWidget):
         self.update()
 
     def _label(self) -> str:
+        # For recording/transcribing, ``_detail`` carries the mode ("Diktat" /
+        # "Befehl") so the chip shows which key is being used.
+        prefix = f"{self._detail} · " if self._detail else ""
         if self._state == "recording":
-            return f"🎙 {_t('chip.recording')}"
+            return f"🎙 {prefix}{_t('chip.recording')}"
         if self._state == "transcribing":
-            return f"⏳ {_t('chip.transcribing')}"
+            return f"⏳ {prefix}{_t('chip.transcribing')}"
         if self._state == "error":
             detail = f" – {self._detail}" if self._detail else ""
             return f"⚠ {_t('chip.error')}{detail}"
@@ -762,12 +807,52 @@ class DictationSettingsWidget(QWidget):
             lambda i: self._save("language", self._lang.itemData(i)))
         form.addRow(_t("language"), self._lang)
 
-        self._glossary = QLineEdit(self._settings.get("glossary", ""))
-        self._glossary.setPlaceholderText(_t("glossary.hint"))
-        self._glossary.setToolTip(_t("glossary.hint"))
-        self._glossary.editingFinished.connect(
-            lambda: self._save("glossary", self._glossary.text()))
-        form.addRow(_t("glossary"), self._glossary)
+        # Glossary – edited in its own pop-out window.
+        gloss_row = QHBoxLayout()
+        self._glossary_summary = QLabel(self._glossary_summary_text())
+        self._glossary_summary.setStyleSheet("color: palette(mid);")
+        self._glossary_summary.setToolTip(_t("glossary.hint"))
+        gloss_row.addWidget(self._glossary_summary, 1)
+        gloss_edit = QPushButton(_t("edit"))
+        gloss_edit.clicked.connect(self._open_glossary)
+        gloss_row.addWidget(gloss_edit)
+        form.addRow(_t("glossary"), gloss_row)
+
+        # Error memory – edited in its own pop-out window.
+        mem_row = QHBoxLayout()
+        self._memory_summary_label = QLabel(self._memory_summary())
+        self._memory_summary_label.setStyleSheet("color: palette(mid);")
+        self._memory_summary_label.setToolTip(_t("memory.hint"))
+        mem_row.addWidget(self._memory_summary_label, 1)
+        mem_edit = QPushButton(_t("edit"))
+        mem_edit.clicked.connect(self._open_memory)
+        mem_row.addWidget(mem_edit)
+        form.addRow(_t("memory"), mem_row)
+
+        # Optional AI cleanup (off by default).
+        self._ai_enable = QCheckBox(_t("ai.enable"))
+        self._ai_enable.setChecked(bool(self._settings.get("ai_cleanup", False)))
+        self._ai_enable.setToolTip(_t("ai.hint"))
+        self._ai_enable.toggled.connect(lambda v: self._save("ai_cleanup", v))
+        form.addRow(_t("ai"), self._ai_enable)
+        _ai_hint = QLabel(_t("ai.hint"))
+        _ai_hint.setWordWrap(True)
+        _ai_hint.setStyleSheet("color: palette(mid); font-size: 11px;")
+        form.addRow("", _ai_hint)
+        self._ai_backend = QComboBox()
+        self._ai_backend.addItem(_t("ai.local"), "local")
+        self._ai_backend.addItem(_t("ai.cloud"), "cloud")
+        if self._settings.get("ai_backend", "local") == "cloud":
+            self._ai_backend.setCurrentIndex(1)
+        self._ai_backend.currentIndexChanged.connect(
+            lambda i: self._save("ai_backend", self._ai_backend.itemData(i)))
+        form.addRow(_t("ai.backend"), self._ai_backend)
+        self._ai_model = QLineEdit(self._settings.get("ai_model", ""))
+        self._ai_model.setPlaceholderText(_t("ai.model.hint"))
+        self._ai_model.setToolTip(_t("ai.model.hint"))
+        self._ai_model.editingFinished.connect(
+            lambda: self._save("ai_model", self._ai_model.text().strip()))
+        form.addRow(_t("ai.model"), self._ai_model)
 
         self._output_mode = QComboBox()
         self._output_mode.addItem(_t("output.window"), "window")
@@ -795,9 +880,10 @@ class DictationSettingsWidget(QWidget):
         form.addRow("", self._keep_clipboard)
 
         self._max_seconds = QSpinBox()
-        self._max_seconds.setRange(5, 600)
+        self._max_seconds.setRange(0, 3600)     # 0 = endless (no auto-stop)
         self._max_seconds.setSuffix(" s")
-        self._max_seconds.setValue(int(self._settings.get("max_seconds", 120)))
+        self._max_seconds.setSpecialValueText(_t("max_seconds.off"))
+        self._max_seconds.setValue(int(self._settings.get("max_seconds", 0)))
         self._max_seconds.valueChanged.connect(
             lambda v: self._save("max_seconds", v))
         form.addRow(_t("max_seconds"), self._max_seconds)
@@ -840,6 +926,45 @@ class DictationSettingsWidget(QWidget):
     def _save(self, key: str, value: Any) -> None:
         self._settings[key] = value
         self._module.on_settings_changed()
+
+    def _glossary_summary_text(self) -> str:
+        n = len(self._module.glossary_words())
+        return _t("glossary.empty") if n == 0 else _t("glossary.count", n=str(n))
+
+    def _memory_summary(self) -> str:
+        n = len(self._module._memory().substitutions())
+        return _t("memory.empty") if n == 0 else _t("memory.count", n=str(n))
+
+    def _open_glossary(self) -> None:
+        from settings_dialogs import ListEditorDialog
+        dlg = ListEditorDialog(
+            title=_t("glossary"),
+            rows_provider=lambda: [(w, w) for w in self._module.glossary_words()],
+            on_remove=self._module.remove_glossary_word,
+            on_add=self._module.add_glossary_word,
+            add_placeholder=_t("glossary.add"),
+            add_label=_t("add"),
+            intro=_t("glossary.hint"),
+            empty_text=_t("glossary.empty"),
+            parent=self)
+        dlg.exec()
+        self._glossary_summary.setText(self._glossary_summary_text())
+
+    def _open_memory(self) -> None:
+        from settings_dialogs import ListEditorDialog
+        dlg = ListEditorDialog(
+            title=_t("memory"),
+            rows_provider=lambda: [
+                (f"{k}  →  {v}", k)
+                for k, v in self._module._memory().substitutions().items()],
+            on_remove=self._module.remove_correction,
+            on_clear=self._module.reset_memory,
+            clear_label=_t("memory.reset"),
+            intro=_t("memory.hint"),
+            empty_text=_t("memory.empty"),
+            parent=self)
+        dlg.exec()
+        self._memory_summary_label.setText(self._memory_summary())
 
     def _fill_models(self, provider: str) -> None:
         self._model.blockSignals(True)
@@ -1020,6 +1145,7 @@ class DictationModule(BaseModule):
         self._indicator: DictationIndicator | None = None
         self._window: Any = None         # DictationWindow (created on the GUI thread)
         self._target_hwnd: int | None = None   # app to paste into on "einfügen"
+        self._error_memory: Any = None   # ErrorMemory (lazy, from settings)
 
         # Listed in the actions table / favourites / conflict checks; the key
         # itself is handled by our own hook subscription below.
@@ -1063,6 +1189,7 @@ class DictationModule(BaseModule):
 
     def load_settings(self, settings: dict[str, Any]) -> None:
         self._settings = settings
+        self._error_memory = None       # rebuild from the new profile's data
         self.on_settings_changed()
 
     def dump_settings(self) -> dict[str, Any]:
@@ -1100,6 +1227,7 @@ class DictationModule(BaseModule):
                     on_insert=self._insert_into_target,
                     on_copy=self._set_clipboard,
                     on_history_changed=self._save_history,
+                    on_correction=self._learn_correction,
                     history=list(self._settings.get("history", [])),
                     t=_t)
             except Exception:
@@ -1111,6 +1239,35 @@ class DictationModule(BaseModule):
         by the window).  Stored in the module's settings, which the core writes
         to disk on settings change."""
         self._settings["history"] = list(items)
+        self.on_settings_changed()
+
+    # ------------------------------------------------------------------
+    # Error memory ("Fehler-Gedächtnis") – self-learning corrections
+    # ------------------------------------------------------------------
+
+    def _memory(self) -> Any:
+        if self._error_memory is None:
+            from correction import ErrorMemory
+            self._error_memory = ErrorMemory(self._settings.get("error_memory"))
+        return self._error_memory
+
+    def _learn_correction(self, old: str, new: str) -> None:
+        """Called by the window whenever a word was corrected."""
+        mem = self._memory()
+        mem.learn(old, new)
+        self._settings["error_memory"] = mem.to_dict()
+        self.on_settings_changed()
+
+    def remove_correction(self, key: str) -> None:
+        mem = self._memory()
+        mem.remove(key)
+        self._settings["error_memory"] = mem.to_dict()
+        self.on_settings_changed()
+
+    def reset_memory(self) -> None:
+        mem = self._memory()
+        mem.clear()
+        self._settings["error_memory"] = mem.to_dict()
         self.on_settings_changed()
 
     def _capture_target(self) -> None:
@@ -1187,11 +1344,21 @@ class DictationModule(BaseModule):
     # State / indicator
     # ------------------------------------------------------------------
 
+    def _mode_label(self) -> str:
+        """Human tag for the active recording mode, shown on the chip/window."""
+        if self._active_mode == "command":
+            return _t("chip.command")
+        if self._active_mode == "text":
+            return _t("chip.dictation")
+        return ""
+
     def _set_state(self, state: str, detail: str = "") -> None:
         self._state = state
+        if state in ("recording", "transcribing") and not detail:
+            detail = self._mode_label()
         bus.publish("dictation.state", state=state, detail=detail)
         if self._window is not None:
-            self._window.set_state(state)
+            self._window.set_state(state, detail)
 
     def _error(self, detail: str) -> None:
         _log.error("dictation error: %s", detail)
@@ -1239,10 +1406,12 @@ class DictationModule(BaseModule):
             self._record_started = time.monotonic()
             self._set_state("recording")
 
-            max_s = int(self._settings.get("max_seconds", 120))
-            self._max_timer = threading.Timer(max_s, self._stop_and_transcribe)
-            self._max_timer.daemon = True
-            self._max_timer.start()
+            max_s = int(self._settings.get("max_seconds", 0))
+            if max_s > 0:       # 0 = endless: no auto-stop timer
+                self._max_timer = threading.Timer(
+                    max_s, self._stop_and_transcribe)
+                self._max_timer.daemon = True
+                self._max_timer.start()
 
     def _close_stream(self) -> bytes:
         """Stop the stream and return the recorded WAV bytes."""
@@ -1288,8 +1457,17 @@ class DictationModule(BaseModule):
         except Exception as exc:
             self._error(str(exc)[:120])
             return
-        self._set_state("idle")
         text = (text or "").strip()
+        if text:
+            text = self._memory().apply(text)   # learned corrections first
+            # Optional AI cleanup – only on real dictation, never on a command
+            # utterance (would rewrite "markiere Haus").  Runs on this worker
+            # thread, so the UI stays responsive.
+            if self._settings.get("ai_cleanup") and self._active_mode != "command":
+                from commands_de import parse as _parse
+                if _parse(text) is None:
+                    text = self._ai_cleanup(text)
+        self._set_state("idle")
         if text:
             if self._window_mode() and self._window is not None:
                 # Route into the dictation window with the key's mode
@@ -1324,6 +1502,22 @@ class DictationModule(BaseModule):
         for sep in ("\n", ";"):
             raw = raw.replace(sep, ",")
         return [w.strip() for w in raw.split(",") if w.strip()]
+
+    def add_glossary_word(self, word: str) -> None:
+        word = (word or "").strip()
+        if not word:
+            return
+        words = self.glossary_words()
+        if word.casefold() not in [w.casefold() for w in words]:
+            words.append(word)
+            self._settings["glossary"] = ", ".join(words)
+            self.on_settings_changed()
+
+    def remove_glossary_word(self, word: str) -> None:
+        words = [w for w in self.glossary_words()
+                 if w.casefold() != (word or "").casefold()]
+        self._settings["glossary"] = ", ".join(words)
+        self.on_settings_changed()
 
     def _initial_prompt(self) -> str:
         """A German biasing prompt ("dictionary") that keeps Whisper decoding
@@ -1404,7 +1598,8 @@ class DictationModule(BaseModule):
 
         if resp.status_code != 200:
             raise RuntimeError(f"API {resp.status_code}: {resp.text[:120]}")
-        return resp.json().get("text", "")
+        from postprocess import strip_hallucinations
+        return strip_hallucinations(resp.json().get("text", ""))
 
     # -- Local (faster-whisper) ------------------------------------------
 
@@ -1431,8 +1626,66 @@ class DictationModule(BaseModule):
             beam_size=5,
             temperature=0.0,
             condition_on_previous_text=False,
+            vad_filter=True,        # skip silence → far fewer hallucinations
         )
-        return " ".join(seg.text.strip() for seg in segments)
+        text = " ".join(seg.text.strip() for seg in segments)
+        from postprocess import strip_hallucinations
+        return strip_hallucinations(text)
+
+    # -- optional AI cleanup (local Ollama / cloud chat) -----------------
+
+    def _ai_cleanup(self, text: str) -> str:
+        """Lightly correct grammar/punctuation via an LLM; on any failure keep
+        the original text so dictation is never blocked."""
+        backend = self._settings.get("ai_backend", "local")
+        try:
+            cleaned = (self._ai_cloud_chat(text) if backend == "cloud"
+                       else self._ai_local_chat(text))
+        except Exception:
+            _log.exception("AI cleanup failed – keeping original text")
+            return text
+        from postprocess import guard_cleanup
+        return guard_cleanup(text, cleaned)
+
+    def _ai_local_chat(self, text: str) -> str:
+        import requests
+
+        from postprocess import build_cleanup_prompt
+        model = self._settings.get("ai_model") or "llama3.2"
+        url = self._settings.get("ai_local_url") or \
+            "http://localhost:11434/api/chat"
+        payload = {
+            "model": model, "stream": False,
+            "options": {"temperature": 0},
+            "messages": [
+                {"role": "system", "content": build_cleanup_prompt()},
+                {"role": "user", "content": text},
+            ],
+        }
+        resp = requests.post(url, json=payload, timeout=60)
+        resp.raise_for_status()
+        return resp.json().get("message", {}).get("content", "")
+
+    def _ai_cloud_chat(self, text: str) -> str:
+        import requests
+
+        from postprocess import build_cleanup_prompt
+        base_url, _style, _model, api_key = self._cloud_config()
+        if not base_url or not api_key:
+            raise RuntimeError("cloud AI not configured")
+        model = self._settings.get("ai_model") or "gpt-4o-mini"
+        payload = {
+            "model": model, "temperature": 0,
+            "messages": [
+                {"role": "system", "content": build_cleanup_prompt()},
+                {"role": "user", "content": text},
+            ],
+        }
+        resp = requests.post(
+            f"{base_url}/chat/completions", json=payload,
+            headers={"Authorization": f"Bearer {api_key}"}, timeout=60)
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
 
     # ------------------------------------------------------------------
     # Text insertion

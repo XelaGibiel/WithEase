@@ -105,6 +105,9 @@ class Editor:
         self._pending: dict | None = None      # deferred multi-match op
         self._last_insert: tuple[int, int] | None = None
         self._awaiting_correction = False
+        # (misheard, spoken) of the most recent selection-replacement, for the
+        # error memory to learn from; cleared once read.
+        self.last_correction: tuple[str, str] | None = None
 
     # -- helpers --------------------------------------------------------
 
@@ -137,12 +140,20 @@ class Editor:
         if not text:
             return ActionResult("info", message="leer")
         cur = self.te.textCursor()
+        was_correction = self._awaiting_correction
         self._awaiting_correction = False
+        self.last_correction = None
         if cur.hasSelection():
-            # Replacing a selection = a correction: strip the sentence
-            # punctuation Whisper tends to append to a single spoken word, so
-            # "Testen." doesn't drop a stray period into the middle of a line.
+            # Replacing a selection: strip the sentence punctuation Whisper
+            # tends to append to a single spoken word, so "Testen." doesn't drop
+            # a stray period into the middle of a line.
             text = text.rstrip(" .,;:!?…") or text
+            old = cur.selectedText().strip()
+            # Only *correction commands* ("korrigiere …", "ersetze …") teach the
+            # error memory – a plain "markiere …" edit must not, so quick edits
+            # can't pollute what the memory learns.
+            if old and was_correction:
+                self.last_correction = (old, text)
         else:
             # Smart spacing: add a leading space between words.
             prev = self._text()[:cur.position()]
@@ -211,6 +222,7 @@ class Editor:
             self._set_cursor(start)
         elif op == "replace":
             self._set_cursor(end, start)
+            self._awaiting_correction = True   # "ersetze A durch B" is a correction
             return self.insert_dictation(extra.get("to", ""))
         return ActionResult("ok")
 

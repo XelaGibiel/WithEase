@@ -113,18 +113,20 @@ class DictationWindow(QWidget):
     """Floating dictation buffer with voice-driven editing and a history."""
 
     _transcript_sig = Signal(str, str)   # (text, mode)
-    _state_sig = Signal(str)
+    _state_sig = Signal(str, str)        # (state, mode-label)
     _open_sig = Signal()
 
     def __init__(self, on_insert: Callable[[str], None] | None = None,
                  on_copy: Callable[[str], None] | None = None,
                  on_history_changed: Callable[[list[str]], None] | None = None,
+                 on_correction: Callable[[str, str], None] | None = None,
                  history: list[str] | None = None,
                  t: Callable[[str], str] | None = None) -> None:
         super().__init__(parent=None)
         self._on_insert = on_insert or (lambda _txt: None)
         self._on_copy = on_copy or (lambda _txt: None)
         self._on_history_changed = on_history_changed or (lambda _items: None)
+        self._on_correction = on_correction or (lambda _old, _new: None)
         self._tr = t or (lambda s: s)
         self._spell_mode = False
 
@@ -224,8 +226,8 @@ class DictationWindow(QWidget):
         """Feed a recognised utterance (safe to call from a worker thread)."""
         self._transcript_sig.emit(text, mode)
 
-    def set_state(self, state: str) -> None:
-        self._state_sig.emit(state)
+    def set_state(self, state: str, mode: str = "") -> None:
+        self._state_sig.emit(state, mode)
 
     def request_open(self) -> None:
         """Show the window (safe to call from a worker thread)."""
@@ -241,8 +243,10 @@ class DictationWindow(QWidget):
 
     # -- main-thread slots ---------------------------------------------
 
-    def _apply_state(self, state: str) -> None:
+    def _apply_state(self, state: str, mode: str = "") -> None:
         label, colour = _STATE.get(state, _STATE["idle"])
+        if mode and state in ("recording", "transcribing"):
+            label = f"{label}   ·   {mode}"
         self._status.setText(label)
         self._status.setStyleSheet(
             f"font-weight: bold; font-size: larger; color: {colour};")
@@ -254,6 +258,7 @@ class DictationWindow(QWidget):
             word = cde.spell_to_text(text)
             if word:
                 self._editor.insert_dictation(word)
+                self._forward_correction()
                 self._report(text, f"buchstabiert → {word}")
             else:
                 self._report(text, "nichts erkannt")
@@ -262,6 +267,7 @@ class DictationWindow(QWidget):
         # Dictation key (or explicit text mode): never interpret as a command.
         if mode == "text":
             self._editor.insert_dictation(text)
+            self._forward_correction()
             self._clear_marks()
             self._report(text, "als Text eingefügt")
             return
@@ -273,6 +279,7 @@ class DictationWindow(QWidget):
                 self._report(text, "Befehl nicht erkannt")
                 return
             self._editor.insert_dictation(text)
+            self._forward_correction()
             self._clear_marks()
             self._report(text, "als Text eingefügt")
             return
@@ -298,12 +305,14 @@ class DictationWindow(QWidget):
             word = cde.spell_to_text(cmd.data.get("text", ""))
             if word:
                 self._editor.insert_dictation(word)
+                self._forward_correction()
                 self._report(text, f"buchstabiert → {word}")
             else:
                 self._report(text, "nichts erkannt")
             return
 
         res = self._editor.apply(cmd)
+        self._forward_correction()      # "ersetze A durch B" learns here too
         if res.status == "ambiguous" and res.matches:
             legend = self._mark_candidates(res.matches)
             self._report(text, legend)
@@ -408,6 +417,13 @@ class DictationWindow(QWidget):
         # The window is reusable: hide + clear instead of destroying it.
         event.ignore()
         self._close_and_clear()
+
+    def _forward_correction(self) -> None:
+        """If the last edit replaced a word, let the error memory learn it."""
+        pair = self._editor.last_correction
+        if pair:
+            self._editor.last_correction = None
+            self._on_correction(pair[0], pair[1])
 
     def _set_hint(self, msg: str) -> None:
         self._hint.setText(msg or "")

@@ -152,6 +152,52 @@ def test_history_reload(app):
     assert win.text() == "Erster Text"
 
 
+def test_correct_command_is_forwarded(app):
+    learned = []
+    win = dw.DictationWindow(
+        on_correction=lambda old, new: learned.append((old, new)))
+    win.handle_transcript("Hallo Welt", "text")
+    win.handle_transcript("korrigiere Welt", "command")   # explicit correction
+    win.handle_transcript("Erde", "text")
+    app.processEvents()
+    assert win.text() == "Hallo Erde"
+    assert learned == [("Welt", "Erde")]
+
+
+def test_marking_then_respeak_does_not_learn(app):
+    learned = []
+    win = dw.DictationWindow(
+        on_correction=lambda old, new: learned.append((old, new)))
+    win.handle_transcript("Hallo Welt", "text")
+    win.handle_transcript("markiere Welt", "command")     # just a quick edit
+    win.handle_transcript("Erde", "text")
+    app.processEvents()
+    assert win.text() == "Hallo Erde"
+    assert learned == []                                   # must NOT learn
+
+
+def test_replace_command_forwards_correction(app):
+    learned = []
+    win = dw.DictationWindow(
+        on_correction=lambda old, new: learned.append((old, new)))
+    win.handle_transcript("Ich mag Katzen", "text")
+    win.handle_transcript("ersetze Katzen durch Hunde", "command")
+    app.processEvents()
+    assert win.text() == "Ich mag Hunde"
+    assert learned == [("Katzen", "Hunde")]
+
+
+def test_state_shows_mode(app):
+    win, _, _ = make(app)
+    win.set_state("recording", "Befehl")
+    app.processEvents()
+    assert "Aufnahme" in win._status.text()
+    assert "Befehl" in win._status.text()
+    win.set_state("transcribing", "Diktat")
+    app.processEvents()
+    assert "Diktat" in win._status.text()
+
+
 def test_state_indicator_updates(app):
     win, _, _ = make(app)
     win.set_state("recording")
