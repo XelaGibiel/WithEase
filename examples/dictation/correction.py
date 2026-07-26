@@ -40,7 +40,10 @@ def _match_case(src: str, value: str) -> str:
 class ErrorMemory:
     """Learns misheard→correct word substitutions and applies them."""
 
-    def __init__(self, data: dict | None = None, threshold: int = 2) -> None:
+    def __init__(self, data: dict | None = None, threshold: int = 1) -> None:
+        # threshold = how many identical corrections activate a substitution.
+        # 1 = learn immediately (we only learn from explicit correction commands
+        # anyway, so a single correction is already a deliberate signal).
         self._threshold = max(1, int(threshold))
         self._active: dict[str, str] = {}          # folded_misheard -> correct
         self._candidates: dict[str, dict] = {}     # folded_misheard -> {to,count}
@@ -103,6 +106,15 @@ class ErrorMemory:
         self._active.pop(key, None)
         self._candidates.pop(key, None)
 
+    def set_target(self, key: str, value: str) -> None:
+        """Edit the correct value of a learned substitution (folded key)."""
+        value = (value or "").strip()
+        if not key or not value:
+            return
+        self._active[key] = value
+        if key in self._candidates:
+            self._candidates[key]["to"] = value
+
     def clear(self) -> None:
         self._active.clear()
         self._candidates.clear()
@@ -115,7 +127,13 @@ class ErrorMemory:
         }
 
     def from_dict(self, data: dict) -> None:
-        self._threshold = max(1, int(data.get("threshold", self._threshold)))
+        # Keep the constructor's threshold (do not resurrect an old stored one),
+        # so changing the default takes effect for existing users too.
         self._active = dict(data.get("active", {}))
         self._candidates = {k: dict(v)
                             for k, v in data.get("candidates", {}).items()}
+        # Promote any candidate that already meets the (possibly lowered)
+        # threshold – so earlier corrections show up after the default changed.
+        for key, cand in self._candidates.items():
+            if cand.get("count", 0) >= self._threshold:
+                self._active.setdefault(key, cand["to"])

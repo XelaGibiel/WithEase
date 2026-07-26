@@ -8,12 +8,27 @@ sys.path.insert(0, os.path.join(
 import correction as co  # noqa: E402
 
 
-def test_learns_after_threshold_and_applies():
+def test_default_learns_immediately():
+    mem = co.ErrorMemory()                             # default threshold = 1
+    assert mem.learn("Kaser", "Cursor") is True        # active after 1 correction
+    assert mem.apply("Kaser vor Haus") == "Cursor vor Haus"
+
+
+def test_higher_threshold_waits():
     mem = co.ErrorMemory(threshold=2)
     assert mem.learn("Kaser", "Cursor") is False       # 1st time: candidate
     assert mem.apply("Kaser vor Haus") == "Kaser vor Haus"
     assert mem.learn("Kaser", "Cursor") is True        # 2nd time: now active
     assert mem.apply("Kaser vor Haus") == "Cursor vor Haus"
+
+
+def test_promotes_stored_candidate_on_load():
+    # A correction captured earlier (candidate, count 1) becomes active once
+    # loaded under the default threshold of 1.
+    data = {"active": {}, "candidates": {"kaser": {"to": "Cursor", "count": 1}}}
+    mem = co.ErrorMemory(data)
+    assert mem.apply("Kaser") == "Cursor"
+    assert mem.substitutions() == {"kaser": "Cursor"}
 
 
 def test_case_is_matched():
@@ -48,6 +63,16 @@ def test_remove_forgets_active_and_candidate():
     mem.remove("kaser")                      # folded key
     assert mem.apply("Kaser") == "Kaser"
     assert mem.substitutions() == {}
+
+
+def test_set_target_edits_substitution():
+    mem = co.ErrorMemory()
+    mem.learn("kaser", "Cursor")
+    mem.set_target("kaser", "Cursor vor")
+    assert mem.substitutions() == {"kaser": "Cursor vor"}
+    assert mem.apply("kaser") == "Cursor vor"
+    mem.set_target("kaser", "")          # empty ignored
+    assert mem.substitutions() == {"kaser": "Cursor vor"}
 
 
 def test_persistence_roundtrip():

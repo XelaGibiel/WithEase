@@ -1,9 +1,15 @@
 """Pop-out list editors for the glossary and the error memory.
 
 A small, reusable dialog: an optional "add" field on top, then the entries
-listed one per row, each with an "✕" button to remove it.  Decoupled via
-callbacks (``rows_provider`` / ``on_add`` / ``on_remove`` / ``on_clear``) so it
-is unit-testable offscreen without the rest of the module.
+listed one per row.  Each row can show a static label, an editable value field
+and an "✕" button to remove it.  Decoupled via callbacks (``rows_provider`` /
+``on_add`` / ``on_remove`` / ``on_edit`` / ``on_clear``) so it is unit-testable
+offscreen without the rest of the module.
+
+Rows are ``(key, label, value)``:
+  * ``key``    – stable identifier passed back to the callbacks
+  * ``label``  – static text shown before the value (e.g. "kaser  →"); may be ""
+  * ``value``  – the editable text (when ``on_edit`` is set) or plain text
 """
 from __future__ import annotations
 
@@ -22,16 +28,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+_READABLE = "color: palette(windowText);"
+
 
 class ListEditorDialog(QDialog):
-    """Add/remove editor for a list of (display, key) rows."""
+    """Add / edit / remove editor for a list of ``(key, label, value)`` rows."""
 
     def __init__(
         self,
         title: str,
-        rows_provider: Callable[[], list[tuple[str, str]]],
+        rows_provider: Callable[[], list[tuple[str, str, str]]],
         on_remove: Callable[[str], None],
         on_add: Callable[[str], None] | None = None,
+        on_edit: Callable[[str, str], None] | None = None,
         add_placeholder: str = "",
         add_label: str = "Hinzufügen",
         intro: str = "",
@@ -42,10 +51,11 @@ class ListEditorDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.resize(440, 480)
+        self.resize(460, 500)
         self._rows_provider = rows_provider
         self._on_remove = on_remove
         self._on_add = on_add
+        self._on_edit = on_edit
         self._on_clear = on_clear
         self._empty_text = empty_text
 
@@ -55,7 +65,7 @@ class ListEditorDialog(QDialog):
         if intro:
             lbl = QLabel(intro)
             lbl.setWordWrap(True)
-            lbl.setStyleSheet("color: palette(mid);")
+            lbl.setStyleSheet(_READABLE)
             layout.addWidget(lbl)
 
         if on_add is not None:
@@ -98,20 +108,46 @@ class ListEditorDialog(QDialog):
                 item.setFlags(Qt.ItemFlag.NoItemFlags)
                 self._list.addItem(item)
             return
-        for display, key in rows:
+        # A single width for the left "key" column so keys, arrows and value
+        # fields line up in columns across all rows.
+        labels = [lb for _k, lb, _v in rows if lb]
+        key_width = 0
+        if labels:
+            fm = self.fontMetrics()
+            key_width = min(220, max(fm.horizontalAdvance(x) for x in labels) + 8)
+        for key, label, value in rows:
             item = QListWidgetItem()
             self._list.addItem(item)
-            widget = self._row_widget(display, key)
+            widget = self._row_widget(key, label, value, key_width)
             item.setSizeHint(widget.sizeHint())
             self._list.setItemWidget(item, widget)
 
-    def _row_widget(self, display: str, key: str) -> QWidget:
+    def _row_widget(self, key: str, label: str, value: str,
+                    key_width: int = 0) -> QWidget:
         widget = QWidget()
         row = QHBoxLayout(widget)
         row.setContentsMargins(6, 2, 6, 2)
-        label = QLabel(display)
-        label.setWordWrap(True)
-        row.addWidget(label, 1)
+        row.setSpacing(8)
+        if label:
+            lbl = QLabel(label)
+            lbl.setStyleSheet(_READABLE)
+            if key_width:
+                lbl.setFixedWidth(key_width)
+            row.addWidget(lbl)
+            arrow = QLabel("→")
+            arrow.setStyleSheet(_READABLE)
+            row.addWidget(arrow)
+        if self._on_edit is not None:
+            field = QLineEdit(value)
+            field.setStyleSheet(_READABLE)
+            field.editingFinished.connect(
+                lambda k=key, f=field: self._edit(k, f.text()))
+            row.addWidget(field, 1)
+        else:
+            text = QLabel(value)
+            text.setWordWrap(True)
+            text.setStyleSheet(_READABLE)
+            row.addWidget(text, 1)
         remove = QPushButton("✕")
         remove.setFixedWidth(30)
         remove.setToolTip("Entfernen")
@@ -128,6 +164,11 @@ class ListEditorDialog(QDialog):
         if text:
             self._on_add(text)
             self._input.clear()
+            self._reload()
+
+    def _edit(self, key: str, new_value: str) -> None:
+        if self._on_edit is not None:
+            self._on_edit(key, new_value)
             self._reload()
 
     def _remove(self, key: str) -> None:

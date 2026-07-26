@@ -282,10 +282,10 @@ _t = _lang.t
 
 
 # Theme-aware, self-contained label styles (no dependency on the core theme
-# module): palette(mid) follows light/dark, relative font sizes follow the
-# global font-size setting.
+# module).  Uses the high-contrast text colour (palette(mid) was too dark to
+# read on the dark theme); the smaller font keeps hints visually secondary.
 def _hint_style() -> str:
-    return "color: palette(mid); font-size: smaller;"
+    return "color: palette(windowText); font-size: smaller;"
 
 
 def _warn_style() -> str:
@@ -683,7 +683,7 @@ class DictationSettingsWidget(QWidget):
         form.addRow(_t("hotkey.command"), self._command_hotkey)
         _cmd_hint = QLabel(_t("hotkey.command.hint"))
         _cmd_hint.setWordWrap(True)
-        _cmd_hint.setStyleSheet("color: palette(mid); font-size: 11px;")
+        _cmd_hint.setStyleSheet(_hint_style())
         form.addRow("", _cmd_hint)
 
         self._mode = QComboBox()
@@ -810,7 +810,7 @@ class DictationSettingsWidget(QWidget):
         # Glossary – edited in its own pop-out window.
         gloss_row = QHBoxLayout()
         self._glossary_summary = QLabel(self._glossary_summary_text())
-        self._glossary_summary.setStyleSheet("color: palette(mid);")
+        self._glossary_summary.setStyleSheet(_hint_style())
         self._glossary_summary.setToolTip(_t("glossary.hint"))
         gloss_row.addWidget(self._glossary_summary, 1)
         gloss_edit = QPushButton(_t("edit"))
@@ -821,7 +821,7 @@ class DictationSettingsWidget(QWidget):
         # Error memory – edited in its own pop-out window.
         mem_row = QHBoxLayout()
         self._memory_summary_label = QLabel(self._memory_summary())
-        self._memory_summary_label.setStyleSheet("color: palette(mid);")
+        self._memory_summary_label.setStyleSheet(_hint_style())
         self._memory_summary_label.setToolTip(_t("memory.hint"))
         mem_row.addWidget(self._memory_summary_label, 1)
         mem_edit = QPushButton(_t("edit"))
@@ -837,7 +837,7 @@ class DictationSettingsWidget(QWidget):
         form.addRow(_t("ai"), self._ai_enable)
         _ai_hint = QLabel(_t("ai.hint"))
         _ai_hint.setWordWrap(True)
-        _ai_hint.setStyleSheet("color: palette(mid); font-size: 11px;")
+        _ai_hint.setStyleSheet(_hint_style())
         form.addRow("", _ai_hint)
         self._ai_backend = QComboBox()
         self._ai_backend.addItem(_t("ai.local"), "local")
@@ -939,9 +939,11 @@ class DictationSettingsWidget(QWidget):
         from settings_dialogs import ListEditorDialog
         dlg = ListEditorDialog(
             title=_t("glossary"),
-            rows_provider=lambda: [(w, w) for w in self._module.glossary_words()],
+            rows_provider=lambda: [
+                (w, "", w) for w in self._module.glossary_words()],
             on_remove=self._module.remove_glossary_word,
             on_add=self._module.add_glossary_word,
+            on_edit=self._module.edit_glossary_word,
             add_placeholder=_t("glossary.add"),
             add_label=_t("add"),
             intro=_t("glossary.hint"),
@@ -955,9 +957,10 @@ class DictationSettingsWidget(QWidget):
         dlg = ListEditorDialog(
             title=_t("memory"),
             rows_provider=lambda: [
-                (f"{k}  →  {v}", k)
+                (k, k, v)
                 for k, v in self._module._memory().substitutions().items()],
             on_remove=self._module.remove_correction,
+            on_edit=self._module.edit_correction,
             on_clear=self._module.reset_memory,
             clear_label=_t("memory.reset"),
             intro=_t("memory.hint"),
@@ -1264,6 +1267,12 @@ class DictationModule(BaseModule):
         self._settings["error_memory"] = mem.to_dict()
         self.on_settings_changed()
 
+    def edit_correction(self, key: str, new_value: str) -> None:
+        mem = self._memory()
+        mem.set_target(key, new_value)
+        self._settings["error_memory"] = mem.to_dict()
+        self.on_settings_changed()
+
     def reset_memory(self) -> None:
         mem = self._memory()
         mem.clear()
@@ -1517,6 +1526,19 @@ class DictationModule(BaseModule):
         words = [w for w in self.glossary_words()
                  if w.casefold() != (word or "").casefold()]
         self._settings["glossary"] = ", ".join(words)
+        self.on_settings_changed()
+
+    def edit_glossary_word(self, old: str, new: str) -> None:
+        new = (new or "").strip()
+        if not new:
+            return      # empty edit: keep the old word (use ✕ to remove)
+        out, seen = [], set()
+        for w in self.glossary_words():
+            repl = new if w.casefold() == (old or "").casefold() else w
+            if repl.casefold() not in seen:
+                seen.add(repl.casefold())
+                out.append(repl)
+        self._settings["glossary"] = ", ".join(out)
         self.on_settings_changed()
 
     def _initial_prompt(self) -> str:

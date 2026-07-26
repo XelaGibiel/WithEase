@@ -152,16 +152,84 @@ def test_history_reload(app):
     assert win.text() == "Erster Text"
 
 
-def test_correct_command_is_forwarded(app):
+def test_correction_window_opens_speak_and_confirm(app):
     learned = []
     win = dw.DictationWindow(
         on_correction=lambda old, new: learned.append((old, new)))
     win.handle_transcript("Hallo Welt", "text")
-    win.handle_transcript("korrigiere Welt", "command")   # explicit correction
-    win.handle_transcript("Erde", "text")
+    win.handle_transcript("korrigiere Welt", "command")
     app.processEvents()
+    assert win._correction_dialog is not None            # correction window open
+    assert win._correction_dialog.result_text() == "Welt"  # prefilled with target
+    win.handle_transcript("Erde", "text")                # spoken → fills the field
+    app.processEvents()
+    assert win._correction_dialog.result_text() == "Erde"
+    win.handle_transcript("übernehmen", "command")       # confirm hands-free
+    app.processEvents()
+    assert win._correction_dialog is None
     assert win.text() == "Hallo Erde"
     assert learned == [("Welt", "Erde")]
+
+
+def test_correction_window_spoken_word_has_no_trailing_period(app):
+    win, _, _ = make(app)
+    win.handle_transcript("Ich sehe ein Haus", "text")
+    win.handle_transcript("korrigiere Haus", "command")
+    app.processEvents()
+    win.handle_transcript("Auto.", "text")          # Whisper appended a period
+    app.processEvents()
+    assert win._correction_dialog.result_text() == "Auto"   # no trailing period
+    win.handle_transcript("übernehmen", "command")
+    app.processEvents()
+    assert win.text() == "Ich sehe ein Auto"
+
+
+def test_correction_window_typed_self_input(app):
+    learned = []
+    win = dw.DictationWindow(
+        on_correction=lambda old, new: learned.append((old, new)))
+    win.handle_transcript("Ich sehe ein Haus", "text")
+    win.handle_transcript("korrigiere Haus", "command")
+    app.processEvents()
+    dlg = win._correction_dialog
+    assert dlg is not None
+    dlg._field.setText("Auto")       # user types the correction (self-input)
+    dlg._apply()                     # clicks "Übernehmen"
+    app.processEvents()
+    assert win._correction_dialog is None
+    assert win.text() == "Ich sehe ein Auto"
+    assert learned == [("Haus", "Auto")]
+
+
+def test_correct_das_uses_manual_selection(app):
+    win, _, _ = make(app)
+    win.handle_transcript("Ein schönes Haus", "text")
+    app.processEvents()
+    # simulate a manual (mouse) selection of just "schönes"
+    cur = win._edit.textCursor()
+    cur.setPosition(4)
+    cur.setPosition(11, dw.QTextCursor.MoveMode.KeepAnchor)
+    win._edit.setTextCursor(cur)
+    assert cur.selectedText() == "schönes"
+    win.handle_transcript("korrigiere das", "command")
+    app.processEvents()
+    assert win._correction_dialog is not None
+    assert win._correction_dialog.result_text() == "schönes"   # only that word
+    win._correction_dialog._field.setText("kleines")
+    win._correction_dialog._apply()
+    app.processEvents()
+    assert win.text() == "Ein kleines Haus"
+
+
+def test_correction_window_cancel_keeps_text(app):
+    win, _, _ = make(app)
+    win.handle_transcript("Hallo Welt", "text")
+    win.handle_transcript("korrigiere Welt", "command")
+    app.processEvents()
+    win.handle_transcript("abbrechen", "command")
+    app.processEvents()
+    assert win._correction_dialog is None
+    assert win.text() == "Hallo Welt"                    # unchanged
 
 
 def test_marking_then_respeak_does_not_learn(app):

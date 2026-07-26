@@ -22,7 +22,7 @@ def test_add_and_remove_rows(app):
     data = ["Apfel"]
     dlg = sd.ListEditorDialog(
         title="Test",
-        rows_provider=lambda: [(w, w) for w in data],
+        rows_provider=lambda: [(w, "", w) for w in data],
         on_remove=lambda k: data.remove(k),
         on_add=lambda t: data.append(t),
         empty_text="leer")
@@ -34,6 +34,19 @@ def test_add_and_remove_rows(app):
     dlg._remove("Apfel")
     assert data == ["Birne"]
     assert dlg._list.count() == 1
+
+
+def test_edit_row_value(app):
+    # a "misheard -> correct" style store, edit the correct value
+    store = {"kaser": "Cursor"}
+    dlg = sd.ListEditorDialog(
+        title="Test",
+        rows_provider=lambda: [(k, f"{k}  ->", v) for k, v in store.items()],
+        on_remove=lambda k: store.pop(k, None),
+        on_edit=lambda k, v: store.__setitem__(k, v),
+        empty_text="leer")
+    dlg._edit("kaser", "Cursor vor")
+    assert store == {"kaser": "Cursor vor"}
 
 
 def test_empty_text_shown_when_no_rows(app):
@@ -50,7 +63,7 @@ def test_clear_all(app):
     data = ["a", "b", "c"]
     dlg = sd.ListEditorDialog(
         title="Test",
-        rows_provider=lambda: [(w, w) for w in data],
+        rows_provider=lambda: [(w, "", w) for w in data],
         on_remove=lambda k: data.remove(k),
         on_clear=data.clear,
         empty_text="leer")
@@ -63,6 +76,6 @@ def test_clear_all(app):
 def test_no_add_field_when_on_add_missing(app):
     dlg = sd.ListEditorDialog(
         title="Test",
-        rows_provider=lambda: [("x → y", "x")],
+        rows_provider=lambda: [("x", "x  ->", "y")],
         on_remove=lambda _k: None)
     assert dlg._input is None

@@ -406,10 +406,13 @@ class Editor:
     # -- correction / history ------------------------------------------
 
     def _do_correct_last(self, _d):
-        if not self._last_insert:
-            return ActionResult("info", message="nichts zu korrigieren")
-        s, e = self._last_insert
-        self._set_cursor(e, s)
+        # If the user pre-selected text (e.g. with the mouse), correct exactly
+        # that; otherwise fall back to the last inserted dictation.
+        if not self.te.textCursor().hasSelection():
+            if not self._last_insert:
+                return ActionResult("info", message="nichts zu korrigieren")
+            s, e = self._last_insert
+            self._set_cursor(e, s)
         self._awaiting_correction = True
         return ActionResult("awaiting_dictation", message="sprich die Korrektur")
 

@@ -32,8 +32,10 @@ from PySide6.QtGui import (
     QTextCursor,
 )
 from PySide6.QtWidgets import (
+    QDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPlainTextEdit,
@@ -109,6 +111,100 @@ class _BadgeOverlay(QWidget):
         painter.end()
 
 
+class CorrectionDialog(QDialog):
+    """A Dragon-style correction window.
+
+    Shows the mis-recognised text and an editable field the user can *type*
+    (self-input, so a repeated mis-hearing is impossible) or re-speak into.
+    Fully voice-operable: while it is open, spoken text fills the field, and
+    "übernehmen" / "abbrechen" confirm or cancel hands-free."""
+
+    _CONFIRM = {"übernehmen", "uebernehmen", "fertig", "ok", "okay", "passt",
+                "korrigieren", "korrektur übernehmen"}
+    _CANCEL = {"abbrechen", "abbruch", "verwerfen", "schließen", "schliessen"}
+
+    def __init__(self, current_text: str,
+                 on_apply: Callable[[str], None],
+                 on_cancel: Callable[[], None],
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._on_apply = on_apply
+        self._on_cancel = on_cancel
+        self._done = False
+        self.setWindowTitle("Korrektur")
+        self.setMinimumWidth(420)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.addWidget(QLabel("Bisher erkannt:"))
+        old = QLabel(current_text or "—")
+        old.setWordWrap(True)
+        old.setStyleSheet("font-weight: bold; color: #C62828;")
+        layout.addWidget(old)
+
+        layout.addWidget(QLabel("Richtige Version (tippen oder sprechen):"))
+        self._field = QLineEdit(current_text)
+        self._field.selectAll()
+        self._field.returnPressed.connect(self._apply)
+        layout.addWidget(self._field)
+
+        hint = QLabel(
+            "Tippe die Korrektur, oder drücke die Diktier-Taste und sprich die "
+            "richtige Version. Dann „Übernehmen“ (oder sag „übernehmen“ / "
+            "„abbrechen“).")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: palette(windowText);")
+        layout.addWidget(hint)
+
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel_btn = QPushButton("Abbrechen")
+        cancel_btn.clicked.connect(self._cancel)
+        row.addWidget(cancel_btn)
+        apply_btn = QPushButton("Übernehmen")
+        apply_btn.setDefault(True)
+        apply_btn.clicked.connect(self._apply)
+        row.addWidget(apply_btn)
+        layout.addLayout(row)
+
+    # -- voice routing (called by the window while this dialog is open) --
+
+    def set_spoken(self, text: str) -> None:
+        # Whisper appends a sentence period to a single spoken word ("Erde.");
+        # a correction word should not carry it.
+        self._field.setText((text or "").strip().rstrip(" .,;:!?…"))
+        self._field.selectAll()
+
+    def handle_voice(self, text: str) -> None:
+        key = (text or "").strip().lower().strip(" .,!?…")
+        if key in self._CONFIRM:
+            self._apply()
+        elif key in self._CANCEL:
+            self._cancel()
+        else:
+            self.set_spoken(text)
+
+    def result_text(self) -> str:
+        return self._field.text()
+
+    # -- outcome --------------------------------------------------------
+
+    def _apply(self) -> None:
+        if self._done:
+            return
+        self._done = True
+        text = self._field.text().strip()
+        self.close()
+        self._on_apply(text)
+
+    def _cancel(self) -> None:
+        if self._done:
+            return
+        self._done = True
+        self.close()
+        self._on_cancel()
+
+
 class DictationWindow(QWidget):
     """Floating dictation buffer with voice-driven editing and a history."""
 
@@ -129,6 +225,7 @@ class DictationWindow(QWidget):
         self._on_correction = on_correction or (lambda _old, _new: None)
         self._tr = t or (lambda s: s)
         self._spell_mode = False
+        self._correction_dialog: CorrectionDialog | None = None
 
         self.setWindowTitle("WithEase – Diktieren")
         self.setWindowFlags(
@@ -165,7 +262,7 @@ class DictationWindow(QWidget):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(4)
         hist_label = QLabel("Verlauf (zum Laden anklicken)")
-        hist_label.setStyleSheet("color: palette(mid);")
+        hist_label.setStyleSheet("color: palette(windowText);")
         right_layout.addWidget(hist_label)
         self._history = QListWidget()
         self._history.setWordWrap(True)
@@ -252,6 +349,12 @@ class DictationWindow(QWidget):
             f"font-weight: bold; font-size: larger; color: {colour};")
 
     def _on_transcript(self, text: str, mode: str = "auto") -> None:
+        # Correction window open: route speech into it (fill field / confirm).
+        if self._correction_dialog is not None:
+            self._correction_dialog.handle_voice(text)
+            self._report(text, "→ Korrekturfenster")
+            return
+
         # Spell mode: the next utterance is a spelled-out word (any key).
         if self._spell_mode:
             self._spell_mode = False
@@ -313,7 +416,12 @@ class DictationWindow(QWidget):
 
         res = self._editor.apply(cmd)
         self._forward_correction()      # "ersetze A durch B" learns here too
-        if res.status == "ambiguous" and res.matches:
+        if res.status == "awaiting_dictation":
+            # "korrigiere …" selected the target → open the correction window.
+            self._clear_marks()
+            self._open_correction(self._edit.textCursor().selectedText())
+            self._report(text, "Korrekturfenster geöffnet")
+        elif res.status == "ambiguous" and res.matches:
             legend = self._mark_candidates(res.matches)
             self._report(text, legend)
         else:
@@ -424,6 +532,34 @@ class DictationWindow(QWidget):
         if pair:
             self._editor.last_correction = None
             self._on_correction(pair[0], pair[1])
+
+    # -- Dragon-style correction window --------------------------------
+
+    def _open_correction(self, old_text: str) -> None:
+        dlg = CorrectionDialog(
+            old_text or "", on_apply=self._apply_correction,
+            on_cancel=self._cancel_correction, parent=self)
+        self._correction_dialog = dlg
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        dlg._field.setFocus()
+
+    def _apply_correction(self, new_text: str) -> None:
+        self._correction_dialog = None
+        new = (new_text or "").strip()
+        if new:
+            # The target is still selected in the buffer → replace it (and learn,
+            # since a correction command set the awaiting-correction flag).
+            self._editor.insert_dictation(new)
+            self._forward_correction()
+            self._set_hint(f"korrigiert zu: {new}")
+        else:
+            self._set_hint("Korrektur abgebrochen")
+
+    def _cancel_correction(self) -> None:
+        self._correction_dialog = None
+        self._set_hint("Korrektur abgebrochen")
 
     def _set_hint(self, msg: str) -> None:
         self._hint.setText(msg or "")
