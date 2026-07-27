@@ -834,6 +834,9 @@ class DictationSettingsWidget(QWidget):
         self._ai_enable.setChecked(bool(self._settings.get("ai_cleanup", False)))
         self._ai_enable.setToolTip(_t("ai.hint"))
         self._ai_enable.toggled.connect(lambda v: self._save("ai_cleanup", v))
+        # „KI läuft"/„KI-Modell" sind nur relevant, wenn die KI-Nachbearbeitung
+        # aktiv ist – sonst ausblenden, damit die Seite ruhig bleibt.
+        self._ai_enable.toggled.connect(lambda _v: self._update_ai_rows())
         form.addRow(_t("ai"), self._ai_enable)
         _ai_hint = QLabel(_t("ai.hint"))
         _ai_hint.setWordWrap(True)
@@ -847,12 +850,15 @@ class DictationSettingsWidget(QWidget):
         self._ai_backend.currentIndexChanged.connect(
             lambda i: self._save("ai_backend", self._ai_backend.itemData(i)))
         form.addRow(_t("ai.backend"), self._ai_backend)
+        self._ai_backend_label = form.labelForField(self._ai_backend)
         self._ai_model = QLineEdit(self._settings.get("ai_model", ""))
         self._ai_model.setPlaceholderText(_t("ai.model.hint"))
         self._ai_model.setToolTip(_t("ai.model.hint"))
         self._ai_model.editingFinished.connect(
             lambda: self._save("ai_model", self._ai_model.text().strip()))
         form.addRow(_t("ai.model"), self._ai_model)
+        self._ai_model_label = form.labelForField(self._ai_model)
+        self._update_ai_rows()      # initial visibility from the checkbox
 
         self._output_mode = QComboBox()
         self._output_mode.addItem(_t("output.window"), "window")
@@ -919,6 +925,7 @@ class DictationSettingsWidget(QWidget):
         outer.addWidget(scroll)
 
         self._on_backend_changed(self._backend.currentIndex())
+        self._update_ai_rows()
         self._update_enabled_state(self._module.enabled)
 
     # ------------------------------------------------------------------
@@ -926,6 +933,14 @@ class DictationSettingsWidget(QWidget):
     def _save(self, key: str, value: Any) -> None:
         self._settings[key] = value
         self._module.on_settings_changed()
+
+    def _update_ai_rows(self) -> None:
+        """Show „KI läuft"/„KI-Modell" only when AI cleanup is enabled."""
+        visible = self._ai_enable.isChecked()
+        for w in (self._ai_backend, getattr(self, "_ai_backend_label", None),
+                  self._ai_model, getattr(self, "_ai_model_label", None)):
+            if w is not None:
+                w.setVisible(visible)
 
     def _glossary_summary_text(self) -> str:
         n = len(self._module.glossary_words())
@@ -939,8 +954,8 @@ class DictationSettingsWidget(QWidget):
         from settings_dialogs import ListEditorDialog
         dlg = ListEditorDialog(
             title=_t("glossary"),
-            rows_provider=lambda: [
-                (w, "", w) for w in self._module.glossary_words()],
+            rows_provider=lambda: [           # newest first
+                (w, "", w) for w in reversed(self._module.glossary_words())],
             on_remove=self._module.remove_glossary_word,
             on_add=self._module.add_glossary_word,
             on_edit=self._module.edit_glossary_word,
@@ -956,9 +971,10 @@ class DictationSettingsWidget(QWidget):
         from settings_dialogs import ListEditorDialog
         dlg = ListEditorDialog(
             title=_t("memory"),
-            rows_provider=lambda: [
+            rows_provider=lambda: [           # newest first
                 (k, k, v)
-                for k, v in self._module._memory().substitutions().items()],
+                for k, v in reversed(
+                    list(self._module._memory().substitutions().items()))],
             on_remove=self._module.remove_correction,
             on_edit=self._module.edit_correction,
             on_clear=self._module.reset_memory,
@@ -1145,9 +1161,14 @@ class DictationModule(BaseModule):
         self._max_timer: threading.Timer | None = None
         self._local_model: Any = None   # lazily loaded faster-whisper model
         self._local_model_name = ""
+        self._last_low_words: list[str] = []   # low-confidence words (heatmap)
         self._indicator: DictationIndicator | None = None
         self._window: Any = None         # DictationWindow (created on the GUI thread)
+        self._window_hwnd: int = 0       # our window's native handle (to exclude)
         self._target_hwnd: int | None = None   # app to paste into on "einfügen"
+        self._reselecting = False        # waiting for the user to pick a target
+        self._reselect_start_fg = 0      # foreground at the start of re-selection
+        self._reselect_timer: Any = None  # QTimer polling for the chosen app
         self._error_memory: Any = None   # ErrorMemory (lazy, from settings)
 
         # Listed in the actions table / favourites / conflict checks; the key
@@ -1231,8 +1252,19 @@ class DictationModule(BaseModule):
                     on_copy=self._set_clipboard,
                     on_history_changed=self._save_history,
                     on_correction=self._learn_correction,
+                    on_suggest=self.suggest_corrections,
+                    on_reselect_target=self.reselect_target,
+                    on_confirm_words=self.confirm_words,
+                    on_geometry_changed=self._save_geometry,
+                    geometry=self._settings.get("win_geo"),
                     history=list(self._settings.get("history", [])),
                     t=_t)
+                # Cache our native handle (on the GUI thread) so target capture
+                # can exclude our own window.
+                try:
+                    self._window_hwnd = int(self._window.winId())
+                except Exception:
+                    self._window_hwnd = 0
             except Exception:
                 _log.exception("dictation window unavailable")
         return self._window
@@ -1279,27 +1311,118 @@ class DictationModule(BaseModule):
         self._settings["error_memory"] = mem.to_dict()
         self.on_settings_changed()
 
+    def direct_correction(self, wrong: str) -> str:
+        """The learned correction for ``wrong`` (whole word), or ""."""
+        out = self._memory().apply(wrong)
+        return out if out and out != wrong else ""
+
+    def suggest_corrections(self, wrong: str) -> list[str]:
+        """Correction-window suggestions from the learned memory + glossary."""
+        from correction import suggest_alternatives
+        out: list[str] = []
+        direct = self.direct_correction(wrong)
+        if direct:
+            out.append(direct)      # a directly learned fix goes first
+        out += suggest_alternatives(wrong, self.glossary_words(), limit=9)
+        return out
+
     def _capture_target(self) -> None:
         """Remember the app that is focused right now (to paste into later).
-        Our window is show-without-activating, so it never steals this focus."""
+
+        Skip our *own* dictation window – otherwise, once it has focus, pressing
+        the key again would capture the window itself and "einfügen" would paste
+        into the wrong place.  In that case we keep the last real target."""
         try:
             import ctypes
             hwnd = ctypes.windll.user32.GetForegroundWindow()
-            self._target_hwnd = hwnd or None
         except Exception:
-            self._target_hwnd = None
+            return
+        if hwnd and hwnd != self._window_hwnd:
+            self._target_hwnd = hwnd
+        if self._window is not None:
+            self._window.set_target(self._target_name())
 
-    def _insert_into_target(self, text: str) -> None:
-        """Paste the finished text into the remembered target application."""
+    def _target_name(self) -> str:
+        """Human-readable name (window title) of the remembered target app."""
+        hwnd = self._target_hwnd
+        if not hwnd:
+            return ""
         try:
-            if self._target_hwnd:
-                import ctypes
-                ctypes.windll.user32.SetForegroundWindow(self._target_hwnd)
+            import ctypes
+            n = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            buf = ctypes.create_unicode_buffer(n + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buf, n + 1)
+            return buf.value.strip()
+        except Exception:
+            return ""
+
+    def reselect_target(self) -> None:
+        """Wait (no time limit) until the user brings another app to the front,
+        then remember it as the paste target.  Escape cancels."""
+        if self._reselecting:
+            return
+        self._reselecting = True
+        try:
+            import ctypes
+            self._reselect_start_fg = ctypes.windll.user32.GetForegroundWindow()
+        except Exception:
+            self._reselect_start_fg = 0
+        if self._window is not None:
+            self._window.set_target("… Ziel-App anklicken (Escape bricht ab)")
+        from PySide6.QtCore import QTimer
+        if self._reselect_timer is None:
+            self._reselect_timer = QTimer()
+            self._reselect_timer.setInterval(250)
+            self._reselect_timer.timeout.connect(self._reselect_poll)
+        self._reselect_timer.start()
+
+    def _reselect_poll(self) -> None:
+        # Cancelled (e.g. via Escape from the hook thread): stop + restore.
+        if not self._reselecting:
+            if self._reselect_timer is not None:
+                self._reselect_timer.stop()
+            if self._window is not None:
+                self._window.set_target(self._target_name())
+            return
+        try:
+            import ctypes
+            cur = ctypes.windll.user32.GetForegroundWindow()
+        except Exception:
+            return
+        # Capture the first *different*, non-own window the user switches to.
+        if cur and cur != self._window_hwnd and cur != self._reselect_start_fg:
+            self._target_hwnd = cur
+            self._reselecting = False
+            if self._reselect_timer is not None:
+                self._reselect_timer.stop()
+            if self._window is not None:
+                self._window.set_target(self._target_name())
+
+    def _save_geometry(self, geom: list) -> None:
+        self._settings["win_geo"] = list(geom)
+        self.on_settings_changed()
+
+    def _insert_into_target(self, text: str) -> bool:
+        """Paste the finished text into the remembered target application.
+
+        Returns ``True`` on success.  If the target is gone/invalid, the text is
+        left on the clipboard instead (``False``) so the user can paste it."""
+        valid = False
+        try:
+            import ctypes
+            hwnd = self._target_hwnd
+            valid = bool(hwnd) and bool(ctypes.windll.user32.IsWindow(hwnd))
+            if valid:
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
                 time.sleep(0.05)
         except Exception:
-            pass
-        self._paste_via_clipboard(
-            text, keep=bool(self._settings.get("keep_in_clipboard", False)))
+            valid = False
+        if valid:
+            self._paste_via_clipboard(
+                text, keep=bool(self._settings.get("keep_in_clipboard", False)))
+            return True
+        self._set_clipboard(text)       # fallback: user can press Ctrl+V
+        return False
 
     # ------------------------------------------------------------------
     # Hotkey handling (shared hook)
@@ -1320,6 +1443,9 @@ class DictationModule(BaseModule):
         hold_mode = self._settings.get("mode", "toggle") == "hold"
 
         if is_press:
+            if vk == 0x1B and self._reselecting:
+                self._reselecting = False   # poll (GUI thread) stops + restores
+                return True
             if vk == 0x1B and self._state == "recording":
                 threading.Thread(target=self._abort_recording,
                                  daemon=True).start()
@@ -1480,8 +1606,12 @@ class DictationModule(BaseModule):
         if text:
             if self._window_mode() and self._window is not None:
                 # Route into the dictation window with the key's mode
-                # (text / command / auto).
-                self._window.handle_transcript(text, self._active_mode)
+                # (text / command / auto) + low-confidence words for the heatmap
+                # (already-confirmed words are no longer flagged).
+                confirmed = self._confirmed_set()
+                low = [w for w in self._last_low_words
+                       if w.casefold() not in confirmed]
+                self._window.handle_transcript(text, self._active_mode, low)
             else:
                 self._insert_text(text)
 
@@ -1491,6 +1621,7 @@ class DictationModule(BaseModule):
 
     def transcribe(self, wav_bytes: bytes) -> str:
         """Transcribe WAV audio using the configured backend (blocking)."""
+        self._last_low_words = []
         if self._settings.get("backend", "cloud") == "local":
             return self._transcribe_local(wav_bytes)
         return self._transcribe_cloud(wav_bytes)
@@ -1540,6 +1671,25 @@ class DictationModule(BaseModule):
                 out.append(repl)
         self._settings["glossary"] = ", ".join(out)
         self.on_settings_changed()
+
+    def _confirmed_set(self) -> set[str]:
+        return {w.casefold() for w in self._settings.get("confirmed_words", [])}
+
+    def confirm_words(self, words: list[str]) -> None:
+        """Remember words that were flagged as uncertain but accepted unchanged,
+        so they are no longer marked as low-confidence in future."""
+        cw = list(self._settings.get("confirmed_words", []))
+        have = {w.casefold() for w in cw}
+        changed = False
+        for w in words:
+            w = (w or "").strip()
+            if w and w.casefold() not in have:
+                cw.append(w)
+                have.add(w.casefold())
+                changed = True
+        if changed:
+            self._settings["confirmed_words"] = cw[-1000:]   # keep it bounded
+            self.on_settings_changed()
 
     def _initial_prompt(self) -> str:
         """A German biasing prompt ("dictionary") that keeps Whisper decoding
@@ -1625,6 +1775,17 @@ class DictationModule(BaseModule):
 
     # -- Local (faster-whisper) ------------------------------------------
 
+    def _whisper_device(self) -> tuple[str, str]:
+        """Pick the fastest working backend: GPU float16 if a usable CUDA GPU is
+        present, otherwise CPU with int8 (much faster than float32)."""
+        try:
+            import ctranslate2
+            if ctranslate2.get_cuda_device_count() > 0:
+                return "cuda", "float16"
+        except Exception:
+            pass
+        return "cpu", "int8"
+
     def _transcribe_local(self, wav_bytes: bytes) -> str:
         try:
             from faster_whisper import WhisperModel
@@ -1633,9 +1794,13 @@ class DictationModule(BaseModule):
 
         model_name = self._settings.get("local_model", "base")
         if self._local_model is None or self._local_model_name != model_name:
-            _log.info("loading local whisper model %r …", model_name)
-            self._local_model = WhisperModel(model_name, device="auto",
-                                             compute_type="auto")
+            device, compute_type = self._whisper_device()
+            threads = max(1, (os.cpu_count() or 4) // 2)
+            _log.info("loading local whisper %r on %s/%s (%d threads)",
+                      model_name, device, compute_type, threads)
+            self._local_model = WhisperModel(
+                model_name, device=device, compute_type=compute_type,
+                cpu_threads=threads)
             self._local_model_name = model_name
 
         language = self._local_language()
@@ -1649,10 +1814,19 @@ class DictationModule(BaseModule):
             temperature=0.0,
             condition_on_previous_text=False,
             vad_filter=True,        # skip silence → far fewer hallucinations
+            word_timestamps=True,   # per-word probabilities → confidence heatmap
         )
-        text = " ".join(seg.text.strip() for seg in segments)
+        parts, low = [], []
+        for seg in segments:
+            parts.append(seg.text.strip())
+            for w in (getattr(seg, "words", None) or []):
+                if getattr(w, "probability", 1.0) < 0.55:
+                    token = (w.word or "").strip().strip(" .,;:!?…\"'„“”")
+                    if token:
+                        low.append(token)
+        self._last_low_words = low
         from postprocess import strip_hallucinations
-        return strip_hallucinations(text)
+        return strip_hallucinations(" ".join(parts))
 
     # -- optional AI cleanup (local Ollama / cloud chat) -----------------
 

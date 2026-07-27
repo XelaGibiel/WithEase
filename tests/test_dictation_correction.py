@@ -65,6 +65,23 @@ def test_remove_forgets_active_and_candidate():
     assert mem.substitutions() == {}
 
 
+def test_suggest_alternatives_ranks_by_similarity():
+    pool = ["Haus", "Maus", "Kalender"]
+    out = co.suggest_alternatives("Kaus", pool, limit=5)
+    assert "Haus" in out and "Maus" in out       # edit-distance 1
+    assert "Kalender" not in out                  # too far
+
+
+def test_suggest_alternatives_offers_casing_fix():
+    out = co.suggest_alternatives("haus", ["Haus", "Maus"], limit=5)
+    assert out[0] == "Haus"                       # capitalisation fix ranks top
+    assert "Maus" in out
+
+
+def test_suggest_alternatives_excludes_exact_word():
+    assert "haus" not in co.suggest_alternatives("haus", ["haus", "Haus"])
+
+
 def test_set_target_edits_substitution():
     mem = co.ErrorMemory()
     mem.learn("kaser", "Cursor")

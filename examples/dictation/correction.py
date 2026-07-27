@@ -28,6 +28,54 @@ def _fold(text: str) -> str:
     return "".join(c for c in text if unicodedata.category(c) != "Mn")
 
 
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a or not b:
+        return len(a) or len(b)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1,
+                           prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def suggest_alternatives(wrong: str, pool: list[str],
+                         limit: int = 5) -> list[str]:
+    """Rank ``pool`` words by similarity to ``wrong`` (folded, edit-distance),
+    closest first; drop the exact wrong word and near-misses that are too far;
+    de-duplicate case-insensitively."""
+    wrong = (wrong or "").strip()
+    fw = _fold(wrong)
+    if not fw:
+        return []
+    tol = max(2, len(fw) // 2)
+    scored: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for cand in pool:
+        cand = (cand or "").strip()
+        if not cand or cand == wrong:
+            continue
+        fc = _fold(cand)
+        if not fc or fc in seen:
+            continue
+        if fc == fw:                     # e.g. a capitalisation fix
+            dist = 0
+        elif fc.startswith(fw) or fw.startswith(fc):
+            dist = 1
+        else:
+            dist = _levenshtein(fc, fw)
+            if dist > tol:
+                continue
+        seen.add(fc)
+        scored.append((dist, cand))
+    scored.sort(key=lambda x: (x[0], len(x[1])))
+    return [c for _d, c in scored[:limit]]
+
+
 def _match_case(src: str, value: str) -> str:
     """Give ``value`` the capitalisation pattern of the word it replaces."""
     if src.isupper() and len(src) > 1:

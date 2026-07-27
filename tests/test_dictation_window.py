@@ -201,6 +201,37 @@ def test_correction_window_typed_self_input(app):
     assert learned == [("Haus", "Auto")]
 
 
+def test_correction_window_shows_suggestions_and_pick(app):
+    # module-side suggestion (e.g. learned/glossary) plus buffer/casing
+    win = dw.DictationWindow(on_suggest=lambda wrong: ["Maus"])
+    win.handle_transcript("Ich sehe ein Haus", "text")
+    win.handle_transcript("korrigiere Haus", "command")
+    app.processEvents()
+    dlg = win._correction_dialog
+    assert dlg is not None
+    assert "Maus" in dlg._suggestions
+    win.handle_transcript("nimm eins", "command")   # pick suggestion 1
+    app.processEvents()
+    assert win._correction_dialog is None
+    assert win.text() == "Ich sehe ein Maus"
+
+
+def test_dictation_key_keeps_manual_selection_and_overwrites(app):
+    win, _, _ = make(app)
+    win.handle_transcript("Ein schönes Haus", "text")
+    app.processEvents()
+    cur = win._edit.textCursor()
+    cur.setPosition(4)
+    cur.setPosition(11, dw.QTextCursor.MoveMode.KeepAnchor)   # "schönes"
+    win._edit.setTextCursor(cur)
+    win.open_for_dictation()                    # pressing the dictation key
+    app.processEvents()
+    assert win._edit.textCursor().selectedText() == "schönes"   # kept
+    win.handle_transcript("kleines", "text")    # overwrites the selection
+    app.processEvents()
+    assert win.text() == "Ein kleines Haus"
+
+
 def test_correct_das_uses_manual_selection(app):
     win, _, _ = make(app)
     win.handle_transcript("Ein schönes Haus", "text")
@@ -219,6 +250,20 @@ def test_correct_das_uses_manual_selection(app):
     win._correction_dialog._apply()
     app.processEvents()
     assert win.text() == "Ein kleines Haus"
+
+
+def test_correction_window_closed_via_x_resumes_dictation(app):
+    win, _, _ = make(app)
+    win.handle_transcript("Hallo Welt", "text")
+    win.handle_transcript("korrigiere Welt", "command")
+    app.processEvents()
+    assert win._correction_dialog is not None
+    win._correction_dialog.reject()       # like closing via the window X
+    app.processEvents()
+    assert win._correction_dialog is None  # routing lock released
+    win.handle_transcript("neuer Text", "text")   # must land in the buffer
+    app.processEvents()
+    assert "neuer Text" in win.text()
 
 
 def test_correction_window_cancel_keeps_text(app):
@@ -253,6 +298,93 @@ def test_replace_command_forwards_correction(app):
     app.processEvents()
     assert win.text() == "Ich mag Hunde"
     assert learned == [("Katzen", "Hunde")]
+
+
+def test_insert_fallback_keeps_window_open(app):
+    win = dw.DictationWindow(on_insert=lambda _t: False)   # paste failed
+    win.show()
+    win.handle_transcript("Hallo", "text")
+    win.handle_transcript("einfügen", "command")
+    app.processEvents()
+    assert win.isVisible()                    # stayed open
+    assert win.text() == "Hallo"              # text kept
+    assert "Zwischenablage" in win._hint.text()
+
+
+def test_insert_success_closes(app):
+    win = dw.DictationWindow(on_insert=lambda _t: True)
+    win.show()
+    win.handle_transcript("Hallo", "text")
+    win.handle_transcript("einfügen", "command")
+    app.processEvents()
+    assert not win.isVisible()
+    assert win.text() == ""
+
+
+def test_target_label_updates(app):
+    win, _, _ = make(app)
+    win.set_target("Dokument1 – Word")
+    app.processEvents()
+    assert "Word" in win._target_label.text()
+    win.set_target("")
+    app.processEvents()
+    assert "keine" in win._target_label.text().lower()
+
+
+def test_reselect_command_calls_callback(app):
+    called = []
+    win = dw.DictationWindow(on_reselect_target=lambda: called.append(1))
+    win.handle_transcript("Ziel wählen", "command")
+    app.processEvents()
+    assert called == [1]
+
+
+def test_geometry_saved_on_close(app):
+    saved = []
+    win = dw.DictationWindow(on_geometry_changed=lambda g: saved.append(g))
+    win.show()
+    win.handle_transcript("Hi", "text")
+    win.handle_transcript("schließen", "command")
+    app.processEvents()
+    assert saved and len(saved[-1]) == 4
+
+
+def test_low_confidence_words_highlighted(app):
+    win, _, _ = make(app)
+    win.handle_transcript("Ich sehe ein Haus", "text", ["Haus"])
+    app.processEvents()
+    assert len(win._edit.extraSelections()) == 1
+
+
+def test_cheatsheet_constructs(app):
+    dlg = dw.CommandCheatSheet()
+    assert "Sprachbefehle" in dlg.windowTitle()
+
+
+def test_accepted_low_words_are_confirmed(app):
+    confirmed = []
+    win = dw.DictationWindow(
+        on_insert=lambda _t: True,
+        on_confirm_words=lambda words: confirmed.extend(words))
+    win.show()
+    win.handle_transcript("Ich sehe ein Haus", "text", ["Haus"])
+    win.handle_transcript("einfügen", "command")
+    app.processEvents()
+    assert "Haus" in confirmed        # flagged but accepted unchanged → learned
+
+
+def test_corrected_low_word_is_not_confirmed(app):
+    confirmed = []
+    win = dw.DictationWindow(
+        on_insert=lambda _t: True,
+        on_confirm_words=lambda words: confirmed.extend(words))
+    win.show()
+    win.handle_transcript("Ich sehe ein Haus", "text", ["Haus"])
+    # replace the flagged word before inserting
+    win.handle_transcript("ersetze Haus durch Auto", "command")
+    win.handle_transcript("einfügen", "command")
+    app.processEvents()
+    assert "Haus" not in confirmed    # it was changed, so not confirmed
 
 
 def test_state_shows_mode(app):

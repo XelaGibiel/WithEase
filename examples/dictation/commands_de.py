@@ -147,6 +147,9 @@ def _m_window(t: str) -> Command | None:
         return Command("insert")
     if t in ("kopieren", "text kopieren", "in die zwischenablage"):
         return Command("copy")
+    if t in ("ziel wählen", "ziel waehlen", "ziel merken", "ziel-app wählen",
+             "ziel app wählen", "zielanwendung wählen", "app wählen"):
+        return Command("reselect_target")
     if t in ("alles löschen", "alles loeschen", "text löschen", "leeren"):
         return Command("clear")
     if t in ("abbrechen", "schließen", "schliessen", "schließe", "schliesse",
