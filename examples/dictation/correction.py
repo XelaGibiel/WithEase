@@ -21,6 +21,11 @@ import unicodedata
 from typing import Any
 
 
+# A substitution corrected this many times (or more) is applied unconditionally;
+# a fresher one only where Whisper was uncertain (see ErrorMemory.apply).
+_STRONG = 2
+
+
 def _fold(text: str) -> str:
     """Lower-case + strip diacritics (ä→a, ß→ss) for tolerant comparison."""
     text = text.lower().replace("ß", "ss")
@@ -114,6 +119,12 @@ class ErrorMemory:
         key = _fold(old)
         if len(key) < 3 or key == _fold(new):
             return False
+        # Self-correction: if a learned substitution currently PRODUCES ``old``
+        # and the user is now changing ``old`` to something else, that
+        # substitution over-corrected → forget it (never make things worse).
+        for k in list(self._active):
+            if _fold(self._active[k]) == key:
+                self.remove(k)
         cand = self._candidates.get(key)
         if cand and _fold(cand["to"]) == _fold(new):
             cand["count"] += 1
@@ -128,17 +139,33 @@ class ErrorMemory:
 
     # -- applying -------------------------------------------------------
 
-    def apply(self, text: str) -> str:
-        """Replace whole-word occurrences of learned mis-hearings."""
+    def apply(self, text: str, uncertain: list | set | None = None) -> str:
+        """Replace whole-word occurrences of learned mis-hearings.
+
+        To avoid over-correcting a word that was clearly spoken, a *fresh*
+        substitution (seen once) is only applied where Whisper was **uncertain**
+        (``uncertain`` = the low-confidence words of this utterance).  Once the
+        same correction has been made ``_STRONG`` times it applies always."""
         if not self._active or not text:
             return text
+        unc = {_fold(w) for w in uncertain} if uncertain else set()
 
         def repl(m: re.Match) -> str:
             word = m.group(0)
-            value = self._active.get(_fold(word))
-            return _match_case(word, value) if value is not None else word
+            fw = _fold(word)
+            value = self._active.get(fw)
+            if value is None:
+                return word
+            count = self._candidates.get(fw, {}).get("count", 1)
+            if count >= _STRONG or fw in unc:
+                return _match_case(word, value)
+            return word
 
         return re.sub(r"\w+", repl, text, flags=re.UNICODE)
+
+    def direct(self, word: str) -> str:
+        """The learned correction for a single word (ungated), for suggestions."""
+        return self._active.get(_fold(word), "")
 
     # -- inspection / persistence --------------------------------------
 

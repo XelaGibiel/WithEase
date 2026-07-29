@@ -8,10 +8,35 @@ sys.path.insert(0, os.path.join(
 import correction as co  # noqa: E402
 
 
-def test_default_learns_immediately():
-    mem = co.ErrorMemory()                             # default threshold = 1
-    assert mem.learn("Kaser", "Cursor") is True        # active after 1 correction
-    assert mem.apply("Kaser vor Haus") == "Cursor vor Haus"
+def _strong(mem, old, new):
+    """Learn a correction enough times that it applies unconditionally."""
+    mem.learn(old, new)
+    mem.learn(old, new)
+
+
+def test_fresh_correction_only_applies_when_uncertain():
+    mem = co.ErrorMemory()
+    assert mem.learn("Kaser", "Cursor") is True         # active after 1 correction
+    # a clearly-spoken (confident) word is trusted → not over-corrected
+    assert mem.apply("Kaser vor Haus") == "Kaser vor Haus"
+    # but where Whisper was uncertain, the learned fix is applied
+    assert mem.apply("Kaser vor Haus", uncertain=["Kaser"]) == "Cursor vor Haus"
+    # and it is always available as a direct suggestion
+    assert mem.direct("kaser") == "Cursor"
+
+
+def test_repeated_correction_applies_always():
+    mem = co.ErrorMemory()
+    _strong(mem, "Kaser", "Cursor")
+    assert mem.apply("Kaser vor Haus") == "Cursor vor Haus"   # no uncertainty needed
+
+
+def test_self_correction_removes_over_correction():
+    mem = co.ErrorMemory()
+    _strong(mem, "kaus", "Haus")                # memory turns "kaus" → "Haus"
+    assert mem.apply("kaus") == "Haus"
+    mem.learn("Haus", "Maus")                   # user corrects our output away
+    assert "kaus" not in mem.substitutions()    # the over-correction is forgotten
 
 
 def test_higher_threshold_waits():
@@ -27,13 +52,14 @@ def test_promotes_stored_candidate_on_load():
     # loaded under the default threshold of 1.
     data = {"active": {}, "candidates": {"kaser": {"to": "Cursor", "count": 1}}}
     mem = co.ErrorMemory(data)
-    assert mem.apply("Kaser") == "Cursor"
+    assert mem.direct("Kaser") == "Cursor"
+    assert mem.apply("Kaser", uncertain=["Kaser"]) == "Cursor"
     assert mem.substitutions() == {"kaser": "Cursor"}
 
 
 def test_case_is_matched():
-    mem = co.ErrorMemory(threshold=1)
-    mem.learn("kaser", "cursor")
+    mem = co.ErrorMemory()
+    _strong(mem, "kaser", "cursor")
     assert mem.apply("Kaser vor haus") == "Cursor vor haus"   # Titlecase kept
     assert mem.apply("KASER") == "CURSOR"                     # all caps kept
     assert mem.apply("kaser") == "cursor"
@@ -49,16 +75,16 @@ def test_ignores_noise_and_equal():
 
 
 def test_only_whole_words_replaced():
-    mem = co.ErrorMemory(threshold=1)
-    mem.learn("aus", "Haus")
+    mem = co.ErrorMemory()
+    _strong(mem, "aus", "Haus")
     # "aus" must not corrupt "Pause" / "ausser" – whole-word match only
     assert mem.apply("Pause draußen") == "Pause draußen"
     assert mem.apply("aus dem Fenster") == "Haus dem Fenster"
 
 
 def test_remove_forgets_active_and_candidate():
-    mem = co.ErrorMemory(threshold=1)
-    mem.learn("Kaser", "Cursor")
+    mem = co.ErrorMemory()
+    _strong(mem, "Kaser", "Cursor")
     assert mem.apply("Kaser") == "Cursor"
     mem.remove("kaser")                      # folded key
     assert mem.apply("Kaser") == "Kaser"
@@ -84,7 +110,7 @@ def test_suggest_alternatives_excludes_exact_word():
 
 def test_set_target_edits_substitution():
     mem = co.ErrorMemory()
-    mem.learn("kaser", "Cursor")
+    _strong(mem, "kaser", "Cursor")
     mem.set_target("kaser", "Cursor vor")
     assert mem.substitutions() == {"kaser": "Cursor vor"}
     assert mem.apply("kaser") == "Cursor vor"

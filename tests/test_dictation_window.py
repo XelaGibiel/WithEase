@@ -232,6 +232,20 @@ def test_dictation_key_keeps_manual_selection_and_overwrites(app):
     assert win.text() == "Ein kleines Haus"
 
 
+def test_dictation_inserts_at_cursor_when_already_open(app):
+    win, _, _ = make(app)
+    win.show()                                   # session already in progress
+    win.handle_transcript("Anfang Ende", "text")
+    app.processEvents()
+    cur = win._edit.textCursor()
+    cur.setPosition(6)                           # between "Anfang" and "Ende"
+    win._edit.setTextCursor(cur)
+    win.open_for_dictation()                     # pressing the key again
+    win.handle_transcript("Mitte", "text")
+    app.processEvents()
+    assert win.text() == "Anfang Mitte Ende"     # inserted at cursor, not end
+
+
 def test_correct_das_uses_manual_selection(app):
     win, _, _ = make(app)
     win.handle_transcript("Ein schönes Haus", "text")

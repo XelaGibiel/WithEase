@@ -22,9 +22,10 @@ this file is unit-testable without a microphone.
 from __future__ import annotations
 
 import re
+import sys
 from typing import Callable
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QPainter,
@@ -69,6 +70,42 @@ _BADGE_TEXT = QColor(20, 20, 20)            # near-black number, easy to read
 
 _HISTORY_MAX = 20            # keep this many past dictations (FIFO)
 _HISTORY_LABEL_LEN = 60      # truncate the list preview to this many chars
+
+
+def _win_force_foreground(hwnd: int) -> None:
+    """Force a window to the foreground on Windows, bypassing the foreground
+    lock (a background app can't normally steal focus).  Without this the
+    dictation window shows a caret but the keyboard doesn't reach it until the
+    user clicks in."""
+    if sys.platform != "win32" or not hwnd:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u = ctypes.windll.user32
+        k = ctypes.windll.kernel32
+        u.GetForegroundWindow.restype = wintypes.HWND
+        u.GetWindowThreadProcessId.argtypes = [
+            wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        u.GetWindowThreadProcessId.restype = wintypes.DWORD
+        for fn in ("SetForegroundWindow", "SetActiveWindow", "BringWindowToTop"):
+            getattr(u, fn).argtypes = [wintypes.HWND]
+        u.AttachThreadInput.argtypes = [
+            wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+        win = wintypes.HWND(hwnd)
+        fg = u.GetForegroundWindow()
+        cur = k.GetCurrentThreadId()
+        fg_tid = u.GetWindowThreadProcessId(fg, None) if fg else 0
+        attached = False
+        if fg_tid and fg_tid != cur:
+            attached = bool(u.AttachThreadInput(fg_tid, cur, True))
+        u.BringWindowToTop(win)
+        u.SetForegroundWindow(win)
+        u.SetActiveWindow(win)
+        if attached:
+            u.AttachThreadInput(fg_tid, cur, False)
+    except Exception:
+        pass
 
 
 class _BadgeOverlay(QWidget):
@@ -138,6 +175,11 @@ class CorrectionDialog(QDialog):
         self._done = False
         self.setWindowTitle("Korrektur")
         self.setMinimumWidth(440)
+        # Sit above the always-on-top dictation window and grab the keyboard
+        # focus (modal) so the field can be edited with the keyboard/mouse right
+        # away, without having to click into it first.
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self.setModal(True)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
@@ -182,6 +224,19 @@ class CorrectionDialog(QDialog):
         layout.addLayout(row)
 
     # -- voice routing (called by the window while this dialog is open) --
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        # Focus the field once the dialog is actually shown, so the word can be
+        # edited (arrow keys) right away.
+        self._field.setFocus()
+        self._field.selectAll()
+
+    def focus_field(self) -> None:
+        self.raise_()
+        self.activateWindow()
+        self._field.setFocus()
+        self._field.selectAll()
 
     def set_spoken(self, text: str) -> None:
         # Whisper appends a sentence period to a single spoken word ("Erde.");
@@ -304,8 +359,11 @@ class DictationWindow(QWidget):
         self._correction_dialog: CorrectionDialog | None = None
 
         self.setWindowTitle("WithEase – Diktieren")
+        # A normal top-level window (not Qt.Tool): tool windows show a caret but
+        # don't take real keyboard activation on Windows, so the user would have
+        # to click in first before the arrow keys / typing work.
         self.setWindowFlags(
-            Qt.WindowType.Tool
+            Qt.WindowType.Window
             | Qt.WindowType.WindowStaysOnTopHint
         )
         # The window may take focus so the caret sits in the edit field right
@@ -445,18 +503,33 @@ class DictationWindow(QWidget):
         return self._edit.toPlainText()
 
     def open_for_dictation(self) -> None:
-        if not self.isVisible():
+        was_hidden = not self.isVisible()
+        if was_hidden:
             self.show()
         self.raise_()
+        # If the correction window is open, keep the focus there (so a spoken
+        # correction lands in its field and it stays editable) instead of
+        # pulling focus back into the main edit.
+        dlg = self._correction_dialog
+        if dlg is not None and dlg.isVisible():
+            dlg.raise_()
+            dlg.activateWindow()
+            dlg._field.setFocus()
+            return
         self.activateWindow()
-        # Focus the edit field so the caret is there immediately.  Keep any
-        # existing selection (e.g. a word the user marked to overwrite); only
-        # move the caret to the end when nothing is selected.
+        hwnd = int(self.winId())
+        _win_force_foreground(hwnd)                  # beat the foreground lock
+        # Only on the first appearance: put the caret at the end so there is a
+        # visible caret.  While the window stays open, leave the cursor where it
+        # is (and keep any selection) so dictation inserts at that position.
         cur = self._edit.textCursor()
-        if not cur.hasSelection():
+        if was_hidden and not cur.hasSelection():
             cur.movePosition(QTextCursor.MoveOperation.End)
             self._edit.setTextCursor(cur)
         self._edit.setFocus()
+        # Re-assert once the window is fully shown (activation can be deferred).
+        QTimer.singleShot(0, lambda: (_win_force_foreground(hwnd),
+                                      self._edit.setFocus()))
 
     # -- main-thread slots ---------------------------------------------
 
@@ -729,9 +802,9 @@ class DictationWindow(QWidget):
         # Any close path (X, Escape, done) must release the routing lock.
         dlg.finished.connect(lambda _r: self._release_correction(dlg))
         dlg.show()
-        dlg.raise_()
-        dlg.activateWindow()
-        dlg._field.setFocus()
+        dlg.focus_field()
+        # Re-assert focus after the event loop settles the new window.
+        QTimer.singleShot(0, dlg.focus_field)
 
     def _collect_suggestions(self, wrong: str) -> list[str]:
         """Alternatives for the correction window: learned correction + glossary

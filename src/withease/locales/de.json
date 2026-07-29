@@ -58,6 +58,8 @@
   "settings.general.font_size": "Schriftgröße",
   "settings.general.font_size.system": "Systemvorgabe",
   "settings.general.autostart": "Mit Windows starten",
+  "settings.general.autostart.blocked.title": "Autostart konnte nicht gesetzt werden",
+  "settings.general.autostart.blocked": "Windows hat das Eintragen in den Autostart blockiert (Zugriff verweigert) – meist verhindert das ein Antivirus-/Sicherheitsprogramm, dass sich Programme selbst in den Autostart eintragen.\n\nSo aktivierst du es trotzdem:\n• Erlaube WithEase (bzw. pythonw.exe) in deinem Antivirus / in „Windows-Sicherheit → Überwachter Ordnerzugriff“, oder\n• trage WithEase manuell in den Windows-Autostart ein (Taskplaner: „Bei Anmeldung“).",
   "settings.general.emergency_key": "Notfall-Stop-Taste",
   "settings.general.emergency_key.description": "Stoppt sofort alle Assistenzfunktionen und gibt eventuell hängende Modifier-Tasten (Shift, Strg, Alt, Win) frei – falls sich etwas unerwartet verhält, ist dies der Rettungsanker. Erneutes Drücken derselben Taste setzt die Funktionen wieder fort.",
   "settings.general.emergency_key.empty_warning": "⚠ Es ist keine Notfall-Stop-Taste festgelegt. Zum sofortigen Stoppen bleibt dann nur das Tray-Menü bzw. der Notfall-Stop-Knopf. Am besten eine Taste zuweisen.",

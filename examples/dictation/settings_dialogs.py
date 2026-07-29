@@ -18,17 +18,98 @@ from typing import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+import vocabulary as vocab
+
 _READABLE = "color: palette(windowText);"
+
+
+class LearnFromTextDialog(QDialog):
+    """Extract likely vocabulary from a pasted text or a file, let the user pick
+    which terms to keep, then hand them back via ``on_accept(list)``."""
+
+    def __init__(self, on_accept: Callable[[list[str]], None],
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._on_accept = on_accept
+        self.setWindowTitle("Aus Text lernen")
+        self.resize(520, 560)
+
+        layout = QVBoxLayout(self)
+        intro = QLabel("Füge einen Text ein (oder lade eine Datei) – WithEase "
+                       "schlägt daraus deine Fachbegriffe/Namen vor. Häkchen "
+                       "setzen und übernehmen; sie landen in „Eigene Wörter“.")
+        intro.setWordWrap(True)
+        intro.setStyleSheet(_READABLE)
+        layout.addWidget(intro)
+
+        self._text = QPlainTextEdit()
+        self._text.setPlaceholderText("Text hier einfügen …")
+        layout.addWidget(self._text, 1)
+
+        top = QHBoxLayout()
+        file_btn = QPushButton("Datei laden …")
+        file_btn.clicked.connect(self._load_file)
+        top.addWidget(file_btn)
+        analyse_btn = QPushButton("Analysieren")
+        analyse_btn.clicked.connect(self._analyse)
+        top.addWidget(analyse_btn)
+        top.addStretch()
+        layout.addLayout(top)
+
+        self._list = QListWidget()
+        layout.addWidget(self._list, 1)
+
+        footer = QHBoxLayout()
+        footer.addStretch()
+        cancel = QPushButton("Abbrechen")
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+        take = QPushButton("Ausgewählte übernehmen")
+        take.clicked.connect(self._accept)
+        footer.addWidget(take)
+        layout.addLayout(footer)
+
+    def _load_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Textdatei wählen", "", "Text (*.txt *.md *.csv);;Alle (*.*)")
+        if path:
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    self._text.setPlainText(f.read())
+            except OSError:
+                pass
+            self._analyse()
+
+    def _analyse(self) -> None:
+        self._list.clear()
+        for term in vocab.extract_terms(self._text.toPlainText()):
+            item = QListWidgetItem(term)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
+            self._list.addItem(item)
+        if self._list.count() == 0:
+            item = QListWidgetItem("Keine Begriffe gefunden.")
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._list.addItem(item)
+
+    def _accept(self) -> None:
+        chosen = [self._list.item(i).text() for i in range(self._list.count())
+                  if self._list.item(i).checkState() == Qt.CheckState.Checked]
+        if chosen:
+            self._on_accept(chosen)
+        self.accept()
 
 
 class ListEditorDialog(QDialog):
@@ -39,9 +120,10 @@ class ListEditorDialog(QDialog):
         title: str,
         rows_provider: Callable[[], list[tuple[str, str, str]]],
         on_remove: Callable[[str], None],
-        on_add: Callable[[str], None] | None = None,
+        on_add: Callable[..., None] | None = None,
         on_edit: Callable[[str, str], None] | None = None,
         add_placeholder: str = "",
+        add_placeholder2: str = "",
         add_label: str = "Hinzufügen",
         intro: str = "",
         empty_text: str = "",
@@ -68,12 +150,18 @@ class ListEditorDialog(QDialog):
             lbl.setStyleSheet(_READABLE)
             layout.addWidget(lbl)
 
+        self._input2 = None
         if on_add is not None:
             add_row = QHBoxLayout()
             self._input = QLineEdit()
             self._input.setPlaceholderText(add_placeholder)
             self._input.returnPressed.connect(self._add)
             add_row.addWidget(self._input, 1)
+            if add_placeholder2:
+                self._input2 = QLineEdit()
+                self._input2.setPlaceholderText(add_placeholder2)
+                self._input2.returnPressed.connect(self._add)
+                add_row.addWidget(self._input2, 1)
             add_btn = QPushButton(add_label)
             add_btn.clicked.connect(self._add)
             add_row.addWidget(add_btn)
@@ -161,10 +249,15 @@ class ListEditorDialog(QDialog):
         if self._on_add is None or self._input is None:
             return
         text = self._input.text().strip()
-        if text:
+        if not text:
+            return
+        if self._input2 is not None:
+            self._on_add(text, self._input2.text().strip())
+            self._input2.clear()
+        else:
             self._on_add(text)
-            self._input.clear()
-            self._reload()
+        self._input.clear()
+        self._reload()
 
     def _edit(self, key: str, new_value: str) -> None:
         if self._on_edit is not None:

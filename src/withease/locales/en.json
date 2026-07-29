@@ -58,6 +58,8 @@
   "settings.general.font_size": "Font size",
   "settings.general.font_size.system": "System default",
   "settings.general.autostart": "Start with Windows",
+  "settings.general.autostart.blocked.title": "Could not set autostart",
+  "settings.general.autostart.blocked": "Windows blocked adding the autostart entry (access denied) – this is usually an antivirus/security program preventing apps from adding themselves to autostart.\n\nTo enable it anyway:\n• Allow WithEase (or pythonw.exe) in your antivirus / in 'Windows Security → Controlled folder access', or\n• add WithEase to autostart manually (Task Scheduler: 'At log on').",
   "settings.general.emergency_key": "Emergency stop key",
   "settings.general.emergency_key.description": "Immediately stops all assistance features and releases stuck modifier keys (Shift, Ctrl, Alt, Win). If anything behaves unexpectedly, this is your panic button. Pressing the same key again turns everything back on.",
   "settings.general.emergency_key.empty_warning": "⚠ No emergency stop key is set. To stop everything instantly, only the tray menu / emergency-stop button remain. It's best to assign a key.",

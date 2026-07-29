@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -715,10 +716,14 @@ class MainWindow(QMainWindow):
     def _on_autostart_toggled(self, enabled: bool) -> None:
         from withease.core import autostart
         if not autostart.set_enabled(enabled):
-            # Registry write failed – revert the checkbox silently.
+            # Write blocked (e.g. by security software) – revert and explain.
             self._autostart_cb.blockSignals(True)
             self._autostart_cb.setChecked(autostart.is_enabled())
             self._autostart_cb.blockSignals(False)
+            if enabled:
+                QMessageBox.warning(
+                    self, tr("settings.general.autostart.blocked.title"),
+                    tr("settings.general.autostart.blocked"))
             return
         self._app._app_config["autostart"] = enabled
         from withease.core import config

@@ -126,6 +126,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "glossary.empty": "Noch keine eigenen Wörter.",
         "glossary.count": "{n} Wörter hinterlegt",
         "glossary.add": "Neues Wort eingeben und Enter drücken",
+        "glossary.learn": "Aus Text lernen …",
+        "vocab": "Wörterbuch (sprich → schreibe)",
+        "vocab.hint": "„Wenn ich X sage, schreibe Y.“ Wird beim Diktat automatisch angewandt und verbessert zusätzlich die Erkennung.",
+        "vocab.empty": "Noch keine Einträge.",
+        "vocab.spoken": "gesprochen (z. B. with ease)",
+        "vocab.written": "geschrieben (z. B. WithEase)",
         "memory": "Fehler-Gedächtnis",
         "memory.empty": "Noch nichts gelernt.",
         "memory.count": "{n} gelernte Korrekturen",
@@ -150,6 +156,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "keep_clipboard": "Erkannten Text zusätzlich in der Zwischenablage behalten",
         "max_seconds": "Max. Aufnahmedauer",
         "max_seconds.off": "Endlos (kein Limit)",
+        "preload": "Spracherkennung beim Start vorladen",
+        "preload.hint": "Lädt das Whisper-Modell schon beim Start, damit das erste Diktat sofort schnell ist. Erscheint nur, wenn „Mit Windows starten“ (Allgemein) aktiv ist.",
+        "training": "Trainingsdaten sammeln (für spätere Stimm-Anpassung)",
+        "training.hint": "Speichert Aufnahme + erkannten Text lokal, damit später ein Anlernen an deine Stimme (Fine-Tuning, z. B. auf GPU) möglich wird. Optional, braucht Speicherplatz.",
         "device": "Mikrofon",
         "device.default": "Standardgerät",
         "test": "Test: 3 Sekunden aufnehmen und erkennen",
@@ -211,6 +221,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "glossary.empty": "No custom words yet.",
         "glossary.count": "{n} words saved",
         "glossary.add": "Type a new word and press Enter",
+        "glossary.learn": "Learn from text …",
+        "vocab": "Dictionary (say → write)",
+        "vocab.hint": "'When I say X, write Y.' Applied automatically while dictating and also improves recognition.",
+        "vocab.empty": "No entries yet.",
+        "vocab.spoken": "spoken (e.g. with ease)",
+        "vocab.written": "written (e.g. WithEase)",
         "memory": "Error memory",
         "memory.empty": "Nothing learned yet.",
         "memory.count": "{n} learned corrections",
@@ -235,6 +251,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "keep_clipboard": "Also keep the recognised text in the clipboard",
         "max_seconds": "Max. recording length",
         "max_seconds.off": "Endless (no limit)",
+        "preload": "Preload speech recognition at start",
+        "preload.hint": "Loads the Whisper model at start so the first dictation is fast right away. Only shown when 'Start with Windows' (General) is on.",
+        "training": "Collect training data (for later voice adaptation)",
+        "training.hint": "Saves the recording + recognised text locally so a later adaptation to your voice (fine-tuning, e.g. on a GPU) becomes possible. Optional, uses disk space.",
         "device": "Microphone",
         "device.default": "Default device",
         "test": "Test: record 3 seconds and transcribe",
@@ -813,10 +833,24 @@ class DictationSettingsWidget(QWidget):
         self._glossary_summary.setStyleSheet(_hint_style())
         self._glossary_summary.setToolTip(_t("glossary.hint"))
         gloss_row.addWidget(self._glossary_summary, 1)
+        gloss_learn = QPushButton(_t("glossary.learn"))
+        gloss_learn.clicked.connect(self._open_learn_text)
+        gloss_row.addWidget(gloss_learn)
         gloss_edit = QPushButton(_t("edit"))
         gloss_edit.clicked.connect(self._open_glossary)
         gloss_row.addWidget(gloss_edit)
         form.addRow(_t("glossary"), gloss_row)
+
+        # Dictionary (spoken → written) – edited in its own pop-out window.
+        vocab_row = QHBoxLayout()
+        _vocab_hint = QLabel(_t("vocab.hint"))
+        _vocab_hint.setWordWrap(True)
+        _vocab_hint.setStyleSheet(_hint_style())
+        vocab_row.addWidget(_vocab_hint, 1)
+        vocab_edit = QPushButton(_t("edit"))
+        vocab_edit.clicked.connect(self._open_vocab)
+        vocab_row.addWidget(vocab_edit)
+        form.addRow(_t("vocab"), vocab_row)
 
         # Error memory – edited in its own pop-out window.
         mem_row = QHBoxLayout()
@@ -860,6 +894,19 @@ class DictationSettingsWidget(QWidget):
         self._ai_model_label = form.labelForField(self._ai_model)
         self._update_ai_rows()      # initial visibility from the checkbox
 
+        # Opt-in training-data collection (voice adaptation later).
+        self._training_cb = QCheckBox(_t("training"))
+        self._training_cb.setChecked(
+            bool(self._settings.get("collect_training", False)))
+        self._training_cb.setToolTip(_t("training.hint"))
+        self._training_cb.toggled.connect(
+            lambda v: self._save("collect_training", v))
+        form.addRow("", self._training_cb)
+        _training_hint = QLabel(_t("training.hint"))
+        _training_hint.setWordWrap(True)
+        _training_hint.setStyleSheet(_hint_style())
+        form.addRow("", _training_hint)
+
         self._output_mode = QComboBox()
         self._output_mode.addItem(_t("output.window"), "window")
         self._output_mode.addItem(_t("output.direct"), "direct")
@@ -893,6 +940,15 @@ class DictationSettingsWidget(QWidget):
         self._max_seconds.valueChanged.connect(
             lambda v: self._save("max_seconds", v))
         form.addRow(_t("max_seconds"), self._max_seconds)
+
+        # Preload the model at start – only relevant when the app autostarts
+        # with Windows (that switch lives under Settings → General).
+        self._preload_cb = QCheckBox(_t("preload"))
+        self._preload_cb.setChecked(bool(self._settings.get("preload_model", False)))
+        self._preload_cb.setToolTip(_t("preload.hint"))
+        self._preload_cb.toggled.connect(lambda v: self._save("preload_model", v))
+        form.addRow("", self._preload_cb)
+        self._update_preload_row()
 
         self._device = QComboBox()
         self._device.addItem(_t("device.default"), "default")
@@ -934,6 +990,18 @@ class DictationSettingsWidget(QWidget):
         self._settings[key] = value
         self._module.on_settings_changed()
 
+    def _update_preload_row(self) -> None:
+        """The preload option is only offered when the app autostarts (the
+        general 'start with Windows' switch under Settings → General)."""
+        try:
+            from withease.core import autostart
+            on = autostart.is_enabled()
+        except Exception:
+            on = False
+        self._preload_cb.setVisible(on)
+        if not on and self._preload_cb.isChecked():
+            self._preload_cb.setChecked(False)   # also clears the setting
+
     def _update_ai_rows(self) -> None:
         """Show „KI läuft"/„KI-Modell" only when AI cleanup is enabled."""
         visible = self._ai_enable.isChecked()
@@ -966,6 +1034,33 @@ class DictationSettingsWidget(QWidget):
             parent=self)
         dlg.exec()
         self._glossary_summary.setText(self._glossary_summary_text())
+
+    def _open_learn_text(self) -> None:
+        from settings_dialogs import LearnFromTextDialog
+
+        def _add(terms: list) -> None:
+            for term in terms:
+                self._module.add_glossary_word(term)
+        dlg = LearnFromTextDialog(on_accept=_add, parent=self)
+        dlg.exec()
+        self._glossary_summary.setText(self._glossary_summary_text())
+
+    def _open_vocab(self) -> None:
+        from settings_dialogs import ListEditorDialog
+        dlg = ListEditorDialog(
+            title=_t("vocab"),
+            rows_provider=lambda: [
+                (s, s, w) for s, w in reversed(self._module.spoken_forms())],
+            on_remove=self._module.remove_spoken_form,
+            on_edit=self._module.edit_spoken_form,
+            on_add=self._module.add_spoken_form,
+            add_placeholder=_t("vocab.spoken"),
+            add_placeholder2=_t("vocab.written"),
+            add_label=_t("add"),
+            intro=_t("vocab.hint"),
+            empty_text=_t("vocab.empty"),
+            parent=self)
+        dlg.exec()
 
     def _open_memory(self) -> None:
         from settings_dialogs import ListEditorDialog
@@ -1161,6 +1256,7 @@ class DictationModule(BaseModule):
         self._max_timer: threading.Timer | None = None
         self._local_model: Any = None   # lazily loaded faster-whisper model
         self._local_model_name = ""
+        self._model_lock = threading.Lock()    # guards model loading
         self._last_low_words: list[str] = []   # low-confidence words (heatmap)
         self._indicator: DictationIndicator | None = None
         self._window: Any = None         # DictationWindow (created on the GUI thread)
@@ -1196,6 +1292,11 @@ class DictationModule(BaseModule):
         if not self._kb_subscribed:
             shared_keyboard_hook.subscribe(self._on_key_event)
             self._kb_subscribed = True
+        # Optionally preload the local model in the background so the first
+        # dictation is fast (no wait while the model loads).
+        if (self._settings.get("preload_model")
+                and self._settings.get("backend", "cloud") == "local"):
+            threading.Thread(target=self._preload_model, daemon=True).start()
         bus.publish("module.started", module_id=self.MODULE_ID)
 
     def stop(self) -> None:
@@ -1313,8 +1414,8 @@ class DictationModule(BaseModule):
 
     def direct_correction(self, wrong: str) -> str:
         """The learned correction for ``wrong`` (whole word), or ""."""
-        out = self._memory().apply(wrong)
-        return out if out and out != wrong else ""
+        out = self._memory().direct(wrong)
+        return out if out and out.casefold() != wrong.casefold() else ""
 
     def suggest_corrections(self, wrong: str) -> list[str]:
         """Correction-window suggestions from the learned memory + glossary."""
@@ -1593,8 +1694,17 @@ class DictationModule(BaseModule):
             self._error(str(exc)[:120])
             return
         text = (text or "").strip()
+        if text and self._settings.get("collect_training"):
+            self._save_training_sample(wav, text)   # opt-in data for later
         if text:
-            text = self._memory().apply(text)   # learned corrections first
+            # User dictionary (spoken → written) is deterministic user intent.
+            forms = self.spoken_forms()
+            if forms:
+                from vocabulary import apply_spoken_forms
+                text = apply_spoken_forms(text, forms)
+            # Learned corrections – but only where Whisper was uncertain (a
+            # clearly-spoken word is trusted), so nothing is over-corrected.
+            text = self._memory().apply(text, uncertain=self._last_low_words)
             # Optional AI cleanup – only on real dictation, never on a command
             # utterance (would rewrite "markiere Haus").  Runs on this worker
             # thread, so the UI stays responsive.
@@ -1614,6 +1724,25 @@ class DictationModule(BaseModule):
                 self._window.handle_transcript(text, self._active_mode, low)
             else:
                 self._insert_text(text)
+
+    def _training_dir(self) -> str:
+        return os.path.join(str(app_config.CONFIG_DIR), "dictation_training")
+
+    def _save_training_sample(self, wav_bytes: bytes, text: str) -> None:
+        """Opt-in: store (audio, recognised text) pairs locally so a personal
+        fine-tuning (voice adaptation) becomes possible later, e.g. on a GPU."""
+        try:
+            import datetime
+            folder = self._training_dir()
+            os.makedirs(folder, exist_ok=True)
+            stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            with open(os.path.join(folder, stamp + ".wav"), "wb") as f:
+                f.write(wav_bytes)
+            with open(os.path.join(folder, stamp + ".txt"), "w",
+                      encoding="utf-8") as f:
+                f.write(text)
+        except Exception:
+            _log.exception("could not save training sample")
 
     # ------------------------------------------------------------------
     # Transcription backends
@@ -1672,6 +1801,42 @@ class DictationModule(BaseModule):
         self._settings["glossary"] = ", ".join(out)
         self.on_settings_changed()
 
+    # -- spoken → written dictionary (Dragon-style word forms) -----------
+
+    def spoken_forms(self) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        for pair in self._settings.get("spoken_forms", []):
+            if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                out.append((str(pair[0]), str(pair[1])))
+        return out
+
+    def _save_spoken_forms(self, forms: list[tuple[str, str]]) -> None:
+        self._settings["spoken_forms"] = [list(p) for p in forms]
+        self.on_settings_changed()
+
+    def add_spoken_form(self, spoken: str, written: str) -> None:
+        spoken = (spoken or "").strip()
+        written = (written or "").strip()
+        if not spoken or not written:
+            return
+        forms = [p for p in self.spoken_forms()
+                 if p[0].casefold() != spoken.casefold()]
+        forms.append((spoken, written))
+        self._save_spoken_forms(forms)
+
+    def remove_spoken_form(self, spoken: str) -> None:
+        self._save_spoken_forms(
+            [p for p in self.spoken_forms()
+             if p[0].casefold() != (spoken or "").casefold()])
+
+    def edit_spoken_form(self, spoken: str, new_written: str) -> None:
+        new_written = (new_written or "").strip()
+        if not new_written:
+            return
+        self._save_spoken_forms(
+            [(s, new_written) if s.casefold() == (spoken or "").casefold()
+             else (s, w) for s, w in self.spoken_forms()])
+
     def _confirmed_set(self) -> set[str]:
         return {w.casefold() for w in self._settings.get("confirmed_words", [])}
 
@@ -1700,11 +1865,23 @@ class DictationModule(BaseModule):
             "neue Zeile, neuer Absatz, großschreiben, kleinschreiben, "
             "rückgängig, Punkt, Komma, Fragezeichen, buchstabieren, "
             "von, bis, alles, Satz, Absatz")
-        prompt = "Deutsches Diktat mit Sprachbefehlen. Befehle: " + commands + "."
-        words = self.glossary_words()
-        if words:
-            prompt += " Eigene Wörter: " + ", ".join(words) + "."
-        return prompt
+        return "Deutsches Diktat mit Sprachbefehlen. Befehle: " + commands + "."
+
+    def _hotwords(self) -> str:
+        """Words to bias recognition toward, so the user's terms come out right
+        immediately: the glossary + confirmed words + learned corrections."""
+        words = list(self.glossary_words())
+        words += list(self._settings.get("confirmed_words", []))[-40:]
+        words += list(self._memory().substitutions().values())
+        words += [w for _s, w in self.spoken_forms()]     # written forms
+        seen: set[str] = set()
+        out: list[str] = []
+        for w in words:
+            w = (w or "").strip()
+            if w and w.casefold() not in seen:
+                seen.add(w.casefold())
+                out.append(w)
+        return " ".join(out[:80])
 
     # -- Cloud (OpenAI-compatible / OpenRouter) --------------------------
 
@@ -1786,30 +1963,46 @@ class DictationModule(BaseModule):
             pass
         return "cpu", "int8"
 
-    def _transcribe_local(self, wav_bytes: bytes) -> str:
+    def _ensure_model_loaded(self) -> Any:
+        """Load the faster-whisper model (once).  Guarded by a lock so a
+        background preload and a live dictation can't load it twice."""
         try:
             from faster_whisper import WhisperModel
         except ImportError:
             raise RuntimeError(_t("err.no_local"))
-
         model_name = self._settings.get("local_model", "base")
-        if self._local_model is None or self._local_model_name != model_name:
-            device, compute_type = self._whisper_device()
-            threads = max(1, (os.cpu_count() or 4) // 2)
-            _log.info("loading local whisper %r on %s/%s (%d threads)",
-                      model_name, device, compute_type, threads)
-            self._local_model = WhisperModel(
-                model_name, device=device, compute_type=compute_type,
-                cpu_threads=threads)
-            self._local_model_name = model_name
+        with self._model_lock:
+            if self._local_model is None or self._local_model_name != model_name:
+                device, compute_type = self._whisper_device()
+                threads = max(1, (os.cpu_count() or 4) // 2)
+                _log.info("loading local whisper %r on %s/%s (%d threads)",
+                          model_name, device, compute_type, threads)
+                self._local_model = WhisperModel(
+                    model_name, device=device, compute_type=compute_type,
+                    cpu_threads=threads)
+                self._local_model_name = model_name
+        return self._local_model
+
+    def _preload_model(self) -> None:
+        """Load the model ahead of time so the first dictation is fast."""
+        try:
+            self._ensure_model_loaded()
+            _log.info("whisper model preloaded")
+        except Exception:
+            _log.exception("model preload failed")
+
+    def _transcribe_local(self, wav_bytes: bytes) -> str:
+        self._ensure_model_loaded()
 
         language = self._local_language()
         # German command "dictionary" only makes sense when decoding German.
         prompt = self._initial_prompt() if language == "de" else None
+        hotwords = self._hotwords() or None     # bias toward the user's terms
         segments, _info = self._local_model.transcribe(
             io.BytesIO(wav_bytes),
             language=language,
             initial_prompt=prompt,
+            hotwords=hotwords,
             beam_size=5,
             temperature=0.0,
             condition_on_previous_text=False,
