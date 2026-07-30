@@ -55,6 +55,7 @@ class _SaveToast(QLabel):
         self.setGraphicsEffect(self._effect)
         self._anim = QPropertyAnimation(self._effect, b"opacity", self)
         self._anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        self._faded_connected = False   # is finished→_on_faded currently wired?
 
         self._hold_timer = QTimer(self)
         self._hold_timer.setSingleShot(True)
@@ -73,33 +74,34 @@ class _SaveToast(QLabel):
         self.show()
 
         self._anim.stop()
-        try:
-            self._anim.finished.disconnect()
-        except RuntimeError:
-            pass
+        self._disconnect_faded()
         self._anim.setDuration(self._FADE_IN_MS)
         self._anim.setStartValue(self._effect.opacity())
         self._anim.setEndValue(1.0)
         self._anim.start()
         self._hold_timer.start()  # restart hold on every save
 
+    def _disconnect_faded(self) -> None:
+        """Disconnect finished→_on_faded only if it is actually connected.
+
+        A blanket ``signal.disconnect()`` on an unconnected signal emits a
+        libpyside RuntimeWarning, so we track the connection instead."""
+        if self._faded_connected:
+            self._anim.finished.disconnect(self._on_faded)
+            self._faded_connected = False
+
     def _fade_out(self) -> None:
         self._anim.stop()
         self._anim.setDuration(self._FADE_OUT_MS)
         self._anim.setStartValue(self._effect.opacity())
         self._anim.setEndValue(0.0)
-        try:
-            self._anim.finished.disconnect()
-        except RuntimeError:
-            pass
+        self._disconnect_faded()
         self._anim.finished.connect(self._on_faded)
+        self._faded_connected = True
         self._anim.start()
 
     def _on_faded(self) -> None:
-        try:
-            self._anim.finished.disconnect()
-        except RuntimeError:
-            pass
+        self._disconnect_faded()
         if self._effect.opacity() < 0.05:
             self.hide()
 

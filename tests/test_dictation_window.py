@@ -246,6 +246,20 @@ def test_dictation_inserts_at_cursor_when_already_open(app):
     assert win.text() == "Anfang Mitte Ende"     # inserted at cursor, not end
 
 
+def test_redo_last_dictation_replaces_without_learning(app):
+    learned = []
+    win = dw.DictationWindow(
+        on_correction=lambda old, new: learned.append((old, new)))
+    win.handle_transcript("Hallo Welt", "text")
+    win.handle_transcript("nochmal", "command")       # misspoke → redo
+    app.processEvents()
+    assert win._edit.textCursor().selectedText() == "Hallo Welt"
+    win.handle_transcript("Hallo Erde", "text")        # re-record replaces it
+    app.processEvents()
+    assert win.text() == "Hallo Erde"
+    assert learned == []                                # a slip is not learned
+
+
 def test_correct_das_uses_manual_selection(app):
     win, _, _ = make(app)
     win.handle_transcript("Ein schönes Haus", "text")
@@ -373,6 +387,31 @@ def test_low_confidence_words_highlighted(app):
 def test_cheatsheet_constructs(app):
     dlg = dw.CommandCheatSheet()
     assert "Sprachbefehle" in dlg.windowTitle()
+
+
+def test_add_selection_to_vocab(app, monkeypatch):
+    added = []
+    win = dw.DictationWindow(on_add_vocab=lambda s, w: added.append((s, w)))
+    win.handle_transcript("Ich sehe WithEase", "text")
+    app.processEvents()
+    cur = win._edit.textCursor()
+    cur.setPosition(9)
+    cur.setPosition(17, dw.QTextCursor.MoveMode.KeepAnchor)   # "WithEase"
+    win._edit.setTextCursor(cur)
+    monkeypatch.setattr(dw.QInputDialog, "getText",
+                        staticmethod(lambda *a, **k: ("with ease", True)))
+    win._add_selection_to_vocab()
+    assert added == [("with ease", "WithEase")]
+
+
+def test_add_selection_to_vocab_needs_selection(app):
+    added = []
+    win = dw.DictationWindow(on_add_vocab=lambda s, w: added.append((s, w)))
+    win.handle_transcript("Kein markiertes Wort", "text")
+    app.processEvents()
+    win._add_selection_to_vocab()          # nothing selected
+    assert added == []
+    assert "markieren" in win._hint.text()
 
 
 def test_accepted_low_words_are_confirmed(app):

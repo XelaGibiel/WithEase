@@ -139,6 +139,33 @@ def test_pick_number():
     assert cde.parse("nimm 3").data["n"] == 3
 
 
+def test_inline_punctuation():
+    ap = cde.apply_inline_punctuation
+    assert ap("der Preis Doppelpunkt zehn Euro") == "der Preis: zehn Euro"
+    assert ap("A Schrägstrich B") == "A/B"
+    assert ap("Text Klammer auf Wort Klammer zu weiter") == "Text (Wort) weiter"
+    assert ap("das ist gut Ausrufezeichen") == "das ist gut!"
+    assert ap("Frage Fragezeichen") == "Frage?"
+    # "Punkt"/"Komma" stay words (Whisper auto-punctuates; too ambiguous)
+    assert ap("Das ist ein Punkt am Horizont") == "Das ist ein Punkt am Horizont"
+
+
+def test_inline_punctuation_absorbs_whisper_periods():
+    ap = cde.apply_inline_punctuation
+    # Whisper wraps the spoken symbol as its own sentence – no stray dots
+    assert ap("Wort. Fragezeichen.") == "Wort?"
+    assert ap("Wort. Fragezeichen. Weiter") == "Wort? Weiter"
+    assert ap("Alles klar. Ausrufezeichen.") == "Alles klar!"
+    # a real trailing word keeps its space
+    assert ap("Frage Fragezeichen und Antwort") == "Frage? und Antwort"
+
+
+def test_inline_quotes_oben_unten():
+    ap = cde.apply_inline_punctuation
+    assert ap("Zitat Anführungszeichen unten Hallo Anführungszeichen oben Ende") \
+        == "Zitat „Hallo“ Ende"
+
+
 def test_pick_with_filler_words():
     assert cde.parse("nimm mal eins").data["n"] == 1
     assert cde.parse("nimm die zwei").data["n"] == 2

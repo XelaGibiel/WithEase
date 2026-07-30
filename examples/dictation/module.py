@@ -160,6 +160,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "preload.hint": "Lädt das Whisper-Modell schon beim Start, damit das erste Diktat sofort schnell ist. Erscheint nur, wenn „Mit Windows starten“ (Allgemein) aktiv ist.",
         "training": "Trainingsdaten sammeln (für spätere Stimm-Anpassung)",
         "training.hint": "Speichert Aufnahme + erkannten Text lokal, damit später ein Anlernen an deine Stimme (Fine-Tuning, z. B. auf GPU) möglich wird. Optional, braucht Speicherplatz.",
+        "enroll": "Stimm-Training (Vorlesen) …",
+        "enroll.hint": "Bekannte Sätze vorlesen → perfekte (Audio + exakter Text)-Paare als Gold-Trainingsdaten.",
         "device": "Mikrofon",
         "device.default": "Standardgerät",
         "test": "Test: 3 Sekunden aufnehmen und erkennen",
@@ -255,6 +257,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "preload.hint": "Loads the Whisper model at start so the first dictation is fast right away. Only shown when 'Start with Windows' (General) is on.",
         "training": "Collect training data (for later voice adaptation)",
         "training.hint": "Saves the recording + recognised text locally so a later adaptation to your voice (fine-tuning, e.g. on a GPU) becomes possible. Optional, uses disk space.",
+        "enroll": "Voice training (read aloud) …",
+        "enroll.hint": "Read known sentences aloud → perfect (audio + exact text) pairs as gold training data.",
         "device": "Microphone",
         "device.default": "Default device",
         "test": "Test: record 3 seconds and transcribe",
@@ -906,6 +910,15 @@ class DictationSettingsWidget(QWidget):
         _training_hint.setWordWrap(True)
         _training_hint.setStyleSheet(_hint_style())
         form.addRow("", _training_hint)
+        enroll_row = QHBoxLayout()
+        _enroll_hint = QLabel(_t("enroll.hint"))
+        _enroll_hint.setWordWrap(True)
+        _enroll_hint.setStyleSheet(_hint_style())
+        enroll_row.addWidget(_enroll_hint, 1)
+        enroll_btn = QPushButton(_t("enroll"))
+        enroll_btn.clicked.connect(self._open_enrollment)
+        enroll_row.addWidget(enroll_btn)
+        form.addRow("", enroll_row)
 
         self._output_mode = QComboBox()
         self._output_mode.addItem(_t("output.window"), "window")
@@ -1034,6 +1047,15 @@ class DictationSettingsWidget(QWidget):
             parent=self)
         dlg.exec()
         self._glossary_summary.setText(self._glossary_summary_text())
+
+    def _open_enrollment(self) -> None:
+        from enrollment import PROMPTS
+        from settings_dialogs import EnrollmentDialog
+        dlg = EnrollmentDialog(
+            PROMPTS, on_start=self._module.enroll_start,
+            on_stop=self._module.enroll_stop,
+            on_discard=self._module.enroll_discard, parent=self)
+        dlg.exec()
 
     def _open_learn_text(self) -> None:
         from settings_dialogs import LearnFromTextDialog
@@ -1258,6 +1280,7 @@ class DictationModule(BaseModule):
         self._local_model_name = ""
         self._model_lock = threading.Lock()    # guards model loading
         self._last_low_words: list[str] = []   # low-confidence words (heatmap)
+        self._enroll_active = False            # guided-reading recording active
         self._indicator: DictationIndicator | None = None
         self._window: Any = None         # DictationWindow (created on the GUI thread)
         self._window_hwnd: int = 0       # our window's native handle (to exclude)
@@ -1356,6 +1379,7 @@ class DictationModule(BaseModule):
                     on_suggest=self.suggest_corrections,
                     on_reselect_target=self.reselect_target,
                     on_confirm_words=self.confirm_words,
+                    on_add_vocab=self.add_spoken_form,
                     on_geometry_changed=self._save_geometry,
                     geometry=self._settings.get("win_geo"),
                     history=list(self._settings.get("history", [])),
@@ -1537,6 +1561,8 @@ class DictationModule(BaseModule):
                       injected: bool, is_press: bool) -> bool:
         """Hook-thread callback – must return fast, never block."""
         if injected or (not self._trigger and not self._command_trigger):
+            return False
+        if self._enroll_active:      # guided reading owns the microphone
             return False
         if is_altgr_fake_lctrl(vk, scan):
             return False
@@ -1727,6 +1753,70 @@ class DictationModule(BaseModule):
 
     def _training_dir(self) -> str:
         return os.path.join(str(app_config.CONFIG_DIR), "dictation_training")
+
+    # -- guided reading / enrollment (gold training pairs) ---------------
+
+    def enroll_start(self) -> bool:
+        if self._state != "idle" or self._enroll_active:
+            return False
+        try:
+            import sounddevice as sd
+        except Exception:
+            return False
+        self._audio_chunks = []
+        try:
+            device = resolve_input_device(self._settings.get("input_device"))
+        except Exception:
+            device = None
+        try:
+            self._stream, self._rec_rate, self._rec_channels = open_input_stream(
+                sd, device,
+                lambda indata, *a: self._audio_chunks.append(bytes(indata)))
+        except Exception:
+            self._stream = None
+            return False
+        self._enroll_active = True
+        self._set_state("recording")
+        return True
+
+    def enroll_stop(self, prompt: str) -> str:
+        """Stop the recording and save it.  Returns the saved sample's id (so a
+        re-take can replace it), or "" on failure/too-short."""
+        if not self._enroll_active:
+            return ""
+        self._enroll_active = False
+        wav = self._close_stream()
+        self._set_state("idle")
+        if len(wav) < 8000:
+            return ""        # too short to be useful
+        return self._save_enrollment(wav, prompt)
+
+    def _save_enrollment(self, wav_bytes: bytes, prompt: str) -> str:
+        try:
+            import datetime
+            folder = os.path.join(self._training_dir(), "enrollment")
+            os.makedirs(folder, exist_ok=True)
+            stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            with open(os.path.join(folder, stamp + ".wav"), "wb") as f:
+                f.write(wav_bytes)
+            with open(os.path.join(folder, stamp + ".txt"), "w",
+                      encoding="utf-8") as f:
+                f.write(prompt)
+            return stamp
+        except Exception:
+            _log.exception("could not save enrollment sample")
+            return ""
+
+    def enroll_discard(self, stamp: str) -> None:
+        """Delete a saved enrollment take (used when re-recording a sentence)."""
+        if not stamp:
+            return
+        folder = os.path.join(self._training_dir(), "enrollment")
+        for ext in (".wav", ".txt"):
+            try:
+                os.remove(os.path.join(folder, stamp + ext))
+            except OSError:
+                pass
 
     def _save_training_sample(self, wav_bytes: bytes, text: str) -> None:
         """Opt-in: store (audio, recognised text) pairs locally so a personal

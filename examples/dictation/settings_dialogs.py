@@ -35,6 +35,114 @@ import vocabulary as vocab
 _READABLE = "color: palette(windowText);"
 
 
+class EnrollmentDialog(QDialog):
+    """Guided reading: shows a known sentence, records the user reading it, and
+    stores (audio, exact text) gold pairs via the ``on_start`` / ``on_stop``
+    callbacks (which the module implements with its recorder)."""
+
+    def __init__(self, prompts: list[str],
+                 on_start: Callable[[], bool],
+                 on_stop: Callable[[str], str],
+                 on_discard: Callable[[str], None] | None = None,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._prompts = list(prompts)
+        self._on_start = on_start
+        self._on_stop = on_stop
+        self._on_discard = on_discard or (lambda _s: None)
+        self._index = 0
+        self._recording = False
+        self._saved: dict[int, str] = {}    # sentence index → saved sample id
+        self.setWindowTitle("Stimm-Training (Vorlesen)")
+        self.resize(560, 320)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        intro = QLabel("Lies den Satz laut und deutlich vor. „Aufnahme starten“ "
+                       "→ vorlesen → „Stopp“. Die Aufnahme wird zusammen mit dem "
+                       "genauen Text gespeichert (für spätere Stimm-Anpassung).")
+        intro.setWordWrap(True)
+        intro.setStyleSheet(_READABLE)
+        layout.addWidget(intro)
+
+        self._prompt = QLabel()
+        self._prompt.setWordWrap(True)
+        self._prompt.setStyleSheet(
+            "font-size: 16pt; font-weight: bold; color: palette(windowText);")
+        layout.addWidget(self._prompt, 1)
+
+        self._progress = QLabel()
+        self._progress.setStyleSheet(_READABLE)
+        layout.addWidget(self._progress)
+
+        row = QHBoxLayout()
+        self._back_btn = QPushButton("◀ Zurück (neu aufnehmen)")
+        self._back_btn.setToolTip("Zum vorigen Satz – falls du dich versprochen "
+                                  "hast, dort neu aufnehmen (ersetzt die alte "
+                                  "Aufnahme).")
+        self._back_btn.clicked.connect(self._back)
+        row.addWidget(self._back_btn)
+        self._record_btn = QPushButton("● Aufnahme starten")
+        self._record_btn.clicked.connect(self._toggle)
+        row.addWidget(self._record_btn)
+        skip = QPushButton("Überspringen ▸")
+        skip.clicked.connect(self._next)
+        row.addWidget(skip)
+        row.addStretch()
+        close = QPushButton("Schließen")
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        layout.addLayout(row)
+        self._update()
+
+    def _update(self) -> None:
+        marker = "  ✓ (aufgenommen)" if self._index in self._saved else ""
+        self._prompt.setText("„" + self._prompts[self._index] + "“" + marker)
+        self._progress.setText(
+            f"Satz {self._index + 1} von {len(self._prompts)}  ·  "
+            f"aufgenommen: {len(self._saved)}")
+        self._back_btn.setEnabled(not self._recording and self._index > 0)
+
+    def _toggle(self) -> None:
+        if not self._recording:
+            if self._on_start():
+                self._recording = True
+                self._record_btn.setText("■ Stopp & speichern")
+                self._update()
+        else:
+            stamp = self._on_stop(self._prompts[self._index])
+            self._recording = False
+            self._record_btn.setText("● Aufnahme starten")
+            if stamp:
+                old = self._saved.get(self._index)
+                if old:
+                    self._on_discard(old)       # replace the previous take
+                self._saved[self._index] = stamp
+                self._advance()
+            self._update()
+
+    def _next(self) -> None:
+        if not self._recording:
+            self._advance()
+            self._update()
+
+    def _back(self) -> None:
+        if not self._recording and self._index > 0:
+            self._index -= 1
+            self._update()
+
+    def _advance(self) -> None:
+        self._index = (self._index + 1) % len(self._prompts)
+
+    def reject(self) -> None:  # noqa: D102 (Qt override)
+        if self._recording:            # stop + discard a half-read take
+            stamp = self._on_stop(self._prompts[self._index])
+            if stamp:
+                self._on_discard(stamp)
+            self._recording = False
+        super().reject()
+
+
 class LearnFromTextDialog(QDialog):
     """Extract likely vocabulary from a pasted text or a file, let the user pick
     which terms to keep, then hand them back via ``on_accept(list)``."""
@@ -169,6 +277,12 @@ class ListEditorDialog(QDialog):
         else:
             self._input = None
 
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Suchen …")
+        self._search.setClearButtonEnabled(True)
+        self._search.textChanged.connect(lambda *_: self._reload())
+        layout.addWidget(self._search)
+
         self._list = QListWidget()
         layout.addWidget(self._list, 1)
 
@@ -189,10 +303,17 @@ class ListEditorDialog(QDialog):
 
     def _reload(self) -> None:
         self._list.clear()
-        rows = list(self._rows_provider())
+        query = self._search.text().strip().casefold()
+        all_rows = list(self._rows_provider())
+        rows = [r for r in all_rows if not query or query in
+                f"{r[0]} {r[1]} {r[2]}".casefold()]
         if not rows:
-            if self._empty_text:
-                item = QListWidgetItem(self._empty_text)
+            if all_rows and query:
+                note = "Keine Treffer."
+            else:
+                note = self._empty_text
+            if note:
+                item = QListWidgetItem(note)
                 item.setFlags(Qt.ItemFlag.NoItemFlags)
                 self._list.addItem(item)
             return

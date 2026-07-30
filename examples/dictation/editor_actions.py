@@ -419,6 +419,15 @@ class Editor:
     def _do_replace(self, d):
         return self._resolve("replace", d["from"], {"to": d["to"]})
 
+    def _do_redo_dictation(self, _d):
+        """Select the last dictated text so the next utterance re-records it
+        (for a slip of the tongue).  Not learned – it is not a mis-hearing."""
+        if not self._last_insert:
+            return ActionResult("info", message="nichts zu wiederholen")
+        s, e = self._last_insert
+        self._set_cursor(e, s)
+        return ActionResult("ok", message="letzten Satz neu sprechen")
+
     def _do_undo(self, _d):
         self.te.undo()
         return ActionResult("ok")

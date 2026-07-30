@@ -36,6 +36,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -339,6 +340,7 @@ class DictationWindow(QWidget):
                  on_suggest: Callable[[str], list[str]] | None = None,
                  on_reselect_target: Callable[[], None] | None = None,
                  on_confirm_words: Callable[[list], None] | None = None,
+                 on_add_vocab: Callable[[str, str], None] | None = None,
                  on_geometry_changed: Callable[[list], None] | None = None,
                  geometry: list | None = None,
                  history: list[str] | None = None,
@@ -351,6 +353,7 @@ class DictationWindow(QWidget):
         self._on_suggest = on_suggest or (lambda _wrong: [])
         self._on_reselect_target = on_reselect_target or (lambda: None)
         self._on_confirm_words = on_confirm_words or (lambda _words: None)
+        self._on_add_vocab = on_add_vocab or (lambda _s, _w: None)
         self._on_geometry_changed = on_geometry_changed or (lambda _g: None)
         self._restore_geometry = geometry
         self._pending_low_words: list[str] = []   # flagged-but-still-here words
@@ -425,6 +428,11 @@ class DictationWindow(QWidget):
         redo_btn = QPushButton("↷ Wiederholen")
         redo_btn.clicked.connect(lambda: self._editor.te.redo())
         tools.addWidget(redo_btn)
+        vocab_btn = QPushButton("＋ Wörterbuch")
+        vocab_btn.setToolTip("Markiertes Wort ins Wörterbuch aufnehmen und "
+                             "angeben, wie es gesprochen wird")
+        vocab_btn.clicked.connect(self._add_selection_to_vocab)
+        tools.addWidget(vocab_btn)
         self._reselect_btn = QPushButton("🎯 Ziel-App wählen")
         self._reselect_btn.clicked.connect(lambda: self._on_reselect_target())
         tools.addWidget(self._reselect_btn)
@@ -450,18 +458,25 @@ class DictationWindow(QWidget):
             " padding: 3px 8px; }")
         layout.addWidget(self._hint)
 
-        # --- buttons ---
+        # --- buttons (each with a keyboard shortcut) ---
         row = QHBoxLayout()
-        self._insert_btn = QPushButton("Einfügen & Schließen")
+        self._insert_btn = QPushButton("Einfügen && Schließen  (Strg+Enter)")
+        self._insert_btn.setShortcut("Ctrl+Return")
+        self._insert_btn.setToolTip("Text in die App einfügen und schließen "
+                                    "(Strg+Enter)")
         self._insert_btn.clicked.connect(self._do_insert)
         row.addWidget(self._insert_btn)
-        self._copy_btn = QPushButton("Kopieren")
+        self._copy_btn = QPushButton("Kopieren  (Strg+Umschalt+C)")
+        self._copy_btn.setShortcut("Ctrl+Shift+C")
         self._copy_btn.clicked.connect(self._do_copy)
         row.addWidget(self._copy_btn)
-        self._copy_close_btn = QPushButton("Kopieren & Schließen")
+        self._copy_close_btn = QPushButton(
+            "Kopieren && Schließen  (Strg+Umschalt+Enter)")
+        self._copy_close_btn.setShortcut("Ctrl+Shift+Return")
         self._copy_close_btn.clicked.connect(self._do_copy_and_close)
         row.addWidget(self._copy_close_btn)
-        self._close_btn = QPushButton("Schließen")
+        self._close_btn = QPushButton("Schließen  (Strg+W)")
+        self._close_btn.setShortcut("Ctrl+W")
         self._close_btn.clicked.connect(self._close_and_clear)
         row.addWidget(self._close_btn)
         row.addStretch()
@@ -565,7 +580,7 @@ class DictationWindow(QWidget):
 
         # Dictation key (or explicit text mode): never interpret as a command.
         if mode == "text":
-            self._editor.insert_dictation(text)
+            self._editor.insert_dictation(cde.apply_inline_punctuation(text))
             self._forward_correction()
             self._highlight_low_words(low_words)
             self._report(text, "als Text eingefügt")
@@ -577,7 +592,7 @@ class DictationWindow(QWidget):
                 # Command key but nothing matched: do not dump text into buffer.
                 self._report(text, "Befehl nicht erkannt")
                 return
-            self._editor.insert_dictation(text)
+            self._editor.insert_dictation(cde.apply_inline_punctuation(text))
             self._forward_correction()
             self._highlight_low_words(low_words)
             self._report(text, "als Text eingefügt")
@@ -764,6 +779,20 @@ class DictationWindow(QWidget):
         dlg = CommandCheatSheet(parent=self)
         dlg.show()
         dlg.raise_()
+
+    def _add_selection_to_vocab(self) -> None:
+        """Add the selected word to the spoken→written dictionary, asking how it
+        is pronounced."""
+        written = self._edit.textCursor().selectedText().strip()
+        if not written:
+            self._set_hint("Erst ein Wort markieren, dann „＋ Wörterbuch“.")
+            return
+        spoken, ok = QInputDialog.getText(
+            self, "Zum Wörterbuch hinzufügen",
+            f"„{written}“ – wie sprichst du es aus?", text=written.lower())
+        if ok and spoken.strip():
+            self._on_add_vocab(spoken.strip(), written)
+            self._set_hint(f"Wörterbuch: „{spoken.strip()}“ → „{written}“")
 
     def _load_history(self, item: QListWidgetItem) -> None:
         text = item.data(Qt.ItemDataRole.UserRole)

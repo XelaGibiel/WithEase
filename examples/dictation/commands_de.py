@@ -57,6 +57,52 @@ PUNCT_WORDS = {
     "bindestrich": "-", "gedankenstrich": "–", "auslassungspunkte": "…",
 }
 
+# Inline punctuation: unambiguous spoken symbols that should become the symbol
+# even in the middle of a dictated sentence ("Preis Doppelpunkt zehn" → "Preis:
+# zehn").  Deliberately excludes "Punkt"/"Komma" (common words; Whisper already
+# auto-punctuates sentences).  Grouped by spacing behaviour.
+_INLINE_TIGHT = {"schrägstrich": "/", "schragstrich": "/", "bindestrich": "-"}
+_INLINE_OPEN = {
+    "runde klammer auf": "(", "eckige klammer auf": "[", "klammer auf": "(",
+    "anführungszeichen auf": "„", "anfuehrungszeichen auf": "„",
+    "anführungszeichen unten": "„", "anfuehrungszeichen unten": "„",
+    "gänsefüßchen auf": "„", "gänsefüßchen unten": "„",
+}
+_INLINE_CLOSE = {
+    "runde klammer zu": ")", "eckige klammer zu": "]", "klammer zu": ")",
+    "anführungszeichen zu": "“", "anfuehrungszeichen zu": "“",
+    "anführungszeichen oben": "“", "anfuehrungszeichen oben": "“",
+    "gänsefüßchen zu": "“", "gänsefüßchen oben": "“", "doppelpunkt": ":",
+    "semikolon": ";", "strichpunkt": ";", "gedankenstrich": "–",
+    "ausrufezeichen": "!", "fragezeichen": "?",
+}
+
+
+def _inline_replace(text: str, mapping: dict, left: str, right: str) -> str:
+    for phrase in sorted(mapping, key=len, reverse=True):
+        body = r"\b" + r"\s+".join(re.escape(w) for w in phrase.split()) + r"\b"
+        text = re.sub(left + body + right,
+                      lambda _m, s=mapping[phrase]: s, text, flags=re.IGNORECASE)
+    return text
+
+
+def apply_inline_punctuation(text: str) -> str:
+    """Turn spoken punctuation words inside dictated text into symbols.
+
+    Whisper tends to treat a spoken punctuation word as its own sentence and
+    wraps it in periods ("Wort. Fragezeichen." → we want "Wort?"), so the
+    surrounding stray sentence punctuation is absorbed too."""
+    if not text or not text.strip():
+        return text
+    # tight both sides (slash/hyphen): swallow surrounding spaces + stray dots
+    text = _inline_replace(text, _INLINE_TIGHT, r"[\s.]*", r"[\s.]*")
+    # closers: no space before; eat a stray period Whisper put before *and*
+    # directly after (but keep the space before the next word)
+    text = _inline_replace(text, _INLINE_CLOSE, r"[\s.,;:!?]*", r"\.?")
+    # openers: no space after; eat a stray period Whisper put after
+    text = _inline_replace(text, _INLINE_OPEN, r"", r"[\s.]*")
+    return text
+
 # German number words → int (for "nimm zwei", "die letzten drei Wörter").
 _NUMBERS = {
     "null": 0, "ein": 1, "eins": 1, "eine": 1, "zwei": 2, "drei": 3,
@@ -175,6 +221,11 @@ def _m_mode(t: str) -> Command | None:
 
 
 def _m_correct(t: str) -> Command | None:
+    if t in ("nochmal", "noch mal", "noch einmal", "das nochmal",
+             "nochmal aufnehmen", "neu aufnehmen", "nochmal sprechen",
+             "satz wiederholen", "letzten satz wiederholen",
+             "letzten satz neu"):
+        return Command("redo_dictation")
     if t in ("korrigiere das", "korrigier das", "korrigiere letztes"):
         return Command("correct_last")
     m = re.fullmatch(r"(?:korrigiere|korrigier) (.+)", t)
@@ -302,10 +353,12 @@ def _m_format(t: str) -> Command | None:
     if t in ("klammer zu", "runde klammer zu"):
         return Command("punct", {"char": ")"})
     if t in ("anführungszeichen auf", "anfuehrungszeichen auf",
-             "gänsefüßchen auf"):
+             "anführungszeichen unten", "anfuehrungszeichen unten",
+             "gänsefüßchen auf", "gänsefüßchen unten"):
         return Command("punct", {"char": "„", "glue": "left"})
     if t in ("anführungszeichen zu", "anfuehrungszeichen zu",
-             "gänsefüßchen zu"):
+             "anführungszeichen oben", "anfuehrungszeichen oben",
+             "gänsefüßchen zu", "gänsefüßchen oben"):
         return Command("punct", {"char": "“"})
     return None
 
