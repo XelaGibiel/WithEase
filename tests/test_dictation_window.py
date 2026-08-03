@@ -359,6 +359,111 @@ def test_target_label_updates(app):
     assert "keine" in win._target_label.text().lower()
 
 
+# --- live dictation: auto-space between sentences ---------------------------
+
+def test_needs_sep_after_sentence_punctuation():
+    ns = dw.DictationWindow._needs_sep
+    assert ns("a") and ns("1")
+    assert ns(".") and ns("!") and ns("?") and ns("…")
+    assert ns(",") and ns(":") and ns(";")
+    assert not ns(" ")
+
+
+def test_live_second_sentence_gets_leading_space(app):
+    win, _, _ = make(app)
+    win.live_final("Das ist Satz eins.")
+    app.processEvents()
+    win.live_polish("Das ist Satz eins.")
+    app.processEvents()
+    # a new sentence must not stick to the previous period
+    win.live_final("Das ist Satz zwei.")
+    app.processEvents()
+    assert win.text() == "Das ist Satz eins. Das ist Satz zwei."
+
+
+def test_live_inserts_at_cursor_not_end(app):
+    win, _, _ = make(app)
+    win.live_final("Ich mag Haus.")
+    app.processEvents()
+    win.live_polish("Ich mag Haus.")
+    app.processEvents()
+    # move the cursor before "Haus" (as „Cursor vor Haus" would) and dictate
+    idx = win.text().index("Haus")
+    cur = win._edit.textCursor()
+    cur.setPosition(idx)
+    win._edit.setTextCursor(cur)
+    win.live_final("das")
+    app.processEvents()
+    assert win.text() == "Ich mag das Haus."
+
+
+def test_live_at_cursor_adds_leading_and_trailing_space(app):
+    win, _, _ = make(app)
+    win.live_final("ABCD")
+    app.processEvents()
+    win.live_polish("ABCD")
+    app.processEvents()
+    cur = win._edit.textCursor()
+    cur.setPosition(2)                 # between B and C: "AB|CD"
+    win._edit.setTextCursor(cur)
+    win.live_final("x")
+    app.processEvents()
+    assert win.text() == "AB x CD"
+
+
+# --- live sentence-accumulation polish --------------------------------------
+
+def test_live_polish_keeps_sentence_open_until_committed(app):
+    win, _, _ = make(app)
+    # first pause: mid-sentence, Whisper text has no end punctuation → open
+    win.live_final("das ist")
+    app.processEvents()
+    win.live_polish("Das ist", commit=False)
+    app.processEvents()
+    assert win.text() == "Das ist"
+    # second pause: sentence completes → whole sentence re-polished + committed
+    win.live_final("ein satz zeichen")
+    app.processEvents()
+    win.live_polish("Das ist ein Satzzeichen.", commit=True)
+    app.processEvents()
+    assert win.text() == "Das ist ein Satzzeichen."
+    # next sentence starts fresh and is appended with a separating space
+    win.live_final("und noch was")
+    app.processEvents()
+    win.live_polish("Und noch was.", commit=True)
+    app.processEvents()
+    assert win.text() == "Das ist ein Satzzeichen. Und noch was."
+
+
+def test_whisper_only_polish_without_vosk_run(app):
+    # Whisper-only mode: no live_final (no Vosk) precedes the polish – the
+    # polished text is inserted fresh and kept open until it commits.
+    win, _, _ = make(app)
+    win.live_polish("Das ist ein", commit=False)
+    app.processEvents()
+    assert win.text() == "Das ist ein"
+    win.live_polish("Das ist ein Test.", commit=True)      # whole sentence
+    app.processEvents()
+    assert win.text() == "Das ist ein Test."
+    win.live_polish("Und noch was.", commit=True)          # next sentence
+    app.processEvents()
+    assert win.text() == "Das ist ein Test. Und noch was."
+
+
+# --- live noise gate --------------------------------------------------------
+
+def test_chunk_rms_gate():
+    import numpy as np
+
+    import module as mod
+    rms = mod.DictationModule._chunk_rms
+    silence = np.zeros(2000, dtype=np.int16).tobytes()
+    loud = (np.ones(2000, dtype=np.int16) * 4000).tobytes()
+    assert rms(b"") == 0.0
+    assert rms(silence) == 0.0
+    assert rms(loud) > 3000            # loud speech is well above a ~250 gate
+
+
 def test_reselect_command_calls_callback(app):
     called = []
     win = dw.DictationWindow(on_reselect_target=lambda: called.append(1))
@@ -438,6 +543,49 @@ def test_corrected_low_word_is_not_confirmed(app):
     win.handle_transcript("einfügen", "command")
     app.processEvents()
     assert "Haus" not in confirmed    # it was changed, so not confirmed
+
+
+def test_live_partial_then_final_then_polish(app):
+    win, _, _ = make(app)
+    win.show()
+    # word-by-word provisional updates
+    win.live_partial("hallo")
+    app.processEvents()
+    assert win.text() == "hallo"
+    win.live_partial("hallo welt")
+    app.processEvents()
+    assert win.text() == "hallo welt"
+    # segment finalises
+    win.live_final("hallo welt")
+    app.processEvents()
+    assert win.text() == "hallo welt"
+    # Whisper polish replaces the finalised segment (punctuation/casing)
+    win.live_polish("Hallo Welt.")
+    app.processEvents()
+    assert win.text() == "Hallo Welt."
+
+
+def test_live_second_segment_appends_with_space(app):
+    win, _, _ = make(app)
+    win.show()
+    win.live_final("erster Satz")
+    win.live_partial("zweiter")
+    app.processEvents()
+    assert win.text() == "erster Satz zweiter"
+    win.live_final("zweiter Satz")
+    app.processEvents()
+    assert win.text() == "erster Satz zweiter Satz"
+
+
+def test_live_polish_skipped_if_user_edited(app):
+    win, _, _ = make(app)
+    win.show()
+    win.live_final("test")
+    app.processEvents()
+    win._edit.setPlainText("etwas ganz anderes")   # user edits
+    win.live_polish("Test.")
+    app.processEvents()
+    assert win.text() == "etwas ganz anderes"       # polish left it alone
 
 
 def test_state_shows_mode(app):

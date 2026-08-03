@@ -47,3 +47,20 @@ def test_apply_spoken_forms_case_insensitive_whole_word():
 def test_apply_spoken_forms_prefers_longer_match():
     pairs = [("ease", "X"), ("with ease", "WithEase")]
     assert vocab.apply_spoken_forms("with ease", pairs) == "WithEase"
+
+
+def test_extract_scored_filters_common_words_and_scores_strength():
+    letter = ("Sehr geehrte Damen und Herren, in Ihrem Schreiben vom Juli. "
+              "Herr Leibig nutzt WithEase und die GmbH am ABS-System 2.0.")
+    scored = vocab.extract_terms_scored(letter)
+    strong = {t for t, s in scored if s}
+    weak = {t for t, s in scored if not s}
+    # CamelCase / acronym / digit-mix are confident (pre-checked)
+    assert {"WithEase", "GmbH", "ABS-System"} <= strong
+    # a plain name is a weak candidate (offered, not pre-checked)
+    assert "Leibig" in weak
+    # common German words / formal address never become terms
+    allt = set(vocab.extract_terms(letter))
+    for junk in ("Damen", "Herren", "Ihrem", "Juli", "Sehr", "Schreiben"):
+        assert junk not in strong
+    assert not ({"Damen", "Herren", "Ihrem", "Juli"} & allt)

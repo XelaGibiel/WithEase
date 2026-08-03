@@ -34,38 +34,81 @@ _COMMON = {
     "weg", "arbeit", "beispiel", "frage", "antwort", "problem", "grund", "fall",
     "name", "text", "sache", "ding", "dinge", "person", "leben", "morgen",
     "abend", "woche", "monat", "stunde", "minute", "herr", "herrn", "dame",
+    # formal address / letters (a common source of junk terms)
+    "sie", "ihr", "ihre", "ihrem", "ihren", "ihrer", "ihres", "ihnen",
+    "sehr", "geehrte", "geehrter", "geehrten", "damen", "herren", "liebe",
+    "lieber", "freundlichen", "freundliche", "grüßen", "gruß", "grüße",
+    "hochachtungsvoll", "anrede", "betreff", "datum", "unterschrift",
+    "vorname", "vornamen", "nachname", "nachnamen", "adresse", "straße",
+    "nummer", "telefon", "email", "e-mail",
+    # months + weekdays
+    "januar", "februar", "märz", "april", "mai", "juni", "juli", "august",
+    "september", "oktober", "november", "dezember", "montag", "dienstag",
+    "mittwoch", "donnerstag", "freitag", "samstag", "sonntag",
+    # more frequent nouns / capitalised function words that add only noise
+    "sicht", "lücke", "beitrag", "beiträge", "nachweis", "nachweise",
+    "grund", "gründe", "bereich", "bereiche", "punkt", "punkte", "stelle",
+    "stellen", "höhe", "art", "form", "wert", "werte", "zahl", "zahlen",
+    "betrag", "beträge", "summe", "anzahl", "menge", "möglichkeit", "recht",
+    "gesetz", "regel", "regeln", "seite", "seiten", "ende", "anfang",
+    "beginn", "schluss", "ziel", "ziele", "zweck", "sinn", "wille",
+    "familie", "eltern", "mutter", "vater", "sohn", "tochter", "bruder",
+    "schwester", "freund", "freunde", "gruppe", "team", "firma", "büro",
+    "geld", "euro", "cent", "konto", "rechnung", "vertrag", "antrag",
+    "antragsteller", "kunde", "kunden", "bürger", "mensch", "menschen",
+    "wochen", "monate", "jahre", "tagen", "uhr", "termin", "termine",
 }
 
 
-def extract_terms(text: str, limit: int = 100) -> list[str]:
-    """Return likely custom-vocabulary terms from ``text``: proper nouns,
-    CamelCase, and long/uncommon words – ranked by frequency, de-duplicated."""
+def _term_strength(word: str) -> str | None:
+    """Classify a token as a vocabulary candidate.
+
+    Returns ``"strong"`` (almost certainly a name/coinage worth learning),
+    ``"weak"`` (a plain capitalised word – might be a name, but in German most
+    capitalised words are ordinary nouns Whisper already knows), or ``None``
+    (not a candidate).  German capitalises *all* nouns, so "is capitalised" is a
+    weak signal by itself – strong signals are CamelCase, ALL-CAPS acronyms and
+    letter+digit mixes."""
+    if len(word) < 3 or word.lower() in _COMMON:
+        return None
+    has_digit = any(c.isdigit() for c in word)
+    internal_upper = any(c.isupper() for c in word[1:])   # CamelCase / ALL-CAPS
+    if internal_upper or has_digit:
+        return "strong"
+    if word[0].isupper():
+        return "weak"
+    return None
+
+
+def extract_terms_scored(text: str, limit: int = 100) -> list[tuple[str, bool]]:
+    """Like :func:`extract_terms` but each term carries ``is_strong`` so the UI
+    can pre-check only the confident ones.  Strong terms first, then by
+    frequency, then length."""
     if not text:
         return []
     tokens = re.findall(r"[^\W\d_][\w'’-]*", text, re.UNICODE)
     counts: Counter[str] = Counter()
     best_form: dict[str, str] = {}
+    strong: dict[str, bool] = {}
     for w in tokens:
-        if len(w) < 3:
-            continue
-        low = w.lower()
-        if low in _COMMON:
-            continue
-        capitalised = w[0].isupper()
-        camel = any(c.isupper() for c in w[1:])
-        # CamelCase is a strong term signal; otherwise a capitalised word that
-        # is not a common noun.  (Plain long lower-case words are usually not
-        # names/terms and would only add noise.)
-        if not (camel or (capitalised and low not in _COMMON)):
+        kind = _term_strength(w)
+        if kind is None:
             continue
         key = w.casefold()
         counts[key] += 1
-        # Keep the form with an internal capital (CamelCase) if seen, else first.
-        if key not in best_form or (camel and not any(
+        strong[key] = strong.get(key, False) or kind == "strong"
+        internal_upper = any(c.isupper() for c in w[1:])
+        if key not in best_form or (internal_upper and not any(
                 c.isupper() for c in best_form[key][1:])):
             best_form[key] = w
-    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], -len(kv[0])))
-    return [best_form[key] for key, _n in ranked[:limit]]
+    ranked = sorted(counts.items(),
+                    key=lambda kv: (not strong[kv[0]], -kv[1], -len(kv[0])))
+    return [(best_form[key], strong[key]) for key, _n in ranked[:limit]]
+
+
+def extract_terms(text: str, limit: int = 100) -> list[str]:
+    """Return likely custom-vocabulary terms from ``text`` – ranked, de-duped."""
+    return [t for t, _strong in extract_terms_scored(text, limit)]
 
 
 def _sub_phrase(text: str, spoken: str, written: str) -> str:

@@ -20,14 +20,35 @@ Optionale Abhängigkeiten (nur bei Nutzung nötig):
 """
 from __future__ import annotations
 
+import faulthandler
 import io
+import json
 import logging
 import os
+import queue
 import sys
 import threading
 import time
 import wave
 from typing import Any
+
+# Vosk (Kaldi/OpenBLAS) and faster-whisper (CTranslate2) each ship their own
+# OpenMP runtime.  When both are loaded in one process on Windows, the duplicate
+# OpenMP runtimes abort the whole process ("OMP: Error #15") – which looked like
+# the app "just closing".  Allow the duplicate; must be set before either lib
+# loads (they are imported lazily further down).
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+# The live noise-gate uses the stdlib ``audioop`` (not numpy) on purpose: the
+# main process runs Vosk, and we keep every *other* heavy native library
+# (numpy, CTranslate2, PyAV) OUT of it – faster-whisper runs in a separate
+# process (see WhisperProc) so the two never share native runtimes/OpenMP,
+# which is what crashed the app when they lived together.
+import warnings as _warnings
+
+with _warnings.catch_warnings():
+    _warnings.simplefilter("ignore", DeprecationWarning)  # audioop -> 3.13
+    import audioop
 
 # Allow importing this add-on's sibling files (commands_de, editor_actions,
 # dictation_window) both when loaded by WithEase and when run standalone.
@@ -39,6 +60,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QLabel,
@@ -75,6 +97,16 @@ _log = logging.getLogger(__name__)
 _SAMPLE_RATE = 16_000  # what whisper expects
 _CHANNELS = 1
 
+# Dump the C-level stack of every thread to a file if a native library crashes
+# the process, so a "the app just closed" report tells us *where* (Vosk vs
+# Whisper vs PortAudio) instead of leaving nothing behind.
+try:
+    _crash_path = os.path.join(app_config.CONFIG_DIR, "dictation_crash.log")
+    _crash_file = open(_crash_path, "a", buffering=1, encoding="utf-8")  # noqa: SIM115
+    faulthandler.enable(_crash_file)
+except Exception:       # never let diagnostics break startup
+    faulthandler.enable()
+
 
 # ---------------------------------------------------------------------------
 # Self-contained translations (the core locale files know nothing about this
@@ -100,6 +132,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "backend.cloud": "Cloud-Dienst (OpenRouter, OpenAI, Groq …)",
         "backend.local": "Lokal auf diesem PC",
         "backend.local.missing": "nicht installiert",
+        "backend.live": "Live-Diktat (Vosk, wortweise + Whisper-Politur)",
+        "backend.live.hint": "Wort-für-Wort live wie am Handy; der fertige Satz wird von Whisper nachpoliert (Zeichensetzung, Groß-/Kleinschreibung, dein Wörterbuch). Benötigt Vosk + ein deutsches Vosk-Modell (siehe Anleitung, falls nicht vorhanden).",
+        "live_use_vosk": "Vosk-Vorschau (Wort-für-Wort)",
+        "live_use_vosk.hint": "Aus (empfohlen): Nur Whisper – der Text erscheint in ~1–2-Sekunden-Schritten, dafür genauer. Ein: Vosk zeigt sofort graue Wörter (Wort-für-Wort), die Whisper danach korrigiert – schneller sichtbar, aber gröber und lädt ein großes Vosk-Modell.",
+        "live_pause": "Satzpause (Live)",
+        "live_pause.hint": "Wie lange eine Sprechpause dauern muss, damit der Satz als beendet gilt und von Whisper poliert wird. Höher = ganze Sätze auf einmal (saubere Zeichensetzung); niedriger = die Politur erscheint früher. Hilft gegen „wilde“ Zeichensetzung bei Pausen mitten im Satz.",
+        "live_pause.auto": "Satzpause automatisch lernen",
+        "live_pause.auto.hint": "Passt die Satzpause selbst an: Endet ein diktierter Abschnitt sauber mit einem Satzzeichen, wird die Pause etwas kürzer (reaktionsschneller); wurde ein Satz mittendrin zerschnitten, wird sie länger. Nähert sich mit der Zeit deiner natürlichen Sprechweise an.",
+        "live_gate": "Rauschgrenze (Live)",
+        "live_gate.hint": "Alles, was leiser ist als dieser Wert (Lüfter, Brummen, Tastatur im Hintergrund), gilt als Stille und wird nicht als Text erkannt. Höher = mehr Ruhe, aber leises Sprechen kann verschluckt werden; niedriger = empfindlicher. 0 schaltet die Grenze aus. Richtwert: 200–400.",
+        "live_agc": "Automatische Aussteuerung",
+        "live_agc.hint": "Hebt leises/zu weit entferntes Sprechen automatisch auf einen gleichmäßigen Pegel an, bevor es an die Erkennung geht (verstärkt nur Sprache, kein Rauschen; ohne Übersteuern). Verbessert die Genauigkeit von Vosk UND Whisper spürbar, wenn dein Mikro eher leise ist.",
         "provider": "Anbieter",
         "provider.openrouter": "OpenRouter",
         "provider.openai": "OpenAI",
@@ -127,10 +171,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "glossary.count": "{n} Wörter hinterlegt",
         "glossary.add": "Neues Wort eingeben und Enter drücken",
         "glossary.learn": "Aus Text lernen …",
-        "vocab": "Wörterbuch (sprich → schreibe)",
-        "vocab.hint": "„Wenn ich X sage, schreibe Y.“ Wird beim Diktat automatisch angewandt und verbessert zusätzlich die Erkennung.",
+        "vocab": "Wörterbuch",
+        "vocab.hint": "Deine eigenen Wörter: Namen/Fachbegriffe (verbessern die Erkennung) und optional, wie sie ausgesprochen werden („wenn ich X sage, schreibe Y“). Links tippen filtert sofort – du siehst gleich, ob ein Wort schon existiert. Unten nach Herkunft filtern (von dir / gelernt / importiert). Mit „Export/Import“ als Textdatei sichern.",
+        "cat.all": "Alle Wörter",
+        "cat.user": "Von mir angelegt",
+        "cat.learned": "Aus Text gelernt",
+        "cat.import": "Importiert",
+        "cat.spoken": "Mit gesprochener Form",
+        "cat.corrected": "Korrigiert (gelernt)",
         "vocab.empty": "Noch keine Einträge.",
-        "vocab.spoken": "gesprochen (z. B. with ease)",
+        "vocab.spoken": "Wort suchen & hinzufügen …",
         "vocab.written": "geschrieben (z. B. WithEase)",
         "memory": "Fehler-Gedächtnis",
         "memory.empty": "Noch nichts gelernt.",
@@ -197,6 +247,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "backend.cloud": "Cloud service (OpenRouter, OpenAI, Groq …)",
         "backend.local": "Locally on this PC",
         "backend.local.missing": "not installed",
+        "backend.live": "Live dictation (Vosk, word-by-word + Whisper polish)",
+        "backend.live.hint": "Word-by-word live like on a phone; the finished sentence is polished by Whisper (punctuation, casing, your dictionary). Needs Vosk + a German Vosk model.",
+        "live_use_vosk": "Vosk preview (word-by-word)",
+        "live_use_vosk.hint": "Off (recommended): Whisper only – text appears in ~1–2 s steps but is more accurate. On: Vosk shows instant grey words (word-by-word) that Whisper then corrects – faster to appear but rougher, and loads a large Vosk model.",
+        "live_pause": "Sentence pause (live)",
+        "live_pause.hint": "How long a speaking pause must last before the sentence counts as finished and is polished by Whisper. Higher = whole sentences at once (clean punctuation); lower = the polish appears sooner. Helps against 'wild' punctuation when you pause mid-sentence.",
+        "live_pause.auto": "Learn sentence pause automatically",
+        "live_pause.auto.hint": "Adapts the sentence pause on its own: if a dictated stretch ends cleanly on a punctuation mark, the pause gets a little shorter (more responsive); if a sentence got cut in half, it gets longer. Converges on your natural speaking rhythm over time.",
+        "live_gate": "Noise gate (live)",
+        "live_gate.hint": "Anything quieter than this value (fan, hum, background typing) is treated as silence and never becomes text. Higher = more quiet needed, but soft speech may be dropped; lower = more sensitive. 0 disables it. Typical: 200–400.",
+        "live_agc": "Automatic gain control",
+        "live_agc.hint": "Automatically raises quiet/distant speech to a steady level before recognition (boosts speech only, not noise; never clips). Noticeably improves accuracy for both Vosk and Whisper when your microphone is on the quiet side.",
         "provider": "Provider",
         "provider.openrouter": "OpenRouter",
         "provider.openai": "OpenAI",
@@ -224,10 +286,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "glossary.count": "{n} words saved",
         "glossary.add": "Type a new word and press Enter",
         "glossary.learn": "Learn from text …",
-        "vocab": "Dictionary (say → write)",
-        "vocab.hint": "'When I say X, write Y.' Applied automatically while dictating and also improves recognition.",
+        "vocab": "Dictionary",
+        "vocab.hint": "Your own words: names/terms (improve recognition) and optionally how they're pronounced ('when I say X, write Y'). Typing on the left filters instantly, so you see at once whether a word exists. Filter by origin below (yours / learned / imported). Use 'Export/Import' to back it up as a text file.",
+        "cat.all": "All words",
+        "cat.user": "Added by me",
+        "cat.learned": "Learned from text",
+        "cat.import": "Imported",
+        "cat.spoken": "With spoken form",
+        "cat.corrected": "Corrected (learned)",
         "vocab.empty": "No entries yet.",
-        "vocab.spoken": "spoken (e.g. with ease)",
+        "vocab.spoken": "search & add a word …",
         "vocab.written": "written (e.g. WithEase)",
         "memory": "Error memory",
         "memory.empty": "Nothing learned yet.",
@@ -461,11 +529,106 @@ def audio_available() -> bool:
 
 
 def local_backend_available() -> bool:
-    try:
-        import faster_whisper  # noqa: F401
+    # find_spec locates faster-whisper WITHOUT importing it (which would load
+    # CTranslate2/PyAV into this process – exactly what we avoid).
+    import importlib.util
+    return importlib.util.find_spec("faster_whisper") is not None
+
+
+class WhisperProc:
+    """Runs the faster-whisper worker in a *separate process* and talks to it
+    over line-based JSON.  Keeping Whisper's native libraries out of the main
+    (Vosk) process removes the native-runtime conflict that crashed the app."""
+
+    def __init__(self) -> None:
+        self._proc: Any = None
+        self._lock = threading.Lock()      # one request at a time
+        self._start_args: tuple | None = None
+
+    def configure(self, model: str, threads: int) -> None:
+        """Remember how to (re)start the worker without starting it now, so a
+        later transcribe() can lazily spin it up under its own lock."""
+        self._start_args = (model, threads)
+
+    def start(self, model: str, threads: int) -> bool:
+        import subprocess
+        worker = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "whisper_worker.py")
+        self._start_args = (model, threads)
+        try:
+            self._proc = subprocess.Popen(
+                [sys.executable, worker, model, str(threads), "auto"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except Exception:
+            _log.exception("could not start whisper worker")
+            self._proc = None
+            return False
+        msg = self._read_json()            # wait for the ready handshake
+        if not msg.get("ready"):
+            _log.error("whisper worker not ready: %s", msg.get("error"))
+            self.stop()
+            return False
         return True
-    except ImportError:
-        return False
+
+    def alive(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def _read_json(self) -> dict:
+        """Read stdout lines until one parses as JSON (skip any library noise)."""
+        while True:
+            line = self._proc.stdout.readline()
+            if not line:
+                return {}
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                return json.loads(line)
+            except Exception:
+                continue
+
+    def transcribe(self, wav_bytes: bytes, *, language: str | None = None,
+                   hotwords: str | None = None) -> tuple[str, list]:
+        import tempfile
+        with self._lock:
+            if not self.alive():
+                if not (self._start_args and self.start(*self._start_args)):
+                    return "", []
+            f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            f.write(wav_bytes)
+            f.close()
+            try:
+                req = {"wav": f.name, "language": language,
+                       "initial_prompt": None, "hotwords": hotwords,
+                       "live": True}
+                self._proc.stdin.write(json.dumps(req) + "\n")
+                self._proc.stdin.flush()
+                msg = self._read_json()    # blocks until the worker responds
+            except Exception:
+                _log.exception("whisper worker request failed")
+                msg = {}
+            finally:
+                try:
+                    os.unlink(f.name)
+                except OSError:
+                    pass
+            return msg.get("text", ""), msg.get("low", [])
+
+    def stop(self) -> None:
+        proc, self._proc = self._proc, None
+        if proc is None:
+            return
+        try:
+            proc.stdin.write('{"cmd": "quit"}\n')
+            proc.stdin.flush()
+        except Exception:
+            pass
+        try:
+            proc.terminate()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -726,10 +889,85 @@ class DictationSettingsWidget(QWidget):
         if not local_backend_available():
             local_label += f" ({_t('backend.local.missing')})"
         self._backend.addItem(local_label, "local")
-        if self._settings.get("backend", "cloud") == "local":
-            self._backend.setCurrentIndex(1)
+        self._backend.addItem(_t("backend.live"), "live")
+        saved_backend = self._settings.get("backend", "cloud")
+        idx = self._backend.findData(saved_backend)
+        if idx >= 0:
+            self._backend.setCurrentIndex(idx)
         self._backend.currentIndexChanged.connect(self._on_backend_changed)
         form.addRow(_t("backend"), self._backend)
+        _live_hint = QLabel(_t("backend.live.hint"))
+        _live_hint.setWordWrap(True)
+        _live_hint.setStyleSheet(_hint_style())
+        form.addRow("", _live_hint)
+
+        # Live-only: optional Vosk word-by-word preview.  Off = Whisper-only
+        # (text appears in ~1–2 s steps, more accurate); on = instant grey words
+        # from Vosk, refined by Whisper.
+        self._live_use_vosk = QCheckBox(_t("live_use_vosk"))
+        self._live_use_vosk.setChecked(
+            bool(self._settings.get("live_use_vosk", False)))
+        self._live_use_vosk.setToolTip(_t("live_use_vosk.hint"))
+        self._live_use_vosk.toggled.connect(
+            lambda v: self._save("live_use_vosk", bool(v)))
+        form.addRow("", self._live_use_vosk)
+        _live_vosk_hint = QLabel(_t("live_use_vosk.hint"))
+        _live_vosk_hint.setWordWrap(True)
+        _live_vosk_hint.setStyleSheet(_hint_style())
+        form.addRow("", _live_vosk_hint)
+        self._live_vosk_hint = _live_vosk_hint
+
+        # Live-only: how long a pause counts as the end of a sentence.  Longer
+        # = whole sentences are polished at once (fewer, cleaner punctuation
+        # updates); shorter = the polished text appears sooner.
+        self._live_pause = QDoubleSpinBox()
+        self._live_pause.setRange(0.4, 3.0)
+        self._live_pause.setSingleStep(0.1)
+        self._live_pause.setDecimals(1)
+        self._live_pause.setSuffix(" s")
+        self._live_pause.setValue(float(self._settings.get("live_pause", 1.0)))
+        self._live_pause.valueChanged.connect(
+            lambda v: self._save("live_pause", round(float(v), 1)))
+        self._live_pause_row = QLabel(_t("live_pause"))
+        form.addRow(self._live_pause_row, self._live_pause)
+
+        # Auto mode: learn the pause from Whisper's own sentence punctuation.
+        self._live_pause_auto = QCheckBox(_t("live_pause.auto"))
+        self._live_pause_auto.setChecked(
+            bool(self._settings.get("live_pause_auto", False)))
+        self._live_pause_auto.setToolTip(_t("live_pause.auto.hint"))
+        self._live_pause_auto.toggled.connect(self._on_live_auto_toggled)
+        form.addRow("", self._live_pause_auto)
+
+        _live_pause_hint = QLabel(_t("live_pause.hint"))
+        _live_pause_hint.setWordWrap(True)
+        _live_pause_hint.setStyleSheet(_hint_style())
+        form.addRow("", _live_pause_hint)
+        self._live_pause_hint = _live_pause_hint
+        self._live_pause.setDisabled(self._live_pause_auto.isChecked())
+
+        # Live-only: noise gate.  Audio quieter than this (background hum, fan)
+        # is treated as silence and never becomes text.  0 = off.
+        self._live_gate = QSpinBox()
+        self._live_gate.setRange(0, 2000)
+        self._live_gate.setSingleStep(50)
+        self._live_gate.setValue(int(self._settings.get("live_noise_gate", 250)))
+        self._live_gate.valueChanged.connect(
+            lambda v: self._save("live_noise_gate", int(v)))
+        self._live_gate_row = QLabel(_t("live_gate"))
+        form.addRow(self._live_gate_row, self._live_gate)
+        _live_gate_hint = QLabel(_t("live_gate.hint"))
+        _live_gate_hint.setWordWrap(True)
+        _live_gate_hint.setStyleSheet(_hint_style())
+        form.addRow("", _live_gate_hint)
+        self._live_gate_hint = _live_gate_hint
+
+        # Live-only: automatic gain control (auto-level a quiet/distant mic).
+        self._live_agc = QCheckBox(_t("live_agc"))
+        self._live_agc.setChecked(bool(self._settings.get("live_agc", True)))
+        self._live_agc.setToolTip(_t("live_agc.hint"))
+        self._live_agc.toggled.connect(lambda v: self._save("live_agc", bool(v)))
+        form.addRow("", self._live_agc)
 
         # Cloud fields
         self._provider = QComboBox()
@@ -831,41 +1069,24 @@ class DictationSettingsWidget(QWidget):
             lambda i: self._save("language", self._lang.itemData(i)))
         form.addRow(_t("language"), self._lang)
 
-        # Glossary – edited in its own pop-out window.
-        gloss_row = QHBoxLayout()
-        self._glossary_summary = QLabel(self._glossary_summary_text())
-        self._glossary_summary.setStyleSheet(_hint_style())
-        self._glossary_summary.setToolTip(_t("glossary.hint"))
-        gloss_row.addWidget(self._glossary_summary, 1)
-        gloss_learn = QPushButton(_t("glossary.learn"))
-        gloss_learn.clicked.connect(self._open_learn_text)
-        gloss_row.addWidget(gloss_learn)
-        gloss_edit = QPushButton(_t("edit"))
-        gloss_edit.clicked.connect(self._open_glossary)
-        gloss_row.addWidget(gloss_edit)
-        form.addRow(_t("glossary"), gloss_row)
+        # Unified dictionary (custom words + optional spoken forms) – edited in
+        # its own pop-out window.
+        dict_row = QHBoxLayout()
+        self._dict_summary = QLabel(self._dict_summary_text())
+        self._dict_summary.setStyleSheet(_hint_style())
+        self._dict_summary.setToolTip(_t("vocab.hint"))
+        dict_row.addWidget(self._dict_summary, 1)
+        dict_learn = QPushButton(_t("glossary.learn"))
+        dict_learn.clicked.connect(self._open_learn_text)
+        dict_row.addWidget(dict_learn)
+        dict_edit = QPushButton(_t("edit"))
+        dict_edit.clicked.connect(self._open_dictionary)
+        dict_row.addWidget(dict_edit)
+        form.addRow(_t("vocab"), dict_row)
 
-        # Dictionary (spoken → written) – edited in its own pop-out window.
-        vocab_row = QHBoxLayout()
-        _vocab_hint = QLabel(_t("vocab.hint"))
-        _vocab_hint.setWordWrap(True)
-        _vocab_hint.setStyleSheet(_hint_style())
-        vocab_row.addWidget(_vocab_hint, 1)
-        vocab_edit = QPushButton(_t("edit"))
-        vocab_edit.clicked.connect(self._open_vocab)
-        vocab_row.addWidget(vocab_edit)
-        form.addRow(_t("vocab"), vocab_row)
-
-        # Error memory – edited in its own pop-out window.
-        mem_row = QHBoxLayout()
-        self._memory_summary_label = QLabel(self._memory_summary())
-        self._memory_summary_label.setStyleSheet(_hint_style())
-        self._memory_summary_label.setToolTip(_t("memory.hint"))
-        mem_row.addWidget(self._memory_summary_label, 1)
-        mem_edit = QPushButton(_t("edit"))
-        mem_edit.clicked.connect(self._open_memory)
-        mem_row.addWidget(mem_edit)
-        form.addRow(_t("memory"), mem_row)
+        # (Learned corrections / „Fehler-Gedächtnis“ are no longer a separate
+        # row – they show up inside the Wörterbuch dialog as category
+        # „korrigiert“; the learning engine itself is unchanged.)
 
         # Optional AI cleanup (off by default).
         self._ai_enable = QCheckBox(_t("ai.enable"))
@@ -1023,30 +1244,29 @@ class DictationSettingsWidget(QWidget):
             if w is not None:
                 w.setVisible(visible)
 
-    def _glossary_summary_text(self) -> str:
-        n = len(self._module.glossary_words())
+    def _dict_summary_text(self) -> str:
+        n = self._module.dictionary_count()
         return _t("glossary.empty") if n == 0 else _t("glossary.count", n=str(n))
 
-    def _memory_summary(self) -> str:
-        n = len(self._module._memory().substitutions())
-        return _t("memory.empty") if n == 0 else _t("memory.count", n=str(n))
-
-    def _open_glossary(self) -> None:
-        from settings_dialogs import ListEditorDialog
-        dlg = ListEditorDialog(
-            title=_t("glossary"),
-            rows_provider=lambda: [           # newest first
-                (w, "", w) for w in reversed(self._module.glossary_words())],
-            on_remove=self._module.remove_glossary_word,
-            on_add=self._module.add_glossary_word,
-            on_edit=self._module.edit_glossary_word,
-            add_placeholder=_t("glossary.add"),
-            add_label=_t("add"),
-            intro=_t("glossary.hint"),
-            empty_text=_t("glossary.empty"),
-            parent=self)
+    def _open_dictionary(self) -> None:
+        from settings_dialogs import DictionaryDialog
+        m = self._module
+        cats = [("all", _t("cat.all")), ("user", _t("cat.user")),
+                ("learned", _t("cat.learned")), ("import", _t("cat.import")),
+                ("spoken", _t("cat.spoken")), ("corrected", _t("cat.corrected"))]
+        dlg = DictionaryDialog(
+            rows_provider=m.dictionary_rows,
+            on_add=lambda w, s: m.add_dictionary_entry(w, s, "user"),
+            on_edit=m.dictionary_edit,
+            on_remove=m.dictionary_remove,
+            categories=cats,
+            on_export=m.export_dictionary,
+            on_import=m.import_dictionary,
+            on_learn=self._open_learn_text,
+            on_clear_category=m.clear_dictionary_category,
+            title=_t("vocab"), intro=_t("vocab.hint"), parent=self)
         dlg.exec()
-        self._glossary_summary.setText(self._glossary_summary_text())
+        self._dict_summary.setText(self._dict_summary_text())
 
     def _open_enrollment(self) -> None:
         from enrollment import PROMPTS
@@ -1062,45 +1282,10 @@ class DictationSettingsWidget(QWidget):
 
         def _add(terms: list) -> None:
             for term in terms:
-                self._module.add_glossary_word(term)
+                self._module.add_learned_word(term)     # tagged „gelernt“
         dlg = LearnFromTextDialog(on_accept=_add, parent=self)
         dlg.exec()
-        self._glossary_summary.setText(self._glossary_summary_text())
-
-    def _open_vocab(self) -> None:
-        from settings_dialogs import ListEditorDialog
-        dlg = ListEditorDialog(
-            title=_t("vocab"),
-            rows_provider=lambda: [
-                (s, s, w) for s, w in reversed(self._module.spoken_forms())],
-            on_remove=self._module.remove_spoken_form,
-            on_edit=self._module.edit_spoken_form,
-            on_add=self._module.add_spoken_form,
-            add_placeholder=_t("vocab.spoken"),
-            add_placeholder2=_t("vocab.written"),
-            add_label=_t("add"),
-            intro=_t("vocab.hint"),
-            empty_text=_t("vocab.empty"),
-            parent=self)
-        dlg.exec()
-
-    def _open_memory(self) -> None:
-        from settings_dialogs import ListEditorDialog
-        dlg = ListEditorDialog(
-            title=_t("memory"),
-            rows_provider=lambda: [           # newest first
-                (k, k, v)
-                for k, v in reversed(
-                    list(self._module._memory().substitutions().items()))],
-            on_remove=self._module.remove_correction,
-            on_edit=self._module.edit_correction,
-            on_clear=self._module.reset_memory,
-            clear_label=_t("memory.reset"),
-            intro=_t("memory.hint"),
-            empty_text=_t("memory.empty"),
-            parent=self)
-        dlg.exec()
-        self._memory_summary_label.setText(self._memory_summary())
+        self._dict_summary.setText(self._dict_summary_text())
 
     def _fill_models(self, provider: str) -> None:
         self._model.blockSignals(True)
@@ -1133,7 +1318,20 @@ class DictationSettingsWidget(QWidget):
         self._local_hint.setVisible(not cloud)
         self._form.setRowVisible(
             self._install_box, not cloud and not local_backend_available())
+        live = backend == "live"
+        self._form.setRowVisible(self._live_use_vosk, live)
+        self._live_vosk_hint.setVisible(live)
+        self._form.setRowVisible(self._live_pause, live)
+        self._form.setRowVisible(self._live_pause_auto, live)
+        self._live_pause_hint.setVisible(live)
+        self._form.setRowVisible(self._live_gate, live)
+        self._live_gate_hint.setVisible(live)
+        self._form.setRowVisible(self._live_agc, live)
         self._update_cloud_rows()
+
+    def _on_live_auto_toggled(self, on: bool) -> None:
+        self._save("live_pause_auto", bool(on))
+        self._live_pause.setDisabled(on)
 
     def _update_cloud_rows(self) -> None:
         cloud = self._backend.currentData() == "cloud"
@@ -1279,8 +1477,23 @@ class DictationModule(BaseModule):
         self._local_model: Any = None   # lazily loaded faster-whisper model
         self._local_model_name = ""
         self._model_lock = threading.Lock()    # guards model loading
+        # Serialises ALL native ASR inference – Whisper decodes AND Vosk chunk
+        # decoding – so the two engines never run natively at the same time
+        # (concurrent native inference in one process crashes hard on Windows).
+        self._asr_lock = threading.Lock()
         self._last_low_words: list[str] = []   # low-confidence words (heatmap)
         self._enroll_active = False            # guided-reading recording active
+        self._live_active = False              # Vosk live streaming active
+        self._vosk: Any = None
+        self._live_stream: Any = None
+        self._live_queue: Any = None
+        self._live_thread: threading.Thread | None = None   # the live worker
+        self._live_seg_audio = bytearray()     # audio of the current utterance
+        self._utt_deadline = 0.0               # polish after this (a real pause)
+        self._live_pause_cur = 1.0             # current pause (auto mode tunes)
+        self._live_gain = 1.0                  # running auto-gain factor
+        self._resample_state = None            # audioop.ratecv state (mic → 16k)
+        self._whisper_proc = WhisperProc()     # out-of-process Whisper (isolated)
         self._indicator: DictationIndicator | None = None
         self._window: Any = None         # DictationWindow (created on the GUI thread)
         self._window_hwnd: int = 0       # our window's native handle (to exclude)
@@ -1315,10 +1528,13 @@ class DictationModule(BaseModule):
         if not self._kb_subscribed:
             shared_keyboard_hook.subscribe(self._on_key_event)
             self._kb_subscribed = True
-        # Optionally preload the local model in the background so the first
-        # dictation is fast (no wait while the model loads).
-        if (self._settings.get("preload_model")
-                and self._settings.get("backend", "cloud") == "local"):
+        # Warm the model in the background so the first dictation is fast (no
+        # wait while a ~GB model loads).  Live always warms the Vosk model it
+        # needs; the batch local backend honours the opt-in preload checkbox.
+        backend = self._settings.get("backend", "cloud")
+        if backend == "live":
+            threading.Thread(target=self._preload_live, daemon=True).start()
+        elif self._settings.get("preload_model") and backend == "local":
             threading.Thread(target=self._preload_model, daemon=True).start()
         bus.publish("module.started", module_id=self.MODULE_ID)
 
@@ -1327,6 +1543,9 @@ class DictationModule(BaseModule):
             shared_keyboard_hook.unsubscribe(self._on_key_event)
             self._kb_subscribed = False
         self._abort_recording()
+        if self._live_active:
+            self.stop_live()
+        self._whisper_proc.stop()       # shut down the out-of-process worker
         self._set_state("idle")
         if self._window is not None:
             self._window.hide()
@@ -1522,6 +1741,10 @@ class DictationModule(BaseModule):
                 self._reselect_timer.stop()
             if self._window is not None:
                 self._window.set_target(self._target_name())
+                # The user picked the target app (it's now in front) – but their
+                # next step is dictating, so bring the dictation window back to
+                # the foreground instead of leaving focus on the target app.
+                self._window.request_open()
 
     def _save_geometry(self, geom: list) -> None:
         self._settings["win_geo"] = list(geom)
@@ -1573,6 +1796,9 @@ class DictationModule(BaseModule):
             if vk == 0x1B and self._reselecting:
                 self._reselecting = False   # poll (GUI thread) stops + restores
                 return True
+            if vk == 0x1B and self._live_active:
+                threading.Thread(target=self.stop_live, daemon=True).start()
+                return True
             if vk == 0x1B and self._state == "recording":
                 threading.Thread(target=self._abort_recording,
                                  daemon=True).start()
@@ -1586,6 +1812,14 @@ class DictationModule(BaseModule):
                 mode = "command"
             else:
                 return False
+            # Live backend: the key toggles continuous streaming.
+            if self._settings.get("backend") == "live":
+                if self._live_active:
+                    threading.Thread(target=self.stop_live, daemon=True).start()
+                elif self._state == "idle":
+                    self._active_mode = mode
+                    threading.Thread(target=self.start_live, daemon=True).start()
+                return True
             if self._state == "recording" and not hold_mode:
                 threading.Thread(target=self._stop_and_transcribe,
                                  daemon=True).start()
@@ -1835,6 +2069,405 @@ class DictationModule(BaseModule):
             _log.exception("could not save training sample")
 
     # ------------------------------------------------------------------
+    # Live dictation (Vosk stream + Whisper polish)
+    # ------------------------------------------------------------------
+
+    def _find_vosk_model(self) -> str:
+        from live_asr import find_model
+        return find_model(app_config.CONFIG_DIR)
+
+    def _ensure_vosk(self) -> Any:
+        """Load the Vosk model once and keep it in memory; later dictations only
+        reset the recognizer (cheap) instead of reloading ~GB from disk – that
+        reload was the long wait before every recording."""
+        from live_asr import VoskStreamer
+        with self._model_lock:
+            path = self._find_vosk_model()
+            # Guard the recognizer swap with the ASR lock too: a previous live
+            # worker may still be finishing (Vosk final/accept) when the next
+            # dictation starts – swapping the recognizer under it crashes.
+            with self._asr_lock:
+                if self._vosk is None or getattr(
+                        self._vosk, "model_path", None) != path:
+                    self._vosk = VoskStreamer(path, 16000)   # slow – first time
+                else:
+                    self._vosk.reset()                       # fast – reuse model
+        return self._vosk
+
+    @staticmethod
+    def _chunk_rms(chunk: bytes) -> float:
+        """Loudness (RMS) of a 16-bit mono PCM chunk – used as a noise gate.
+        Uses stdlib audioop (not numpy) to keep heavy native libs out of the
+        Vosk process."""
+        if not chunk:
+            return 0.0
+        try:
+            return float(audioop.rms(chunk, 2))
+        except Exception:
+            return 0.0
+
+    # target speech level for the auto gain (int16; ~1/8 of full scale is a
+    # comfortable, headroom-safe speaking level)
+    _AGC_TARGET = 3500.0
+
+    def _auto_gain(self, chunk: bytes, rms: float) -> bytes:
+        """Automatic gain control: gently amplify quiet speech toward a target
+        level so a soft/distant microphone doesn't starve the recognisers.
+        Only boosts (never attenuates), smooths over time to avoid pumping, and
+        is hard-clamped so it can never clip."""
+        if rms <= 1:
+            return chunk
+        desired = max(1.0, min(self._AGC_TARGET / rms, 8.0))   # boost, cap 8×
+        self._live_gain = 0.85 * self._live_gain + 0.15 * desired   # smooth
+        try:
+            peak = audioop.max(chunk, 2) or 1
+        except Exception:
+            return chunk
+        g = max(1.0, min(self._live_gain, 32000.0 / peak))     # never clip
+        if g <= 1.01:
+            return chunk
+        try:
+            return audioop.mul(chunk, 2, g)
+        except Exception:
+            return chunk
+
+    def _pcm_to_wav(self, pcm: bytes, rate: int = 16000) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(pcm)
+        return buf.getvalue()
+
+    def _apply_text_pipeline(self, text: str, *, aggressive: bool = False) -> str:
+        """Dictionary + learned corrections + inline punctuation.  ``aggressive``
+        (used for the live Vosk text) applies *every* learned word, not only the
+        well-established ones, so the user's own words show up live."""
+        from commands_de import apply_inline_punctuation
+        forms = self.spoken_forms()
+        if forms:
+            from vocabulary import apply_spoken_forms
+            text = apply_spoken_forms(text, forms)
+        mem = self._memory()
+        text = mem.apply_all(text) if aggressive else mem.apply(text)
+        return apply_inline_punctuation(text)
+
+    def _apply_live_partial(self, text: str) -> str:
+        """Light pipeline for the grey provisional words: apply the user's own
+        dictionary and *all* learned corrections (their „training") so live
+        words reflect what they taught – but no punctuation rewriting (too noisy
+        on a constantly-growing partial)."""
+        forms = self.spoken_forms()
+        if forms:
+            from vocabulary import apply_spoken_forms
+            text = apply_spoken_forms(text, forms)
+        return self._memory().apply_all(text)
+
+    def start_live(self) -> None:
+        if self._live_active or self._state != "idle":
+            return
+        try:
+            import sounddevice as sd
+        except Exception:
+            self._error(_t("err.no_audio_lib"))
+            return
+        use_vosk = bool(self._settings.get("live_use_vosk", False))
+        if use_vosk:
+            try:
+                self._ensure_vosk()         # loads once, then just resets
+            except Exception as exc:
+                self._error(str(exc))
+                return
+        else:
+            self._vosk = None               # Whisper-only: no Vosk at all
+        # make sure the out-of-process Whisper worker can (re)start on demand
+        self._whisper_proc.configure(self._live_model_name(),
+                                     max(1, (os.cpu_count() or 4) // 2))
+        if self._window_mode():
+            self._capture_target()
+            if self._window is not None:
+                self._window.request_open()
+        self._live_active = True
+        self._live_queue = queue.Queue()
+        self._live_seg_audio = bytearray()
+        self._set_state("recording")
+
+        # The recognisers need 16 kHz mono, but many mics/headsets only offer
+        # stereo and/or 44.1/48 kHz (forcing 1 channel/16 kHz raised
+        # "Invalid number of channels").  Capture in the device's own format and
+        # down-mix + resample to 16 kHz mono ourselves.
+        try:
+            self._open_input_stream(sd)
+        except Exception as exc:
+            self._live_active = False
+            self._error(_t("err.mic", err=str(exc)[:80]))
+            return
+        worker = self._live_worker if use_vosk else self._live_worker_whisper
+        self._live_thread = threading.Thread(target=worker, daemon=True)
+        self._live_thread.start()
+
+    def _open_input_stream(self, sd: Any) -> None:
+        """Open the mic and feed 16 kHz mono int16 to the live queue, converting
+        from whatever format the device actually supports.  Tries 16 kHz mono
+        first, then the device's native rate/channels with down-mix + resample
+        (fixes headsets that only offer stereo and/or 44.1/48 kHz)."""
+        self._resample_state = None
+        try:
+            info = sd.query_devices(kind="input")
+            native_rate = int(round(float(info.get("default_samplerate")
+                                          or 16000)))
+            max_ch = int(info.get("max_input_channels") or 1)
+        except Exception:
+            native_rate, max_ch = 16000, 1
+
+        def make_cb(channels: int, rate: int):
+            def _cb(indata, _frames, _time, _status) -> None:
+                data = bytes(indata)
+                if channels >= 2:               # down-mix to mono
+                    try:
+                        data = audioop.tomono(data, 2, 0.5, 0.5)
+                    except Exception:
+                        pass
+                if rate != 16000:               # resample to 16 kHz
+                    try:
+                        data, self._resample_state = audioop.ratecv(
+                            data, 2, 1, rate, 16000, self._resample_state)
+                    except Exception:
+                        pass
+                self._live_queue.put(data)
+            return _cb
+
+        attempts = [(16000, 1), (native_rate, 1),
+                    (native_rate, min(2, max(1, max_ch)))]
+        seen: set = set()
+        last_exc: Exception | None = None
+        for rate, ch in attempts:
+            if (rate, ch) in seen or ch < 1 or rate < 8000:
+                continue
+            seen.add((rate, ch))
+            try:
+                stream = sd.RawInputStream(
+                    samplerate=rate, channels=ch, dtype="int16",
+                    blocksize=max(1024, int(rate * 0.25)),  # ~250 ms chunks
+                    callback=make_cb(ch, rate))
+                stream.start()
+                self._live_stream = stream
+                _log.info("live mic opened: %d Hz, %d ch → 16 kHz mono",
+                          rate, ch)
+                return
+            except Exception as exc:
+                last_exc = exc
+        raise last_exc or RuntimeError("no usable microphone format")
+
+    def _live_worker(self) -> None:
+        """Stream Vosk word-by-word; polish a *whole utterance* with Whisper
+        only after a real pause, so punctuation isn't broken by mid-sentence
+        pauses (Vosk finalises on every pause)."""
+        self._live_pause_cur = max(0.4, float(self._settings.get(
+            "live_pause", 1.0)))
+        gate = max(0.0, float(self._settings.get("live_noise_gate", 250)))
+        agc = bool(self._settings.get("live_agc", True))
+        self._live_gain = 1.0
+        while self._live_active:
+            try:
+                chunk = self._live_queue.get(timeout=0.15)
+            except queue.Empty:
+                chunk = None
+            now = time.monotonic()
+            # Noise gate: a quiet chunk only counts as speech-start when we are
+            # NOT already mid-utterance.  This keeps background noise/silence
+            # from *starting* an utterance, but once you're speaking the audio
+            # is fed to Vosk and Whisper *contiguously* (no gaps) – gapped audio
+            # was making the Whisper polish go badly wrong.
+            if chunk is not None:
+                rms = self._chunk_rms(chunk)
+                loud = rms >= gate
+                if loud and agc:                  # auto-level quiet speech
+                    chunk = self._auto_gain(chunk, rms)
+                if loud or self._live_seg_audio:      # in an utterance
+                    self._live_seg_audio += chunk
+                    try:
+                        with self._asr_lock:    # never overlap a Whisper polish
+                            is_final, text = self._vosk.accept(chunk)
+                    except Exception:
+                        is_final, text = False, ""
+                    if self._window is not None and text.strip():
+                        if is_final:
+                            self._window.live_final(
+                                self._apply_text_pipeline(text, aggressive=True))
+                        else:
+                            self._window.live_partial(
+                                self._apply_live_partial(text))
+                    if loud:
+                        # only real speech extends the deadline, so trailing
+                        # silence still ends the utterance after `pause`
+                        self._utt_deadline = now + self._live_pause_cur
+            # Real pause reached → the utterance is complete; polish it as one.
+            if self._live_seg_audio and self._utt_deadline and \
+                    now >= self._utt_deadline:
+                self._flush_polish()
+        # Mic just turned off: feed whatever is still queued to Vosk so the last
+        # words aren't lost and the grey provisional gets finalised + polished
+        # (otherwise stopping early leaves unprocessed grey text behind).
+        while True:
+            try:
+                chunk = self._live_queue.get_nowait()
+            except queue.Empty:
+                break
+            rms = self._chunk_rms(chunk)
+            if rms < gate and not self._live_seg_audio:
+                continue                       # skip pre-speech background noise
+            if rms >= gate and agc:
+                chunk = self._auto_gain(chunk, rms)
+            self._live_seg_audio += chunk
+            try:
+                with self._asr_lock:
+                    self._vosk.accept(chunk)
+            except Exception:
+                pass
+        self._flush_polish(final=True)   # on stop: commit the final sentence
+
+    def _flush_polish(self, *, final: bool = False) -> None:
+        """Vosk path: firm up the Vosk provisional at a pause, then polish the
+        whole sentence-so-far with Whisper (see _polish_sentence)."""
+        if not self._live_seg_audio:
+            return
+        try:
+            with self._asr_lock:
+                rem = self._vosk.final()
+        except Exception:
+            rem = ""
+        if rem.strip() and self._window is not None:
+            self._window.live_final(
+                self._apply_text_pipeline(rem, aggressive=True))
+        self._utt_deadline = 0.0
+        # a pause in the Vosk path is also a sentence end (commit + auto-period)
+        self._polish_sentence(final=final, sentence_end=not final)
+
+    def _polish_sentence(self, *, final: bool = False,
+                         sentence_end: bool = False) -> bool:
+        """Transcribe the WHOLE current sentence with the (isolated) Whisper
+        worker and show it.  ``sentence_end`` (a real pause) or ``final`` (stop)
+        *commit* the sentence – and if it has no „.", „!", „?" yet, a period is
+        added automatically (like Dragon/Google) so sentence marks aren't lost.
+        Otherwise the sentence stays open unless Whisper already ended it.
+        Returns True if the sentence was committed."""
+        audio = bytes(self._live_seg_audio)     # whole sentence so far
+        if len(audio) < 8000 and not final:
+            return False
+        raw, low = "", []
+        try:
+            raw, low = self._whisper_proc.transcribe(
+                self._pcm_to_wav(audio),
+                language=self._local_language(),
+                hotwords=self._hotwords() or None)
+        except Exception:
+            raw, low = "", []
+        self._last_low_words = low
+        from postprocess import strip_hallucinations, strip_repetitions
+        raw = strip_repetitions(strip_hallucinations((raw or "").strip()))
+        polished = self._apply_text_pipeline(raw)
+        if not polished:
+            if final:
+                self._live_seg_audio = bytearray()
+            return final
+        ends_punct = polished.rstrip().endswith((".", "!", "?", "…", ":"))
+        commit = (final or sentence_end or ends_punct
+                  or len(audio) >= _SAMPLE_RATE * 2 * 25)   # 25 s safety cap
+        if commit and not ends_punct:
+            # a finished sentence with no punctuation → add the missing period
+            tail = polished.rstrip()
+            if tail and (tail[-1].isalnum() or tail[-1] in "\"»)“”'"):
+                polished = tail + "."
+        if self._window is not None:
+            self._window.live_polish(polished, commit)
+        if commit:
+            self._live_seg_audio = bytearray()   # start a fresh sentence
+        return commit
+
+    def _live_worker_whisper(self) -> None:
+        """Whisper-only live worker (no Vosk): accumulate the sentence audio and
+        re-transcribe it with Whisper on a pause – and every few seconds during
+        long continuous speech – so the text appears in ~1–2 s steps, self-
+        correcting, and commits when the sentence ends."""
+        pause = max(0.4, float(self._settings.get("live_pause", 1.0)))
+        gate = max(0.0, float(self._settings.get("live_noise_gate", 250)))
+        agc = bool(self._settings.get("live_agc", True))
+        self._live_gain = 1.0
+        interim = int(_SAMPLE_RATE * 2 * 3.0)   # ~3 s of new speech → update
+        last_len = 0
+        while self._live_active:
+            try:
+                chunk = self._live_queue.get(timeout=0.15)
+            except queue.Empty:
+                chunk = None
+            now = time.monotonic()
+            if chunk is not None:
+                rms = self._chunk_rms(chunk)
+                loud = rms >= gate
+                if loud and agc:
+                    chunk = self._auto_gain(chunk, rms)
+                if loud or self._live_seg_audio:      # in a sentence
+                    self._live_seg_audio += chunk
+                if loud:
+                    self._utt_deadline = now + pause
+            n = len(self._live_seg_audio)
+            pause_due = bool(n and self._utt_deadline and now >= self._utt_deadline)
+            interim_due = n - last_len >= interim
+            if pause_due or interim_due:
+                # a pause ends the sentence (commit + auto-period); an interim
+                # update during long speech just refines the text, stays open.
+                committed = self._polish_sentence(final=False,
+                                                  sentence_end=pause_due)
+                last_len = 0 if committed else len(self._live_seg_audio)
+                if pause_due:
+                    self._utt_deadline = 0.0
+        self._polish_sentence(final=True)   # on stop: commit the final sentence
+
+    def stop_live(self) -> None:
+        if not self._live_active:
+            return
+        self._live_active = False       # worker exits + flushes the utterance
+        try:
+            self._live_stream.stop()
+            self._live_stream.close()
+        except Exception:
+            pass
+        self._live_stream = None
+        # Wait for the worker to finish draining + flushing before we return, so
+        # a following start_live() can't reassign self._vosk / self._live_queue
+        # while the old worker still feeds the (now shared) Vosk recognizer –
+        # concurrent Vosk access from two threads crashes the process.
+        t = self._live_thread
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=5.0)
+        self._live_thread = None
+        self._set_state("idle")
+
+    def _auto_tune_pause(self, polished: str) -> None:
+        """Optionally learn the pause length from Whisper's own punctuation:
+        a whole utterance that Whisper ends with „.", „!" or „?" was a complete
+        sentence → we can afford a slightly shorter pause (more responsive); one
+        that ends mid-clause means the pause cut a sentence in half → lengthen
+        it.  Converges on the user's natural sentence-end pause."""
+        if not self._settings.get("live_pause_auto", False):
+            return
+        cur = float(getattr(self, "_live_pause_cur", None)
+                    or self._settings.get("live_pause", 1.0))
+        ended_sentence = polished.rstrip().endswith((".", "!", "?", "…"))
+        if ended_sentence:
+            new = max(0.6, round(cur - 0.05, 2))     # gentle decay
+        else:
+            new = min(2.5, round(cur + 0.25, 2))     # cut mid-sentence → back off
+        if abs(new - cur) >= 0.01:
+            self._live_pause_cur = new
+            # applied live via _live_pause_cur; persist in-memory (the core
+            # writes settings to disk on the next change / on close).  Don't
+            # call on_settings_changed() here – this runs on a worker thread.
+            self._settings["live_pause"] = new
+
+    # ------------------------------------------------------------------
     # Transcription backends
     # ------------------------------------------------------------------
 
@@ -1855,77 +2488,213 @@ class DictationModule(BaseModule):
         commands ("Cursor" → "Kaser", "markiere Haus" → "Make-A-House")."""
         return self._language() or "de"
 
-    def glossary_words(self) -> list[str]:
-        """The user's custom words (comma/newline/semicolon separated)."""
-        raw = self._settings.get("glossary", "") or ""
-        for sep in ("\n", ";"):
-            raw = raw.replace(sep, ",")
-        return [w.strip() for w in raw.split(",") if w.strip()]
+    # -- unified custom dictionary (written + optional spoken form) ------
+    # One list replaces the old glossary + spoken_forms.  Each entry is a dict:
+    #   {"w": written, "s": spoken (may be ""), "src": "user"|"import"|"learned"}
 
-    def add_glossary_word(self, word: str) -> None:
-        word = (word or "").strip()
-        if not word:
-            return
-        words = self.glossary_words()
-        if word.casefold() not in [w.casefold() for w in words]:
-            words.append(word)
-            self._settings["glossary"] = ", ".join(words)
-            self.on_settings_changed()
-
-    def remove_glossary_word(self, word: str) -> None:
-        words = [w for w in self.glossary_words()
-                 if w.casefold() != (word or "").casefold()]
-        self._settings["glossary"] = ", ".join(words)
-        self.on_settings_changed()
-
-    def edit_glossary_word(self, old: str, new: str) -> None:
-        new = (new or "").strip()
-        if not new:
-            return      # empty edit: keep the old word (use ✕ to remove)
-        out, seen = [], set()
-        for w in self.glossary_words():
-            repl = new if w.casefold() == (old or "").casefold() else w
-            if repl.casefold() not in seen:
-                seen.add(repl.casefold())
-                out.append(repl)
-        self._settings["glossary"] = ", ".join(out)
-        self.on_settings_changed()
-
-    # -- spoken → written dictionary (Dragon-style word forms) -----------
-
-    def spoken_forms(self) -> list[tuple[str, str]]:
-        out: list[tuple[str, str]] = []
-        for pair in self._settings.get("spoken_forms", []):
-            if isinstance(pair, (list, tuple)) and len(pair) == 2:
-                out.append((str(pair[0]), str(pair[1])))
+    def _dictionary(self) -> list[dict]:
+        entries = self._settings.get("dictionary")
+        if entries is None:                         # migrate the legacy lists
+            entries = self._migrate_dictionary()
+            self._settings["dictionary"] = entries
+        out = []
+        for e in entries:
+            if isinstance(e, dict) and str(e.get("w", "")).strip():
+                out.append({"w": str(e.get("w", "")).strip(),
+                            "s": str(e.get("s", "")).strip(),
+                            "src": e.get("src") or "user"})
         return out
 
-    def _save_spoken_forms(self, forms: list[tuple[str, str]]) -> None:
-        self._settings["spoken_forms"] = [list(p) for p in forms]
+    def _migrate_dictionary(self) -> list[dict]:
+        """Build the unified list from the legacy glossary + spoken_forms."""
+        out, seen = [], set()
+        for pair in self._settings.get("spoken_forms", []) or []:
+            if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                written, spoken = str(pair[1]).strip(), str(pair[0]).strip()
+                if written and written.casefold() not in seen:
+                    seen.add(written.casefold())
+                    out.append({"w": written, "s": spoken, "src": "user"})
+        raw = (self._settings.get("glossary", "") or "")
+        raw = raw.replace(chr(10), ",").replace(";", ",")
+        for word in [x.strip() for x in raw.split(",") if x.strip()]:
+            if word.casefold() not in seen:
+                seen.add(word.casefold())
+                out.append({"w": word, "s": "", "src": "learned"})
+        return out
+
+    def _save_dictionary(self, entries: list[dict]) -> None:
+        self._settings["dictionary"] = [
+            {"w": e["w"], "s": e.get("s", ""), "src": e.get("src", "user")}
+            for e in entries if str(e.get("w", "")).strip()]
+        self._settings.pop("glossary", None)        # legacy keys – now unified
+        self._settings.pop("spoken_forms", None)
         self.on_settings_changed()
 
+    # origin -> short human label shown in the editor
+    _SRC_LABELS = {"user": "ich", "import": "Import", "learned": "gelernt"}
+
+    def dictionary_rows(self, category: str = "all") -> list[tuple]:
+        """Editor rows: ``(kind, key, trigger, result, source-label)``.
+        ``kind`` is "dict" or "mem"; ``trigger`` = spoken/misheard (may be "");
+        ``result`` = written/correct.  Learned corrections from the error memory
+        appear as kind "mem" (category „corrected") so everything is in one list
+        – the memory engine itself stays untouched underneath.  ``category``
+        filters by origin, "spoken" (has a trigger) or "corrected"."""
+        rows = []
+        if category in ("all", "user", "import", "learned", "spoken"):
+            for e in reversed(self._dictionary()):
+                src = e["src"]
+                if category in ("user", "import", "learned") and src != category:
+                    continue
+                if category == "spoken" and not e["s"]:
+                    continue
+                rows.append(("dict", e["w"], e["s"], e["w"],
+                             self._SRC_LABELS.get(src, src)))
+        if category in ("all", "corrected"):
+            subs = self._memory().substitutions()   # {folded misheard: correct}
+            for misheard, correct in reversed(list(subs.items())):
+                rows.append(("mem", misheard, misheard, correct, "korrigiert"))
+        return rows
+
+    def dictionary_count(self) -> int:
+        return len(self._dictionary()) + len(self._memory().substitutions())
+
+    def dictionary_edit(self, kind: str, key: str, trigger: str,
+                        result: str) -> None:
+        """Route an edit from the unified dialog to the right store."""
+        if kind == "mem":
+            self.edit_correction(key, result)        # change the correction
+        else:
+            self.edit_dictionary_entry(key, result, trigger)
+
+    def dictionary_remove(self, kind: str, key: str) -> None:
+        if kind == "mem":
+            self.remove_correction(key)
+        else:
+            self.remove_dictionary_entry(key)
+
+    def clear_dictionary_category(self, category: str) -> int:
+        """Bulk-remove all entries of a category (quick cleanup).  Returns how
+        many were removed."""
+        mem_n = len(self._memory().substitutions())
+        if category == "corrected":
+            self.reset_memory()
+            return mem_n
+        entries = self._dictionary()
+        if category == "all":
+            self._save_dictionary([])
+            self.reset_memory()
+            return len(entries) + mem_n
+        if category in ("user", "import", "learned"):
+            keep = [e for e in entries if e["src"] != category]
+            self._save_dictionary(keep)
+            return len(entries) - len(keep)
+        if category == "spoken":
+            keep = [e for e in entries if not e["s"]]
+            self._save_dictionary(keep)
+            return len(entries) - len(keep)
+        return 0
+
+    def add_dictionary_entry(self, written: str, spoken: str = "",
+                             src: str = "user") -> None:
+        written, spoken = (written or "").strip(), (spoken or "").strip()
+        if not written:
+            return
+        entries = self._dictionary()
+        for e in entries:
+            if e["w"].casefold() == written.casefold():
+                if spoken:
+                    e["s"] = spoken                 # update the spoken form
+                self._save_dictionary(entries)
+                return
+        entries.append({"w": written, "s": spoken, "src": src})
+        self._save_dictionary(entries)
+
+    def edit_dictionary_entry(self, key: str, written: str,
+                              spoken: str) -> None:
+        written, spoken = (written or "").strip(), (spoken or "").strip()
+        entries = self._dictionary()
+        for e in entries:
+            if e["w"].casefold() == (key or "").casefold():
+                if written:            # empty written -> keep (use the X button)
+                    e["w"] = written
+                e["s"] = spoken
+                self._save_dictionary(entries)
+                return
+
+    def remove_dictionary_entry(self, key: str) -> None:
+        self._save_dictionary([e for e in self._dictionary()
+                               if e["w"].casefold() != (key or "").casefold()])
+
+    def add_learned_word(self, word: str) -> None:
+        self.add_dictionary_entry(word, "", "learned")
+
+    # -- backward-compatible accessors used elsewhere -------------------
+
+    def glossary_words(self) -> list[str]:
+        """All written forms (used for hotword biasing + suggestions)."""
+        return [e["w"] for e in self._dictionary()]
+
+    def spoken_forms(self) -> list[tuple[str, str]]:
+        """(spoken, written) pairs -- entries that have a spoken form."""
+        return [(e["s"], e["w"]) for e in self._dictionary() if e["s"]]
+
     def add_spoken_form(self, spoken: str, written: str) -> None:
-        spoken = (spoken or "").strip()
-        written = (written or "").strip()
-        if not spoken or not written:
-            return
-        forms = [p for p in self.spoken_forms()
-                 if p[0].casefold() != spoken.casefold()]
-        forms.append((spoken, written))
-        self._save_spoken_forms(forms)
+        self.add_dictionary_entry(written, spoken, "user")   # window button
 
-    def remove_spoken_form(self, spoken: str) -> None:
-        self._save_spoken_forms(
-            [p for p in self.spoken_forms()
-             if p[0].casefold() != (spoken or "").casefold()])
+    def add_glossary_word(self, word: str) -> None:
+        self.add_dictionary_entry(word, "", "user")
 
-    def edit_spoken_form(self, spoken: str, new_written: str) -> None:
-        new_written = (new_written or "").strip()
-        if not new_written:
-            return
-        self._save_spoken_forms(
-            [(s, new_written) if s.casefold() == (spoken or "").casefold()
-             else (s, w) for s, w in self.spoken_forms()])
+    # -- plain-text export / import -------------------------------------
+
+    def export_dictionary(self, path: str) -> int:
+        """Write the whole dictionary to a text file, one entry per line:
+        ``gesprochen = geschrieben`` (or just ``geschrieben`` when there is no
+        spoken form).  Returns the number of entries written."""
+        nl = chr(10)
+        entries = self._dictionary()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# WithEase Woerterbuch - eine Zeile je Eintrag:" + nl)
+            f.write("#   gesprochen = geschrieben   (oder nur: geschrieben)" + nl)
+            for e in entries:
+                line = (e["s"] + " = " + e["w"]) if e["s"] else e["w"]
+                f.write(line + nl)
+        return len(entries)
+
+    def import_dictionary(self, path: str) -> int:
+        """Merge a text dictionary (see export_dictionary) into the current one;
+        existing written forms are updated, new ones appended (source
+        "Import").  Returns the number of entries imported."""
+        tab = chr(9)
+        entries = self._dictionary()
+        by_written = {e["w"].casefold(): e for e in entries}
+        count = 0
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                spoken, written = "", ""
+                if "=" in line:
+                    spoken, written = line.split("=", 1)
+                elif tab in line:
+                    spoken, written = line.split(tab, 1)
+                else:
+                    written = line          # a bare term, no spoken form
+                spoken, written = spoken.strip(), written.strip()
+                if not written:
+                    continue
+                key = written.casefold()
+                if key in by_written:
+                    if spoken:
+                        by_written[key]["s"] = spoken
+                else:
+                    e = {"w": written, "s": spoken, "src": "import"}
+                    entries.append(e)
+                    by_written[key] = e
+                count += 1
+        self._save_dictionary(entries)
+        return count
 
     def _confirmed_set(self) -> set[str]:
         return {w.casefold() for w in self._settings.get("confirmed_words", [])}
@@ -2053,15 +2822,24 @@ class DictationModule(BaseModule):
             pass
         return "cpu", "int8"
 
-    def _ensure_model_loaded(self) -> Any:
+    def _live_model_name(self) -> str:
+        """The live polish is the *final* text, so it needs good accuracy;
+        tiny/base/small are weaker for German.  Default the live polish to
+        'medium' (a user who explicitly picked small or large-v3 keeps it)."""
+        m = self._settings.get("local_model", "base")
+        return m if m in ("small", "medium", "large-v3") else "medium"
+
+    def _ensure_model_loaded(self, model_name: str | None = None) -> Any:
         """Load the faster-whisper model (once).  Guarded by a lock so a
-        background preload and a live dictation can't load it twice."""
-        try:
-            from faster_whisper import WhisperModel
-        except ImportError:
-            raise RuntimeError(_t("err.no_local"))
-        model_name = self._settings.get("local_model", "base")
+        background preload and a live dictation can't load – or *import* – it
+        twice at the same time (concurrent first import crashes the process)."""
+        if model_name is None:
+            model_name = self._settings.get("local_model", "base")
         with self._model_lock:
+            try:
+                from faster_whisper import WhisperModel
+            except ImportError:
+                raise RuntimeError(_t("err.no_local"))
             if self._local_model is None or self._local_model_name != model_name:
                 device, compute_type = self._whisper_device()
                 threads = max(1, (os.cpu_count() or 4) // 2)
@@ -2081,35 +2859,72 @@ class DictationModule(BaseModule):
         except Exception:
             _log.exception("model preload failed")
 
-    def _transcribe_local(self, wav_bytes: bytes) -> str:
-        self._ensure_model_loaded()
+    def _preload_live(self) -> None:
+        """Warm the live pipeline at startup: keep the Vosk model resident in
+        THIS process, and start the out-of-process Whisper worker.  Whisper's
+        native libs never load into this (Vosk) process – that isolation is
+        what removes the crashes."""
+        if bool(self._settings.get("live_use_vosk", False)):
+            try:
+                self._ensure_vosk()
+            except Exception:
+                _log.exception("vosk preload failed")
+        try:
+            threads = max(1, (os.cpu_count() or 4) // 2)
+            if self._whisper_proc.start(self._live_model_name(), threads):
+                _log.info("whisper worker ready")
+        except Exception:
+            _log.exception("whisper worker start failed")
+
+    def _transcribe_local(self, wav_bytes: bytes, *, live: bool = False) -> str:
+        self._ensure_model_loaded(self._live_model_name() if live else None)
 
         language = self._local_language()
-        # German command "dictionary" only makes sense when decoding German.
-        prompt = self._initial_prompt() if language == "de" else None
+        # The German command "dictionary" prompt helps the batch/command path,
+        # but on the short clips of the LIVE polish Whisper tends to *echo* the
+        # prompt (inventing words the user never said) – so drop it there.
+        prompt = (None if live
+                  else (self._initial_prompt() if language == "de" else None))
         hotwords = self._hotwords() or None     # bias toward the user's terms
-        segments, _info = self._local_model.transcribe(
-            io.BytesIO(wav_bytes),
-            language=language,
-            initial_prompt=prompt,
-            hotwords=hotwords,
-            beam_size=5,
-            temperature=0.0,
-            condition_on_previous_text=False,
-            vad_filter=True,        # skip silence → far fewer hallucinations
-            word_timestamps=True,   # per-word probabilities → confidence heatmap
-        )
-        parts, low = [], []
-        for seg in segments:
-            parts.append(seg.text.strip())
-            for w in (getattr(seg, "words", None) or []):
-                if getattr(w, "probability", 1.0) < 0.55:
-                    token = (w.word or "").strip().strip(" .,;:!?…\"'„“”")
-                    if token:
-                        low.append(token)
-        self._last_low_words = low
-        from postprocess import strip_hallucinations
-        return strip_hallucinations(" ".join(parts))
+        # A scalar temperature disables faster-whisper's fallback re-decode, so
+        # repetitive/low-confidence hallucinations ("Und so. Und so. …") are
+        # kept.  A temperature *list* re-enables that guard for the live polish.
+        temperature: Any = ([0.0, 0.2, 0.4, 0.6, 0.8, 1.0] if live else 0.0)
+        # Native ASR must never run concurrently (see _asr_lock): a second
+        # decode – or a live Vosk chunk – running at the same time crashes the
+        # whole process.  Serialise every Whisper decode here.
+        with self._asr_lock:
+            segments, _info = self._local_model.transcribe(
+                io.BytesIO(wav_bytes),
+                language=language,
+                initial_prompt=prompt,
+                hotwords=hotwords,
+                beam_size=5,
+                temperature=temperature,
+                condition_on_previous_text=False,
+                vad_filter=True,        # skip silence → far fewer hallucinations
+                # anti-hallucination thresholds (drop invented/repetitive text)
+                no_speech_threshold=0.6,
+                log_prob_threshold=-1.0,
+                compression_ratio_threshold=2.4,
+                word_timestamps=True,   # per-word probs → confidence heatmap
+            )
+            parts, low = [], []
+            for seg in segments:        # iterating drives the actual inference
+                # On the live path, drop segments Whisper itself flags as most
+                # likely non-speech + low-confidence – the usual hallucinations.
+                if live and getattr(seg, "no_speech_prob", 0.0) > 0.6 \
+                        and getattr(seg, "avg_logprob", 0.0) < -1.0:
+                    continue
+                parts.append(seg.text.strip())
+                for w in (getattr(seg, "words", None) or []):
+                    if getattr(w, "probability", 1.0) < 0.55:
+                        token = (w.word or "").strip().strip(" .,;:!?…\"'„“”")
+                        if token:
+                            low.append(token)
+            self._last_low_words = low
+        from postprocess import strip_hallucinations, strip_repetitions
+        return strip_repetitions(strip_hallucinations(" ".join(parts)))
 
     # -- optional AI cleanup (local Ollama / cloud chat) -----------------
 

@@ -163,6 +163,20 @@ class ErrorMemory:
 
         return re.sub(r"\w+", repl, text, flags=re.UNICODE)
 
+    def apply_all(self, text: str) -> str:
+        """Apply *every* active substitution unconditionally – used for the live
+        preview, where showing the user's own learned words matters more than
+        caution (the final text is still re-checked by the Whisper polish)."""
+        if not self._active or not text:
+            return text
+
+        def repl(m: re.Match) -> str:
+            word = m.group(0)
+            value = self._active.get(_fold(word))
+            return _match_case(word, value) if value is not None else word
+
+        return re.sub(r"\w+", repl, text, flags=re.UNICODE)
+
     def direct(self, word: str) -> str:
         """The learned correction for a single word (ungated), for suggestions."""
         return self._active.get(_fold(word), "")

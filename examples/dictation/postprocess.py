@@ -78,6 +78,34 @@ def strip_hallucinations(text: str) -> str:
     return " ".join(kept).strip()
 
 
+def strip_repetitions(text: str) -> str:
+    """Collapse Whisper's repetition-loop hallucinations, where a short phrase
+    is repeated over and over ("Und so. Und so. Und so.") – something a person
+    never actually dictates.  A phrase repeated 3+ times in a row is reduced to
+    a single occurrence; genuine doubles ("sehr, sehr") are left alone."""
+    if not text or not text.strip():
+        return ""
+    # 1) sentence-level: drop consecutive duplicate sentences (keep the first).
+    parts = re.split(r"(?<=[.!?…])\s+", text.strip())
+    kept: list[str] = []
+    for part in parts:
+        norm = _fold(part).strip(" .,;:!?…")
+        if not norm:
+            continue
+        if kept and _fold(kept[-1]).strip(" .,;:!?…") == norm:
+            continue                # same sentence again → skip
+        kept.append(part.strip())
+    text = " ".join(kept).strip()
+    # 2) word/phrase-level: a 1–4 word group immediately repeated 3+ times.
+    text = re.sub(
+        r"\b(\w+(?:\W+\w+){0,3})(?:\W+\1\b){2,}",
+        lambda m: m.group(1),
+        text,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
 # ---------------------------------------------------------------------------
 # Optional AI cleanup (local or cloud) – prompt + result guard
 # ---------------------------------------------------------------------------

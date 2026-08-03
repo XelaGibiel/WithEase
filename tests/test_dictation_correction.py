@@ -126,3 +126,16 @@ def test_persistence_roundtrip():
     restored = co.ErrorMemory(data)
     assert restored.apply("Kaser") == "Cursor"
     assert restored.substitutions() == {"kaser": "Cursor"}
+
+
+def test_apply_all_applies_every_active_substitution():
+    # Live preview uses apply_all: even a fresh (count=1) correction shows up,
+    # regardless of confidence.
+    mem = co.ErrorMemory()
+    mem.learn("Kaser", "Cursor")                 # active, but only seen once
+    assert mem.apply("Der Kaser blinkt") == "Der Kaser blinkt"   # cautious path
+    assert mem.apply_all("Der Kaser blinkt") == "Der Cursor blinkt"
+    # a lowercase mis-hearing keeps the learned word's own capitalisation
+    assert mem.apply_all("kaser") == "Cursor"
+    # nothing learned → unchanged
+    assert co.ErrorMemory().apply_all("nix gelernt") == "nix gelernt"

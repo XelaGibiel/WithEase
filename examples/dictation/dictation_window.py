@@ -332,6 +332,9 @@ class DictationWindow(QWidget):
     _state_sig = Signal(str, str)              # (state, mode-label)
     _open_sig = Signal()
     _target_sig = Signal(str)                  # target app name (thread-safe)
+    _partial_sig = Signal(str)                 # live provisional text
+    _final_sig = Signal(str)                   # live finalised segment
+    _polish_sig = Signal(str, bool)            # Whisper-polished sentence, commit
 
     def __init__(self, on_insert: Callable[[str], None] | None = None,
                  on_copy: Callable[[str], None] | None = None,
@@ -360,6 +363,12 @@ class DictationWindow(QWidget):
         self._tr = t or (lambda s: s)
         self._spell_mode = False
         self._correction_dialog: CorrectionDialog | None = None
+        # Live-dictation state: a provisional (grey) region that firms up.
+        self._prov_start: int | None = None
+        self._prov_end: int | None = None
+        self._last_final_end: int | None = None
+        self._run_start: int | None = None     # start of the un-polished run
+        self._run_text = ""                    # raw text of that run (for guard)
 
         self.setWindowTitle("WithEase – Diktieren")
         # A normal top-level window (not Qt.Tool): tool windows show a caret but
@@ -488,6 +497,9 @@ class DictationWindow(QWidget):
         self._state_sig.connect(self._apply_state)
         self._open_sig.connect(self.open_for_dictation)
         self._target_sig.connect(self._apply_target)
+        self._partial_sig.connect(self._apply_partial)
+        self._final_sig.connect(self._apply_final)
+        self._polish_sig.connect(self._apply_polish)
         self._apply_state("idle")
         self._apply_target("")
         if self._restore_geometry and len(self._restore_geometry) == 4:
@@ -509,6 +521,143 @@ class DictationWindow(QWidget):
     def set_target(self, name: str) -> None:
         """Set the app name shown for „einfügen" (safe from a worker thread)."""
         self._target_sig.emit(name or "")
+
+    # -- live dictation (thread-safe) ----------------------------------
+
+    def live_partial(self, text: str) -> None:
+        self._partial_sig.emit(text or "")
+
+    def live_final(self, text: str) -> None:
+        self._final_sig.emit(text or "")
+
+    def live_polish(self, text: str, commit: bool = True) -> None:
+        self._polish_sig.emit(text or "", bool(commit))
+
+    def _prov_format(self) -> QTextCharFormat:
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(150, 150, 150))   # grey = provisional
+        return fmt
+
+    @staticmethod
+    def _needs_sep(prev: str) -> bool:
+        """A new utterance needs a separating space if the buffer ends in a
+        letter/digit or in sentence punctuation (so a new sentence starts with
+        a space after „.", „!", „?" … instead of sticking to it)."""
+        return prev.isalnum() or prev in ".!?…:;,“»)"
+
+    def _begin_run_at_cursor(self, text: str,
+                             fmt: QTextCharFormat) -> tuple[int, int]:
+        """Start a new live utterance at the *current cursor* (not the end), so
+        „Cursor vor X" and manual clicks let you dictate into the middle of the
+        text.  Adds a leading space if it would glue to the previous word and a
+        trailing space if it would glue to a following word.  Returns the
+        (start, end) of the inserted text (trailing space excluded) and leaves
+        the edit cursor at `end`."""
+        cur = self._edit.textCursor()
+        cur.clearSelection()
+        doc = self.text()
+        pos = cur.position()
+        if pos > 0 and text and self._needs_sep(doc[pos - 1]):
+            cur.insertText(" ")                # separate from the previous word
+        start = cur.position()
+        cur.insertText(text, fmt)
+        end = cur.position()
+        doc = self.text()
+        if end < len(doc) and doc[end].isalnum():
+            cur.insertText(" ")                # separate from the following word
+            cur.setPosition(end)               # keep cursor at end of new text
+        self._edit.setTextCursor(cur)
+        return start, end
+
+    def _apply_partial(self, text: str) -> None:
+        text = " ".join((text or "").split())
+        if self._prov_start is None:
+            self._prov_start, self._prov_end = self._begin_run_at_cursor(
+                text, self._prov_format())
+        else:
+            cur = self._edit.textCursor()
+            cur.setPosition(self._prov_start)
+            cur.setPosition(self._prov_end, QTextCursor.MoveMode.KeepAnchor)
+            cur.insertText(text, self._prov_format())
+            self._prov_end = cur.position()
+            self._edit.setTextCursor(cur)
+
+    def _apply_final(self, text: str) -> None:
+        text = " ".join((text or "").split())
+        if not text:
+            return
+        plain = QTextCharFormat()
+        if self._prov_start is not None:
+            cur = self._edit.textCursor()
+            cur.setPosition(self._prov_start)
+            cur.setPosition(self._prov_end, QTextCursor.MoveMode.KeepAnchor)
+            start = self._prov_start
+            cur.insertText(text, plain)
+            end = cur.position()
+            self._edit.setTextCursor(cur)
+        else:
+            start, end = self._begin_run_at_cursor(text, plain)
+        self._last_final_end = end
+        if self._run_start is None:
+            self._run_start = start
+            self._run_text = text
+        else:
+            self._run_text += " " + text        # fragments joined by one space
+        self._prov_start = self._prov_end = None
+
+    def _apply_polish(self, text: str, commit: bool = True) -> None:
+        """Replace the current sentence's run with Whisper's polished text.
+
+        With ``commit=False`` the sentence isn't finished yet (Whisper's text
+        doesn't end on „.", „!", „?"): the run stays *open* so the next words
+        extend it and the next polish replaces the whole growing sentence – that
+        is what gives proper sentence-wide punctuation, casing and compound
+        words instead of one capitalised fragment per pause."""
+        text = " ".join((text or "").split())
+        if not text:
+            if commit:
+                self._run_start, self._run_text = None, ""
+                self._last_final_end = None
+            return
+        if self._run_start is None or self._last_final_end is None:
+            # No Vosk run to replace (Whisper-only live mode): insert the polished
+            # text as a fresh run at the cursor, and keep it open until committed.
+            start, end = self._begin_run_at_cursor(text, QTextCharFormat())
+            if commit:
+                self._run_start, self._run_text = None, ""
+                self._last_final_end = None
+            else:
+                self._run_start, self._run_text, self._last_final_end = \
+                    start, text, end
+            return
+        start, end = self._run_start, self._last_final_end
+        cur = self._edit.textCursor()
+        cur.setPosition(start)
+        cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+        if cur.selectedText() == self._run_text:
+            cur.insertText(text, QTextCharFormat())
+            new_end = cur.position()
+            self._shift_offsets(end, new_end - end)      # keep tracking sane
+            if self._prov_start is None:      # no next word streaming yet →
+                self._edit.setTextCursor(cur)  # keep dictating after this text
+            if not commit:
+                # sentence continues: keep the run open on the polished text
+                self._run_start = start
+                self._run_text = text
+                self._last_final_end = new_end
+                return
+        self._run_start, self._run_text = None, ""
+        self._last_final_end = None
+
+    def _shift_offsets(self, after: int, delta: int) -> None:
+        """A polish replaced text of a different length; move any offsets that
+        point past it (e.g. a provisional region of the next utterance)."""
+        if not delta:
+            return
+        for attr in ("_prov_start", "_prov_end", "_last_final_end"):
+            val = getattr(self, attr)
+            if val is not None and val >= after:
+                setattr(self, attr, val + delta)
 
     def request_open(self) -> None:
         """Show the window (safe to call from a worker thread)."""
@@ -732,6 +881,10 @@ class DictationWindow(QWidget):
         self._edit.clear()
         self._clear_marks()
         self._pending_low_words = []
+        self._prov_start = self._prov_end = None
+        self._last_final_end = None
+        self._run_start = None
+        self._run_text = ""
         # Fresh editor state (drops any pending selection / correction).
         self._editor = ea.Editor(self._edit)
 

@@ -46,3 +46,21 @@ def test_guard_accepts_light_edit_and_strips_quotes():
     orig = "das ist ein satz ohne satzzeichen"
     cleaned = '"Das ist ein Satz ohne Satzzeichen."'
     assert pp.guard_cleanup(orig, cleaned) == "Das ist ein Satz ohne Satzzeichen."
+
+
+def test_strip_repetitions_collapses_sentence_loop():
+    # Whisper repetition-loop hallucination → collapse to one occurrence.
+    assert pp.strip_repetitions("Und so. Und so. Und so ist es nicht.") \
+        == "Und so. Und so ist es nicht."
+    assert pp.strip_repetitions("Das ist gut. Das ist gut. Das ist gut.") \
+        == "Das ist gut."
+
+
+def test_strip_repetitions_collapses_word_loop():
+    assert pp.strip_repetitions("ja ja ja ja das war es") == "ja das war es"
+
+
+def test_strip_repetitions_keeps_genuine_doubles_and_normal_text():
+    assert pp.strip_repetitions("sehr, sehr gut") == "sehr, sehr gut"
+    assert pp.strip_repetitions("Hallo Welt.") == "Hallo Welt."
+    assert pp.strip_repetitions("") == ""
