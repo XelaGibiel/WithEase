@@ -1479,6 +1479,10 @@ class DictationModule(BaseModule):
         self._reselect_timer: Any = None  # QTimer polling for the chosen app
         self._error_memory: Any = None   # ErrorMemory (lazy, from settings)
 
+        # Re-theme the dictation window when the app switches light<->dark while
+        # it is open (Qt caches palette() colours baked into stylesheet strings).
+        bus.subscribe("theme.changed", self._on_theme_changed)
+
         # Listed in the actions table / favourites / conflict checks; the key
         # itself is handled by our own hook subscription below.
         action_manager.register(Action(
@@ -1563,6 +1567,15 @@ class DictationModule(BaseModule):
 
     def _window_mode(self) -> bool:
         return self._settings.get("output_mode", "window") == "window"
+
+    def _on_theme_changed(self, **_kw: Any) -> None:
+        """Live light<->dark switch: re-resolve the window's palette stylesheets
+        (fires on the GUI thread, so touching widgets here is safe)."""
+        if self._window is not None:
+            try:
+                self._window.reapply_theme()
+            except Exception:
+                pass
 
     def _ensure_window(self) -> Any:
         """Create the dictation window (must run on the Qt main thread)."""

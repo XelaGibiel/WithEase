@@ -493,7 +493,6 @@ class DictationWindow(QWidget):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(4)
         hist_label = QLabel("Verlauf (zum Laden anklicken)")
-        hist_label.setStyleSheet("color: palette(windowText);")
         right_layout.addWidget(hist_label)
         self._history = QListWidget()
         self._history.setWordWrap(True)
@@ -527,7 +526,6 @@ class DictationWindow(QWidget):
 
         # Which app "einfügen" will paste into.
         self._target_label = QLabel("")
-        self._target_label.setStyleSheet("color: palette(windowText);")
         layout.addWidget(self._target_label)
 
         # Small toolbar: undo/redo, re-pick target app, command help.
@@ -564,7 +562,6 @@ class DictationWindow(QWidget):
         self._update_history_btn()
         tools.addStretch()
         self._counter = QLabel("")               # live char/word count
-        self._counter.setStyleSheet("color: palette(mid);")
         tools.addWidget(self._counter)
         layout.addLayout(tools)
 
@@ -578,10 +575,7 @@ class DictationWindow(QWidget):
                                  QSizePolicy.Policy.Fixed)
         self._hint.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._hint.setStyleSheet(
-            "QLabel { color: palette(text); background: palette(base);"
-            " border: 1px solid palette(mid); border-radius: 4px;"
-            " padding: 3px 8px; }")
+        self._style_hint()
         layout.addWidget(self._hint)
 
         # --- buttons (each with a keyboard shortcut) ---
@@ -677,7 +671,7 @@ class DictationWindow(QWidget):
             return
         self._ai_widget.setVisible(True)
         header = QLabel("KI-Aktionen")
-        header.setStyleSheet("color: palette(windowText); font-weight: bold;")
+        header.setStyleSheet("font-weight: bold;")
         self._ai_bar.addWidget(header)
         for idx, (name, prompt) in enumerate(self._ai_actions):
             btn = QPushButton(name or "…")
@@ -874,6 +868,21 @@ class DictationWindow(QWidget):
             if val is not None and val >= after:
                 setattr(self, attr, val + delta)
 
+    def _style_hint(self) -> None:
+        self._hint.setStyleSheet(
+            "QLabel { color: palette(text); background: palette(base);"
+            " border: 1px solid palette(mid); border-radius: 4px;"
+            " padding: 3px 8px; }")
+
+    def reapply_theme(self) -> None:
+        """Re-resolve palette()-based stylesheets after a live theme switch.
+
+        Qt bakes the ``palette(...)`` colours of a stylesheet *string* at the
+        moment it is set, so widgets styled that way keep their old colours when
+        the app palette flips light<->dark while the window is already open.
+        Re-setting the string resolves it against the current palette again."""
+        self._style_hint()
+
     def request_open(self) -> None:
         """Show the window (safe to call from a worker thread)."""
         self._open_sig.emit()
@@ -883,6 +892,7 @@ class DictationWindow(QWidget):
 
     def open_for_dictation(self) -> None:
         was_hidden = not self.isVisible()
+        self.reapply_theme()          # in case the theme changed while hidden
         if was_hidden:
             self.show()
         self.raise_()
@@ -1155,7 +1165,7 @@ class DictationWindow(QWidget):
             name = name[:59] + "…"
         if name:
             self._target_label.setText(f"→ „Einfügen“ fügt ein in:  {name}")
-            self._target_label.setStyleSheet("color: palette(windowText);")
+            self._target_label.setStyleSheet("")     # inherit the theme palette
         else:
             self._target_label.setText(
                 "⚠  Keine Ziel-App gewählt – „Einfügen“ landet nur in der "
