@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Callable
 
 from withease import __version__
-from withease.core import updater
+from withease.core import i18n, updater
 from withease.core.module_loader import MODULES_DIR
 
 log = logging.getLogger(__name__)
@@ -82,16 +82,35 @@ def _installed_version(module_id: str) -> str | None:
         return "0"   # installed but unreadable manifest – treat as present
 
 
+def _localized(entry: dict, key: str, default: str) -> str:
+    """A per-language override of ``key`` from the entry's optional ``i18n``
+    block, falling back to the top-level (default-language) value.
+
+    Example entry::
+
+        {"name": "Trinkpause", "i18n": {"en": {"name": "Hydration break"}}}
+
+    In English this returns "Hydration break"; in German (or any language
+    without an override) it returns the top-level "Trinkpause"."""
+    block = entry.get("i18n")
+    if isinstance(block, dict):
+        lang_block = block.get(i18n.current_language())
+        if isinstance(lang_block, dict) and lang_block.get(key):
+            return str(lang_block[key])
+    return default
+
+
 def _parse_index(data: dict) -> list[StoreModule]:
     modules: list[StoreModule] = []
     for entry in data.get("modules", []):
         try:
             mod = StoreModule(
                 id=str(entry["id"]),
-                name=str(entry.get("name", entry["id"])),
+                name=_localized(entry, "name", str(entry.get("name", entry["id"]))),
                 version=str(entry.get("version", "0")),
                 author=str(entry.get("author", "")),
-                description=str(entry.get("description", "")),
+                description=_localized(
+                    entry, "description", str(entry.get("description", ""))),
                 download_url=str(entry["download_url"]),
                 subdir=str(entry.get("subdir", "")),
                 min_app_version=str(entry.get("min_app_version", "0")),

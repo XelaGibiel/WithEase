@@ -40,11 +40,12 @@ SUPPORTED_LANGUAGES: dict[str, str] = {
 _DEFAULT_LANG = "en"
 _strings: dict[str, str] = {}
 _fallback: dict[str, str] = {}
+_current_lang: str = _DEFAULT_LANG
 
 
 def load(lang_code: str) -> None:
     """Load a language. Falls back to English for missing keys."""
-    global _strings, _fallback
+    global _strings, _fallback, _current_lang
 
     _fallback = _load_file(_DEFAULT_LANG)
 
@@ -53,7 +54,13 @@ def load(lang_code: str) -> None:
     else:
         _strings = {**_fallback, **_load_file(lang_code)}
 
+    _current_lang = lang_code
     bus.publish("i18n.language_changed", lang=lang_code)
+
+
+def current_language() -> str:
+    """The language code currently loaded (e.g. "de", "en")."""
+    return _current_lang
 
 
 def _load_file(lang_code: str) -> dict[str, str]:

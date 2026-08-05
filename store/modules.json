@@ -10,6 +10,12 @@
       "version": "1.1.0",
       "author": "WithEase",
       "description": "Erinnert in einstellbaren Abständen an Trinkpausen – dezent, als Regen oder als steigender Flüssigkeitsstand.",
+      "i18n": {
+        "en": {
+          "name": "Hydration break",
+          "description": "Reminds you to take drink breaks at adjustable intervals – subtly, as rain or as a rising liquid level."
+        }
+      },
       "download_url": "https://github.com/XelaGibiel/WithEase/archive/refs/heads/main.zip",
       "subdir": "examples/hydration",
       "min_app_version": "0.1.0"
@@ -20,6 +26,12 @@
       "version": "1.0.0",
       "author": "WithEase",
       "description": "Sprache zu Text per Whisper – Cloud (OpenRouter/OpenAI/Groq) oder lokal auf diesem PC.\n\n🧪 Noch früh in der Beta-Phase – funktioniert evtl. nicht auf Anhieb reibungslos.",
+      "i18n": {
+        "en": {
+          "name": "Dictation",
+          "description": "Speech to text via Whisper – cloud (OpenRouter/OpenAI/Groq) or locally on this PC.\n\n🧪 Still early in beta – may not work perfectly right away."
+        }
+      },
       "download_url": "https://github.com/XelaGibiel/WithEase/archive/refs/heads/main.zip",
       "subdir": "examples/dictation",
       "min_app_version": "0.1.0"

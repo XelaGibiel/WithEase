@@ -473,7 +473,35 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._hline())
 
+        # --- Support / Ko-fi -------------------------------------------------
+        # A friendly, entirely optional donation nudge – the program stays free.
+        support_heading = QLabel(tr("about.support.heading"))
+        support_heading.setStyleSheet(
+            f"color: {theme.accent()}; font-weight: 600;")
+        layout.addWidget(support_heading)
+
+        support_text = QLabel(tr("about.support.text"))
+        support_text.setWordWrap(True)
+        support_text.setMaximumWidth(_MAXW)
+        layout.addWidget(support_text)
+
+        kofi_url = "https://ko-fi.com/xelagibiel"
+        kofi = _btn("about.support.button")
+        kofi.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(kofi_url)))
+        support_row = QHBoxLayout()
+        support_row.addWidget(kofi)
+        support_row.addStretch()
+        layout.addLayout(support_row)
+
+        layout.addWidget(self._hline())
+
         # --- More links ------------------------------------------------------
+        feedback_hint = QLabel(tr("about.feedback.hint"))
+        feedback_hint.setWordWrap(True)
+        feedback_hint.setMaximumWidth(_MAXW)
+        feedback_hint.setStyleSheet(theme.hint_style())
+        layout.addWidget(feedback_hint)
+
         links_row = QHBoxLayout()
         gh_url = "https://github.com/XelaGibiel/WithEase"
         gh = _btn("about.github")
@@ -619,11 +647,21 @@ class MainWindow(QMainWindow):
         self._font_spin.setSuffix(" pt")
         saved_pt = int(self._app._app_config.get("font_size", 0))
         self._font_spin.setValue(saved_pt if 8 <= saved_pt <= 16 else 7)
-        # Live preview: every change applies after a short pause (the pause
-        # keeps typing "12" from briefly applying 1pt-clamped steps, and each
-        # apply rebuilds the pages, which would steal the field mid-input).
-        self._font_spin.valueChanged.connect(self._on_font_size_live)
-        form.addRow(tr("settings.general.font_size"), self._font_spin)
+        # Deliberately NOT applied live: changing the font rebuilds every page,
+        # which recreates this very spinbox and makes its up/down arrows jump
+        # around under the cursor while adjusting.  Instead the change only
+        # takes effect when the "Apply" button next to it is pressed.
+        self._font_spin.valueChanged.connect(self._on_font_size_pending)
+        self._font_apply_btn = QPushButton(
+            tr("settings.general.font_size.apply"))
+        self._font_apply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._font_apply_btn.setEnabled(False)     # nothing pending yet
+        self._font_apply_btn.clicked.connect(self._on_font_size_apply)
+        font_row = QHBoxLayout()
+        font_row.addWidget(self._font_spin)
+        font_row.addWidget(self._font_apply_btn)
+        font_row.addStretch()
+        form.addRow(tr("settings.general.font_size"), font_row)
 
         # Autostart with Windows
         from PySide6.QtWidgets import QCheckBox
@@ -692,18 +730,22 @@ class MainWindow(QMainWindow):
         self._apply_appearance(
             "contrast", self._contrast_combo.itemData(index))
 
-    def _on_font_size_live(self, _value: int) -> None:
-        if not hasattr(self, "_font_apply_timer"):
-            self._font_apply_timer = QTimer(self)
-            self._font_apply_timer.setSingleShot(True)
-            self._font_apply_timer.setInterval(400)
-            self._font_apply_timer.timeout.connect(self._on_font_size_changed)
-        self._font_apply_timer.start()   # restart on every further change
-
-    def _on_font_size_changed(self) -> None:
+    def _pending_font_size(self) -> int:
+        """The spinbox value normalised to a stored font size (0 = system)."""
         value = int(self._font_spin.value())
-        value = value if value >= 8 else 0   # minimum shows "system" = 0
+        return value if value >= 8 else 0     # minimum shows "system" = 0
+
+    def _on_font_size_pending(self, _value: int) -> None:
+        # Don't apply yet – just enable "Apply" while the value differs from
+        # what's active, so the spinbox stays put until the user confirms.
+        changed = (self._pending_font_size()
+                   != int(self._app._app_config.get("font_size", 0)))
+        self._font_apply_btn.setEnabled(changed)
+
+    def _on_font_size_apply(self) -> None:
+        value = self._pending_font_size()
         if value == int(self._app._app_config.get("font_size", 0)):
+            self._font_apply_btn.setEnabled(False)
             return  # unchanged – no rebuild needed
         # Give the recreated spinbox focus again so arrow clicks / typing
         # can simply continue after the pages were rebuilt.
