@@ -25,11 +25,11 @@
       "name": "Diktieren",
       "version": "1.0.0",
       "author": "WithEase",
-      "description": "Sprache zu Text per Whisper – Cloud (OpenRouter/OpenAI/Groq) oder lokal auf diesem PC.\n\n🧪 Noch früh in der Beta-Phase – funktioniert evtl. nicht auf Anhieb reibungslos.",
+      "description": "Sprache zu Text per Whisper – Cloud (OpenRouter/OpenAI/Groq) oder lokal auf diesem PC.",
       "i18n": {
         "en": {
           "name": "Dictation",
-          "description": "Speech to text via Whisper – cloud (OpenRouter/OpenAI/Groq) or locally on this PC.\n\n🧪 Still early in beta – may not work perfectly right away."
+          "description": "Speech to text via Whisper – cloud (OpenRouter/OpenAI/Groq) or locally on this PC."
         }
       },
       "download_url": "https://github.com/XelaGibiel/WithEase/archive/refs/heads/main.zip",
