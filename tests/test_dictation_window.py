@@ -610,3 +610,42 @@ def test_state_indicator_updates(app):
     win.set_state("idle")
     app.processEvents()
     assert "Bereit" in win._status.text()
+
+
+def test_ai_action_buttons_click_and_result(app):
+    got = {}
+    win = dw.DictationWindow(on_ai_action=lambda p: got.setdefault("p", p),
+                             ai_actions=[("E-Mail", "Prompt A")])
+    assert [b.text() for b in win._ai_buttons] == ["E-Mail"]
+    win._ai_buttons[0].click()
+    assert got["p"] == "Prompt A"              # the prompt reaches the module
+    win.ai_result("ERGEBNIS")                  # shows a preview dialog first
+    app.processEvents()
+    assert win.text() == ""                    # not applied until confirmed
+    win._ai_preview.accept()                   # „Übernehmen"
+    app.processEvents()
+    assert win.text() == "ERGEBNIS"            # now the result replaces the buffer
+    win.set_ai_actions([])                     # no actions → no buttons
+    app.processEvents()
+    assert win._ai_buttons == []
+
+
+def test_escape_cancels_multiselect(app):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+    win, _, _ = make(app)
+    feed(app, win, "Haus und Haus")
+    feed(app, win, "markiere Haus")               # ambiguous → numbered choices
+    assert win._badges._badges and win._editor.has_pending()
+    ev = QKeyEvent(QEvent.Type.KeyPress, dw.Qt.Key.Key_Escape,
+                   dw.Qt.KeyboardModifier.NoModifier)
+    assert win.eventFilter(win._edit, ev) is True     # Escape consumed
+    app.processEvents()
+    assert not win._editor.has_pending()              # selection cancelled
+    assert win._badges._badges == []                  # badges cleared
+
+
+def test_ai_preview_diff_highlights_changes():
+    html = dw._diff_html("der Termin passt.", "der Termin passt?")
+    assert "passt?" in html and "background" in html   # changed word highlighted
+    assert dw._diff_html("gleich", "gleich").strip().startswith("gleich")

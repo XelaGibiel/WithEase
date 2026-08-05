@@ -39,8 +39,8 @@ def test_migrates_legacy_glossary_and_spoken_forms(app):
                                     ["kju bert", "QBert"]]})
     got = rows(m)
     # WithEase existed in both lists → kept once, with its spoken form
-    assert ("WithEase", "with ease", "ich") in got
-    assert ("QBert", "kju bert", "ich") in got
+    assert ("WithEase", "with ease", "von mir") in got
+    assert ("QBert", "kju bert", "von mir") in got
     assert ("Leibig", "", "gelernt") in got
     assert len(got) == 3
     # legacy keys are replaced by the unified list
@@ -134,3 +134,13 @@ def test_clear_category_bulk_removes(app):
     m._learn_correction("Kaser", "Cursor")
     assert m.clear_dictionary_category("corrected") == 1
     assert m._memory().substitutions() == {}
+
+
+def test_ai_actions_seed_and_save_filters_empties(app):
+    m = make(app)
+    seeded = m.ai_actions()                      # seeded with example buttons
+    assert seeded and all(len(a) == 2 for a in seeded)
+    m.save_ai_actions([{"name": "E-Mail", "prompt": "p"},
+                       {"name": "", "prompt": "x"},        # dropped (no name)
+                       {"name": "X", "prompt": ""}])       # dropped (no prompt)
+    assert m.ai_actions() == [("E-Mail", "p")]

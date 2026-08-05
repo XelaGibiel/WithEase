@@ -64,3 +64,32 @@ def test_strip_repetitions_keeps_genuine_doubles_and_normal_text():
     assert pp.strip_repetitions("sehr, sehr gut") == "sehr, sehr gut"
     assert pp.strip_repetitions("Hallo Welt.") == "Hallo Welt."
     assert pp.strip_repetitions("") == ""
+
+
+def test_fix_question_marks_polite_questions():
+    f = pp.fix_question_marks
+    assert f("Können Sie mir bitte mitteilen, ob der Termin passt.") \
+        == "Können Sie mir bitte mitteilen, ob der Termin passt?"
+    assert f("Ist das so korrekt. Das ist gut.") == "Ist das so korrekt? Das ist gut."
+    # imperatives / statements are left alone
+    assert f("Nimm das mit. Geh nach Hause.") == "Nimm das mit. Geh nach Hause."
+    assert f("Ich freue mich auf Ihre Antwort.") == "Ich freue mich auf Ihre Antwort."
+    # an existing ? or ! is untouched
+    assert f("Können Sie helfen?") == "Können Sie helfen?"
+
+
+def test_fix_casing_lowercases_stray_function_words():
+    f = pp.fix_casing
+    assert f("Ich gehe Nach Hause.") == "Ich gehe nach Hause."     # prep down, noun kept
+    assert f("Das Haus Und der Garten.") == "Das Haus und der Garten."
+    assert f("Wir treffen uns Vielleicht Später.") == \
+        "Wir treffen uns vielleicht Später."                        # only known words
+
+
+def test_fix_casing_preserves_nouns_sentence_start_formal_and_acronyms():
+    f = pp.fix_casing
+    assert f("Die Katze schläft.") == "Die Katze schläft."          # noun untouched
+    assert f("Für heute reicht das.") == "Für heute reicht das."    # sentence-start kept
+    assert f("Können Sie Mir helfen?") == "Können Sie mir helfen?"  # formal Sie kept
+    assert f("Das ist die EU.") == "Das ist die EU."                # acronym kept
+    assert f("Hallo. Und tschüss.") == "Hallo. Und tschüss."        # new sentence start

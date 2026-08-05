@@ -60,15 +60,16 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFormLayout,
-    QFrame,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -120,6 +121,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "description.long": "Hotkey drücken, sprechen, fertig – der erkannte Text wird in die aktive Anwendung eingefügt. Hinweis: Beim Cloud-Backend wird die Aufnahme an den gewählten Anbieter geschickt; beim lokalen Backend bleibt alles auf diesem PC.",
         "beta_note": "🧪 Dieses Modul steckt noch früh in der Beta-Phase – es funktioniert nicht unbedingt auf Anhieb reibungslos. Über „Feedback senden“ (Über-Seite) freue ich mich über Rückmeldungen.",
         "deps_missing": "⚠ Für dieses Add-on fehlen Komponenten. Zum Aktivieren im Programmordner ausführen:  pip install sounddevice requests  (für lokale Erkennung zusätzlich: faster-whisper)",
+        "group.basics": "Grundeinstellungen",
+        "group.recognition": "Spracherkennung",
+        "group.output": "Textausgabe",
+        "group.vocab_ai": "Wörterbuch & KI",
+        "group.advanced": "▸ Erweitert",
+        "group.advanced.open": "▾ Erweitert",
         "action": "Diktat starten/stoppen",
         "action.command": "Sprachbefehl starten/stoppen",
         "hotkey": "Diktier-Taste",
@@ -197,6 +204,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ai.cloud": "Cloud (Text wird an den Anbieter gesendet)",
         "ai.model": "KI-Modell",
         "ai.model.hint": "z. B. „llama3.2“ (lokal) oder „gpt-4o-mini“ (Cloud)",
+        "raw": "Nur reine Erkennung (keine Nachbearbeitung)",
+        "raw.hint": "Zeigt die reine Ausgabe der Spracherkennung – ohne unsere Nachbearbeitung (keine Satzzeichen-Korrektur, kein Wörterbuch, kein Fehler-Gedächtnis, keine Halluzinations-Filter, keine KI-Bereinigung). Zum Diagnostizieren: So sieht man, ob Fehler von der Erkennung selbst oder von der Nachbearbeitung kommen.",
+        "ai.actions": "KI-Aktionen",
+        "ai.actions.hint": "Frei belegbare Buttons links im Diktierfenster: Jeder Button schickt deinen Prompt zusammen mit dem Fensterinhalt an die KI (z. B. „mach daraus eine E-Mail“) und ersetzt den Text durch das Ergebnis. Nutzt das oben eingestellte KI-Backend.",
         "output": "Ausgabe",
         "output.window": "Diktierfenster (mit Sprachbefehlen & Korrektur)",
         "output.direct": "Direkt in die aktive Anwendung einfügen",
@@ -234,6 +245,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "enabled": "Enable dictation module",
         "description.long": "Press the hotkey, speak, done – the recognised text is inserted into the active application. Note: with the cloud backend the recording is sent to the chosen provider; with the local backend everything stays on this PC.",
         "beta_note": "🧪 This module is still in an early beta – it may not work flawlessly right away. Feedback via “Send feedback” (About page) is very welcome.",
+        "group.basics": "Basics",
+        "group.recognition": "Speech recognition",
+        "group.output": "Text output",
+        "group.vocab_ai": "Dictionary & AI",
+        "group.advanced": "▸ Advanced",
+        "group.advanced.open": "▾ Advanced",
         "deps_missing": "⚠ This add-on is missing components. To enable it, run in the program folder:  pip install sounddevice requests  (for local recognition also: faster-whisper)",
         "action": "Start/stop dictation",
         "action.command": "Start/stop voice command",
@@ -312,6 +329,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ai.cloud": "Cloud (text is sent to the provider)",
         "ai.model": "AI model",
         "ai.model.hint": "e.g. \"llama3.2\" (local) or \"gpt-4o-mini\" (cloud)",
+        "raw": "Raw recognition only (no post-processing)",
+        "raw.hint": "Shows the recogniser's plain output – without any of our post-processing (no punctuation fixes, no dictionary, no error memory, no hallucination filter, no AI cleanup). For diagnosing whether errors come from recognition itself or from post-processing.",
+        "ai.actions": "AI actions",
+        "ai.actions.hint": "Custom buttons on the left of the dictation window: each sends your prompt together with the window text to the AI (e.g. \"turn this into an email\") and replaces the text with the result. Uses the AI backend set above.",
         "output": "Output",
         "output.window": "Dictation window (with voice commands & correction)",
         "output.direct": "Insert directly into the active application",
@@ -386,6 +407,39 @@ def _warn_style() -> str:
 
 def _title_style() -> str:
     return "font-weight: bold; font-size: larger;"
+
+
+class _Collapsible(QWidget):
+    """A titled section that shows/hides its content on click – used to tuck
+    rarely-needed expert options away so the page stays calm by default."""
+
+    def __init__(self, title_closed: str, title_open: str,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._title_closed = title_closed
+        self._title_open = title_open
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+        self._btn = QToolButton()
+        self._btn.setText(title_closed)
+        self._btn.setCheckable(True)
+        self._btn.setChecked(False)
+        self._btn.setAutoRaise(True)
+        self._btn.setStyleSheet(
+            "QToolButton { border: none; font-weight: bold; padding: 2px 0; }")
+        self._btn.toggled.connect(self._on_toggled)
+        v.addWidget(self._btn)
+        self._content = QWidget()
+        self._content.setVisible(False)
+        v.addWidget(self._content)
+
+    def _on_toggled(self, on: bool) -> None:
+        self._btn.setText(self._title_open if on else self._title_closed)
+        self._content.setVisible(on)
+
+    def content(self) -> QWidget:
+        return self._content
 
 
 def _sync_module_checkbox(widget: QWidget, module: "DictationModule",
@@ -821,9 +875,9 @@ class DictationSettingsWidget(QWidget):
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        layout.setSpacing(14)
 
-        # ── Module toggle + privacy note ──────────────────────────────
+        # -- Module toggle + privacy note ------------------------------
         self._enabled_cb = QCheckBox(_t("enabled"))
         self._enabled_cb.setChecked(self._module.enabled)
         self._enabled_cb.setStyleSheet(_title_style())
@@ -846,32 +900,22 @@ class DictationSettingsWidget(QWidget):
             missing.setWordWrap(True)
             layout.addWidget(missing)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setFrameShadow(QFrame.Shadow.Sunken)
-        layout.addWidget(sep)
+        def _group(title: str) -> QFormLayout:
+            box = QGroupBox(title)
+            f = QFormLayout(box)
+            f.setSpacing(8)
+            f.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+            layout.addWidget(box)
+            return f
 
-        form = QFormLayout()
-        form.setSpacing(8)
-        self._form = form
+        # -- (1) Grundeinstellungen ------------------------------------
+        basics = _group(_t("group.basics"))
 
-        # ── Hotkey + mode ─────────────────────────────────────────────
         self._hotkey = HotkeyEdit(self._settings.get("hotkey", ""),
                                   action_id="dictation.toggle")
         self._hotkey.key_changed.connect(lambda k: self._save("hotkey", k))
-        form.addRow(_t("hotkey"), self._hotkey)
-
-        self._command_hotkey = HotkeyEdit(
-            self._settings.get("command_hotkey", ""),
-            action_id="dictation.command")
-        self._command_hotkey.key_changed.connect(
-            lambda k: self._save("command_hotkey", k))
-        self._command_hotkey.setToolTip(_t("hotkey.command.hint"))
-        form.addRow(_t("hotkey.command"), self._command_hotkey)
-        _cmd_hint = QLabel(_t("hotkey.command.hint"))
-        _cmd_hint.setWordWrap(True)
-        _cmd_hint.setStyleSheet(_hint_style())
-        form.addRow("", _cmd_hint)
+        basics.addRow(_t("hotkey"), self._hotkey)
 
         self._mode = QComboBox()
         self._mode.addItem(_t("mode.toggle"), "toggle")
@@ -880,94 +924,37 @@ class DictationSettingsWidget(QWidget):
             self._mode.setCurrentIndex(1)
         self._mode.currentIndexChanged.connect(
             lambda i: self._save("mode", self._mode.itemData(i)))
-        form.addRow(_t("mode"), self._mode)
+        basics.addRow(_t("mode"), self._mode)
 
-        # ── Backend ───────────────────────────────────────────────────
+        self._lang = QComboBox()
+        for code in LANGUAGES:
+            label = _t("lang.auto") if code == "auto" else code
+            self._lang.addItem(label, code)
+        saved_lang = self._settings.get("language", "auto")
+        if saved_lang in LANGUAGES:
+            self._lang.setCurrentIndex(LANGUAGES.index(saved_lang))
+        self._lang.currentIndexChanged.connect(
+            lambda i: self._save("language", self._lang.itemData(i)))
+        basics.addRow(_t("language"), self._lang)
+
+        # -- (2) Spracherkennung ---------------------------------------
+        rec = _group(_t("group.recognition"))
+        self._form_rec = rec
+
         self._backend = QComboBox()
         self._backend.addItem(_t("backend.cloud"), "cloud")
         local_label = _t("backend.local")
         if not local_backend_available():
             local_label += f" ({_t('backend.local.missing')})"
         self._backend.addItem(local_label, "local")
-        self._backend.addItem(_t("backend.live"), "live")
         saved_backend = self._settings.get("backend", "cloud")
+        if saved_backend == "live":          # retire an old "live" selection
+            saved_backend = "local"
         idx = self._backend.findData(saved_backend)
         if idx >= 0:
             self._backend.setCurrentIndex(idx)
         self._backend.currentIndexChanged.connect(self._on_backend_changed)
-        form.addRow(_t("backend"), self._backend)
-        _live_hint = QLabel(_t("backend.live.hint"))
-        _live_hint.setWordWrap(True)
-        _live_hint.setStyleSheet(_hint_style())
-        form.addRow("", _live_hint)
-
-        # Live-only: optional Vosk word-by-word preview.  Off = Whisper-only
-        # (text appears in ~1–2 s steps, more accurate); on = instant grey words
-        # from Vosk, refined by Whisper.
-        self._live_use_vosk = QCheckBox(_t("live_use_vosk"))
-        self._live_use_vosk.setChecked(
-            bool(self._settings.get("live_use_vosk", False)))
-        self._live_use_vosk.setToolTip(_t("live_use_vosk.hint"))
-        self._live_use_vosk.toggled.connect(
-            lambda v: self._save("live_use_vosk", bool(v)))
-        form.addRow("", self._live_use_vosk)
-        _live_vosk_hint = QLabel(_t("live_use_vosk.hint"))
-        _live_vosk_hint.setWordWrap(True)
-        _live_vosk_hint.setStyleSheet(_hint_style())
-        form.addRow("", _live_vosk_hint)
-        self._live_vosk_hint = _live_vosk_hint
-
-        # Live-only: how long a pause counts as the end of a sentence.  Longer
-        # = whole sentences are polished at once (fewer, cleaner punctuation
-        # updates); shorter = the polished text appears sooner.
-        self._live_pause = QDoubleSpinBox()
-        self._live_pause.setRange(0.4, 3.0)
-        self._live_pause.setSingleStep(0.1)
-        self._live_pause.setDecimals(1)
-        self._live_pause.setSuffix(" s")
-        self._live_pause.setValue(float(self._settings.get("live_pause", 1.0)))
-        self._live_pause.valueChanged.connect(
-            lambda v: self._save("live_pause", round(float(v), 1)))
-        self._live_pause_row = QLabel(_t("live_pause"))
-        form.addRow(self._live_pause_row, self._live_pause)
-
-        # Auto mode: learn the pause from Whisper's own sentence punctuation.
-        self._live_pause_auto = QCheckBox(_t("live_pause.auto"))
-        self._live_pause_auto.setChecked(
-            bool(self._settings.get("live_pause_auto", False)))
-        self._live_pause_auto.setToolTip(_t("live_pause.auto.hint"))
-        self._live_pause_auto.toggled.connect(self._on_live_auto_toggled)
-        form.addRow("", self._live_pause_auto)
-
-        _live_pause_hint = QLabel(_t("live_pause.hint"))
-        _live_pause_hint.setWordWrap(True)
-        _live_pause_hint.setStyleSheet(_hint_style())
-        form.addRow("", _live_pause_hint)
-        self._live_pause_hint = _live_pause_hint
-        self._live_pause.setDisabled(self._live_pause_auto.isChecked())
-
-        # Live-only: noise gate.  Audio quieter than this (background hum, fan)
-        # is treated as silence and never becomes text.  0 = off.
-        self._live_gate = QSpinBox()
-        self._live_gate.setRange(0, 2000)
-        self._live_gate.setSingleStep(50)
-        self._live_gate.setValue(int(self._settings.get("live_noise_gate", 250)))
-        self._live_gate.valueChanged.connect(
-            lambda v: self._save("live_noise_gate", int(v)))
-        self._live_gate_row = QLabel(_t("live_gate"))
-        form.addRow(self._live_gate_row, self._live_gate)
-        _live_gate_hint = QLabel(_t("live_gate.hint"))
-        _live_gate_hint.setWordWrap(True)
-        _live_gate_hint.setStyleSheet(_hint_style())
-        form.addRow("", _live_gate_hint)
-        self._live_gate_hint = _live_gate_hint
-
-        # Live-only: automatic gain control (auto-level a quiet/distant mic).
-        self._live_agc = QCheckBox(_t("live_agc"))
-        self._live_agc.setChecked(bool(self._settings.get("live_agc", True)))
-        self._live_agc.setToolTip(_t("live_agc.hint"))
-        self._live_agc.toggled.connect(lambda v: self._save("live_agc", bool(v)))
-        form.addRow("", self._live_agc)
+        rec.addRow(_t("backend"), self._backend)
 
         # Cloud fields
         self._provider = QComboBox()
@@ -978,26 +965,26 @@ class DictationSettingsWidget(QWidget):
         if saved_provider in ids:
             self._provider.setCurrentIndex(ids.index(saved_provider))
         self._provider.currentIndexChanged.connect(self._on_provider_changed)
-        form.addRow(_t("provider"), self._provider)
+        rec.addRow(_t("provider"), self._provider)
 
         self._base_url = QLineEdit(self._settings.get("base_url", ""))
-        self._base_url.setPlaceholderText("https://…/v1")
+        self._base_url.setPlaceholderText("https://.../v1")
         self._base_url.setMinimumWidth(280)
         self._base_url.editingFinished.connect(
             lambda: self._save("base_url", self._base_url.text().strip()))
-        form.addRow(_t("base_url"), self._base_url)
+        rec.addRow(_t("base_url"), self._base_url)
 
         self._api_key = QLineEdit()
         self._api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self._api_key.setMinimumWidth(280)
         self._api_key.setText(self._module.get_api_key(saved_provider))
         self._api_key.editingFinished.connect(self._on_api_key_changed)
-        form.addRow(_t("api_key"), self._api_key)
+        rec.addRow(_t("api_key"), self._api_key)
 
         self._key_hint = QLabel(_t("api_key.hint"))
         self._key_hint.setStyleSheet(_hint_style())
         self._key_hint.setWordWrap(True)
-        form.addRow("", self._key_hint)
+        rec.addRow("", self._key_hint)
 
         self._model = QComboBox()
         self._model.setEditable(True)
@@ -1007,7 +994,7 @@ class DictationSettingsWidget(QWidget):
             self._model.setEditText(saved_model)
         self._model.currentTextChanged.connect(
             lambda t: self._save("model", t.strip()))
-        form.addRow(_t("model"), self._model)
+        rec.addRow(_t("model"), self._model)
 
         # Local fields
         self._local_model = QComboBox()
@@ -1018,17 +1005,13 @@ class DictationSettingsWidget(QWidget):
             self._local_model.setCurrentIndex(LOCAL_MODELS.index(saved_local))
         self._local_model.currentIndexChanged.connect(
             lambda i: self._save("local_model", self._local_model.itemData(i)))
-        form.addRow(_t("local_model"), self._local_model)
+        rec.addRow(_t("local_model"), self._local_model)
 
         self._local_hint = QLabel(_t("local.hint"))
         self._local_hint.setStyleSheet(_hint_style())
         self._local_hint.setWordWrap(True)
-        form.addRow("", self._local_hint)
+        rec.addRow("", self._local_hint)
 
-        # Local backend not installed yet.  From source we offer a fully
-        # automatic install; in the packaged .exe pip is unavailable, so we
-        # only explain that local recognition needs the source version (cloud
-        # dictation works fine in the .exe).
         import sys as _sys
         self._frozen = bool(getattr(_sys, "frozen", False))
         self._install_box = QWidget()
@@ -1041,7 +1024,6 @@ class DictationSettingsWidget(QWidget):
         install_note.setStyleSheet(_warn_style())
         install_note.setWordWrap(True)
         install_layout.addWidget(install_note)
-        from PySide6.QtWidgets import QHBoxLayout
         install_btns = QHBoxLayout()
         self._install_btn = QPushButton(_t("local.install"))
         self._install_btn.clicked.connect(self._on_install_local)
@@ -1055,22 +1037,44 @@ class DictationSettingsWidget(QWidget):
         self._install_status = QLabel("")
         self._install_status.setWordWrap(True)
         install_layout.addWidget(self._install_status)
-        form.addRow("", self._install_box)
+        rec.addRow("", self._install_box)
 
-        # ── Common options ────────────────────────────────────────────
-        self._lang = QComboBox()
-        for code in LANGUAGES:
-            label = _t("lang.auto") if code == "auto" else code
-            self._lang.addItem(label, code)
-        saved_lang = self._settings.get("language", "auto")
-        if saved_lang in LANGUAGES:
-            self._lang.setCurrentIndex(LANGUAGES.index(saved_lang))
-        self._lang.currentIndexChanged.connect(
-            lambda i: self._save("language", self._lang.itemData(i)))
-        form.addRow(_t("language"), self._lang)
+        self._test_btn = QPushButton(_t("test"))
+        self._test_btn.clicked.connect(self._on_test)
+        rec.addRow("", self._test_btn)
 
-        # Unified dictionary (custom words + optional spoken forms) – edited in
-        # its own pop-out window.
+        # -- (3) Textausgabe -------------------------------------------
+        out = _group(_t("group.output"))
+
+        self._output_mode = QComboBox()
+        self._output_mode.addItem(_t("output.window"), "window")
+        self._output_mode.addItem(_t("output.direct"), "direct")
+        if self._settings.get("output_mode", "window") == "direct":
+            self._output_mode.setCurrentIndex(1)
+        self._output_mode.currentIndexChanged.connect(
+            lambda i: self._save("output_mode", self._output_mode.itemData(i)))
+        out.addRow(_t("output"), self._output_mode)
+
+        self._insert = QComboBox()
+        self._insert.addItem(_t("insert.clipboard"), "clipboard")
+        self._insert.addItem(_t("insert.type"), "type")
+        if self._settings.get("insert_method", "clipboard") == "type":
+            self._insert.setCurrentIndex(1)
+        self._insert.currentIndexChanged.connect(
+            lambda i: self._save("insert_method", self._insert.itemData(i)))
+        out.addRow(_t("insert"), self._insert)
+
+        self._keep_clipboard = QCheckBox(_t("keep_clipboard"))
+        self._keep_clipboard.setChecked(
+            bool(self._settings.get("keep_in_clipboard", False)))
+        self._keep_clipboard.toggled.connect(
+            lambda v: self._save("keep_in_clipboard", v))
+        out.addRow("", self._keep_clipboard)
+
+        # -- (4) Woerterbuch & KI --------------------------------------
+        ai = _group(_t("group.vocab_ai"))
+        self._form_ai = ai
+
         dict_row = QHBoxLayout()
         self._dict_summary = QLabel(self._dict_summary_text())
         self._dict_summary.setStyleSheet(_hint_style())
@@ -1082,25 +1086,29 @@ class DictationSettingsWidget(QWidget):
         dict_edit = QPushButton(_t("edit"))
         dict_edit.clicked.connect(self._open_dictionary)
         dict_row.addWidget(dict_edit)
-        form.addRow(_t("vocab"), dict_row)
+        ai.addRow(_t("vocab"), dict_row)
 
-        # (Learned corrections / „Fehler-Gedächtnis“ are no longer a separate
-        # row – they show up inside the Wörterbuch dialog as category
-        # „korrigiert“; the learning engine itself is unchanged.)
+        aiact_row = QHBoxLayout()
+        _aiact_hint = QLabel(_t("ai.actions.hint"))
+        _aiact_hint.setWordWrap(True)
+        _aiact_hint.setStyleSheet(_hint_style())
+        aiact_row.addWidget(_aiact_hint, 1)
+        aiact_btn = QPushButton(_t("edit"))
+        aiact_btn.clicked.connect(self._open_ai_actions)
+        aiact_row.addWidget(aiact_btn)
+        ai.addRow(_t("ai.actions"), aiact_row)
 
-        # Optional AI cleanup (off by default).
         self._ai_enable = QCheckBox(_t("ai.enable"))
         self._ai_enable.setChecked(bool(self._settings.get("ai_cleanup", False)))
         self._ai_enable.setToolTip(_t("ai.hint"))
         self._ai_enable.toggled.connect(lambda v: self._save("ai_cleanup", v))
-        # „KI läuft"/„KI-Modell" sind nur relevant, wenn die KI-Nachbearbeitung
-        # aktiv ist – sonst ausblenden, damit die Seite ruhig bleibt.
         self._ai_enable.toggled.connect(lambda _v: self._update_ai_rows())
-        form.addRow(_t("ai"), self._ai_enable)
+        ai.addRow(_t("ai"), self._ai_enable)
         _ai_hint = QLabel(_t("ai.hint"))
         _ai_hint.setWordWrap(True)
         _ai_hint.setStyleSheet(_hint_style())
-        form.addRow("", _ai_hint)
+        ai.addRow("", _ai_hint)
+
         self._ai_backend = QComboBox()
         self._ai_backend.addItem(_t("ai.local"), "local")
         self._ai_backend.addItem(_t("ai.cloud"), "cloud")
@@ -1108,87 +1116,44 @@ class DictationSettingsWidget(QWidget):
             self._ai_backend.setCurrentIndex(1)
         self._ai_backend.currentIndexChanged.connect(
             lambda i: self._save("ai_backend", self._ai_backend.itemData(i)))
-        form.addRow(_t("ai.backend"), self._ai_backend)
-        self._ai_backend_label = form.labelForField(self._ai_backend)
+        ai.addRow(_t("ai.backend"), self._ai_backend)
+        self._ai_backend_label = ai.labelForField(self._ai_backend)
+
         self._ai_model = QLineEdit(self._settings.get("ai_model", ""))
         self._ai_model.setPlaceholderText(_t("ai.model.hint"))
         self._ai_model.setToolTip(_t("ai.model.hint"))
         self._ai_model.editingFinished.connect(
             lambda: self._save("ai_model", self._ai_model.text().strip()))
-        form.addRow(_t("ai.model"), self._ai_model)
-        self._ai_model_label = form.labelForField(self._ai_model)
-        self._update_ai_rows()      # initial visibility from the checkbox
+        ai.addRow(_t("ai.model"), self._ai_model)
+        self._ai_model_label = ai.labelForField(self._ai_model)
 
-        # Opt-in training-data collection (voice adaptation later).
-        self._training_cb = QCheckBox(_t("training"))
-        self._training_cb.setChecked(
-            bool(self._settings.get("collect_training", False)))
-        self._training_cb.setToolTip(_t("training.hint"))
-        self._training_cb.toggled.connect(
-            lambda v: self._save("collect_training", v))
-        form.addRow("", self._training_cb)
-        _training_hint = QLabel(_t("training.hint"))
-        _training_hint.setWordWrap(True)
-        _training_hint.setStyleSheet(_hint_style())
-        form.addRow("", _training_hint)
-        enroll_row = QHBoxLayout()
-        _enroll_hint = QLabel(_t("enroll.hint"))
-        _enroll_hint.setWordWrap(True)
-        _enroll_hint.setStyleSheet(_hint_style())
-        enroll_row.addWidget(_enroll_hint, 1)
-        enroll_btn = QPushButton(_t("enroll"))
-        enroll_btn.clicked.connect(self._open_enrollment)
-        enroll_row.addWidget(enroll_btn)
-        form.addRow("", enroll_row)
+        # -- (5) Erweitert (collapsed by default) ----------------------
+        adv_section = _Collapsible(
+            _t("group.advanced"), _t("group.advanced.open"))
+        adv = QFormLayout(adv_section.content())
+        adv.setSpacing(8)
+        adv.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self._form_adv = adv
+        layout.addWidget(adv_section)
 
-        self._output_mode = QComboBox()
-        self._output_mode.addItem(_t("output.window"), "window")
-        self._output_mode.addItem(_t("output.direct"), "direct")
-        if self._settings.get("output_mode", "window") == "direct":
-            self._output_mode.setCurrentIndex(1)
-        self._output_mode.currentIndexChanged.connect(
-            lambda i: self._save("output_mode", self._output_mode.itemData(i)))
-        form.addRow(_t("output"), self._output_mode)
-
-        self._insert = QComboBox()
-        self._insert.addItem(_t("insert.clipboard"), "clipboard")
-        self._insert.addItem(_t("insert.type"), "type")
-        if self._settings.get("insert_method", "clipboard") == "type":
-            self._insert.setCurrentIndex(1)
-        self._insert.currentIndexChanged.connect(
-            lambda i: self._save("insert_method", self._insert.itemData(i)))
-        form.addRow(_t("insert"), self._insert)
-
-        self._keep_clipboard = QCheckBox(_t("keep_clipboard"))
-        self._keep_clipboard.setChecked(
-            bool(self._settings.get("keep_in_clipboard", False)))
-        self._keep_clipboard.toggled.connect(
-            lambda v: self._save("keep_in_clipboard", v))
-        form.addRow("", self._keep_clipboard)
-
-        self._max_seconds = QSpinBox()
-        self._max_seconds.setRange(0, 3600)     # 0 = endless (no auto-stop)
-        self._max_seconds.setSuffix(" s")
-        self._max_seconds.setSpecialValueText(_t("max_seconds.off"))
-        self._max_seconds.setValue(int(self._settings.get("max_seconds", 0)))
-        self._max_seconds.valueChanged.connect(
-            lambda v: self._save("max_seconds", v))
-        form.addRow(_t("max_seconds"), self._max_seconds)
-
-        # Preload the model at start – only relevant when the app autostarts
-        # with Windows (that switch lives under Settings → General).
-        self._preload_cb = QCheckBox(_t("preload"))
-        self._preload_cb.setChecked(bool(self._settings.get("preload_model", False)))
-        self._preload_cb.setToolTip(_t("preload.hint"))
-        self._preload_cb.toggled.connect(lambda v: self._save("preload_model", v))
-        form.addRow("", self._preload_cb)
-        self._update_preload_row()
+        self._command_hotkey = HotkeyEdit(
+            self._settings.get("command_hotkey", ""),
+            action_id="dictation.command")
+        self._command_hotkey.key_changed.connect(
+            lambda k: self._save("command_hotkey", k))
+        self._command_hotkey.setToolTip(_t("hotkey.command.hint"))
+        adv.addRow(_t("hotkey.command"), self._command_hotkey)
+        _cmd_hint = QLabel(_t("hotkey.command.hint"))
+        _cmd_hint.setWordWrap(True)
+        _cmd_hint.setStyleSheet(_hint_style())
+        adv.addRow("", _cmd_hint)
 
         self._device = QComboBox()
         self._device.addItem(_t("device.default"), "default")
         try:
-            for idx, name in list_input_devices():
-                self._device.addItem(name, idx)
+            for dev_idx, name in list_input_devices():
+                self._device.addItem(name, dev_idx)
         except Exception:
             pass
         saved_dev = self._settings.get("input_device", "default")
@@ -1199,14 +1164,37 @@ class DictationSettingsWidget(QWidget):
                 break
         self._device.currentIndexChanged.connect(
             lambda i: self._save("input_device", self._device.itemData(i)))
-        form.addRow(_t("device"), self._device)
+        adv.addRow(_t("device"), self._device)
 
-        layout.addLayout(form)
+        self._max_seconds = QSpinBox()
+        self._max_seconds.setRange(0, 3600)     # 0 = endless (no auto-stop)
+        self._max_seconds.setSuffix(" s")
+        self._max_seconds.setSpecialValueText(_t("max_seconds.off"))
+        self._max_seconds.setValue(int(self._settings.get("max_seconds", 0)))
+        self._max_seconds.valueChanged.connect(
+            lambda v: self._save("max_seconds", v))
+        adv.addRow(_t("max_seconds"), self._max_seconds)
 
-        # ── Test button ───────────────────────────────────────────────
-        self._test_btn = QPushButton(_t("test"))
-        self._test_btn.clicked.connect(self._on_test)
-        layout.addWidget(self._test_btn)
+        self._preload_cb = QCheckBox(_t("preload"))
+        self._preload_cb.setChecked(
+            bool(self._settings.get("preload_model", False)))
+        self._preload_cb.setToolTip(_t("preload.hint"))
+        self._preload_cb.toggled.connect(
+            lambda v: self._save("preload_model", v))
+        adv.addRow("", self._preload_cb)
+        self._update_preload_row()
+
+        self._raw_cb = QCheckBox(_t("raw"))
+        self._raw_cb.setChecked(
+            bool(self._settings.get("raw_recognition", False)))
+        self._raw_cb.setToolTip(_t("raw.hint"))
+        self._raw_cb.toggled.connect(
+            lambda v: self._save("raw_recognition", v))
+        adv.addRow("", self._raw_cb)
+        _raw_hint = QLabel(_t("raw.hint"))
+        _raw_hint.setWordWrap(True)
+        _raw_hint.setStyleSheet(_hint_style())
+        adv.addRow("", _raw_hint)
 
         layout.addStretch()
         scroll.setWidget(content)
@@ -1237,12 +1225,20 @@ class DictationSettingsWidget(QWidget):
             self._preload_cb.setChecked(False)   # also clears the setting
 
     def _update_ai_rows(self) -> None:
-        """Show „KI läuft"/„KI-Modell" only when AI cleanup is enabled."""
-        visible = self._ai_enable.isChecked()
+        """Show „KI läuft"/„KI-Modell" when AI cleanup is on OR the user has
+        configured KI-Aktionen (both need a backend + model)."""
+        visible = self._ai_enable.isChecked() or bool(self._module.ai_actions())
         for w in (self._ai_backend, getattr(self, "_ai_backend_label", None),
                   self._ai_model, getattr(self, "_ai_model_label", None)):
             if w is not None:
                 w.setVisible(visible)
+
+    def _open_ai_actions(self) -> None:
+        from settings_dialogs import AiActionsDialog
+        dlg = AiActionsDialog(self._module.ai_actions_raw(),
+                              on_save=self._module.save_ai_actions, parent=self)
+        dlg.exec()
+        self._update_ai_rows()
 
     def _dict_summary_text(self) -> str:
         n = self._module.dictionary_count()
@@ -1313,30 +1309,17 @@ class DictationSettingsWidget(QWidget):
         cloud = backend == "cloud"
         for widget in (self._provider, self._api_key, self._model,
                        self._key_hint):
-            self._form.setRowVisible(widget, cloud)
-        self._form.setRowVisible(self._local_model, not cloud)
-        self._local_hint.setVisible(not cloud)
-        self._form.setRowVisible(
+            self._form_rec.setRowVisible(widget, cloud)
+        self._form_rec.setRowVisible(self._local_model, not cloud)
+        self._form_rec.setRowVisible(self._local_hint, not cloud)
+        self._form_rec.setRowVisible(
             self._install_box, not cloud and not local_backend_available())
-        live = backend == "live"
-        self._form.setRowVisible(self._live_use_vosk, live)
-        self._live_vosk_hint.setVisible(live)
-        self._form.setRowVisible(self._live_pause, live)
-        self._form.setRowVisible(self._live_pause_auto, live)
-        self._live_pause_hint.setVisible(live)
-        self._form.setRowVisible(self._live_gate, live)
-        self._live_gate_hint.setVisible(live)
-        self._form.setRowVisible(self._live_agc, live)
         self._update_cloud_rows()
-
-    def _on_live_auto_toggled(self, on: bool) -> None:
-        self._save("live_pause_auto", bool(on))
-        self._live_pause.setDisabled(on)
 
     def _update_cloud_rows(self) -> None:
         cloud = self._backend.currentData() == "cloud"
         custom = self._provider.currentData() == "custom"
-        self._form.setRowVisible(self._base_url, cloud and custom)
+        self._form_rec.setRowVisible(self._base_url, cloud and custom)
 
     # ------------------------------------------------------------------
     # Local backend installation (one click, no command line)
@@ -1372,7 +1355,7 @@ class DictationSettingsWidget(QWidget):
         if ok and local_backend_available():
             self._install_status.setText("")
             self._backend.setItemText(1, _t("backend.local"))
-            self._form.setRowVisible(self._install_box, False)
+            self._form_rec.setRowVisible(self._install_box, False)
             QMessageBox.information(self, _t("local.install"),
                                     _t("local.install.done"))
         else:
@@ -1529,12 +1512,13 @@ class DictationModule(BaseModule):
             shared_keyboard_hook.subscribe(self._on_key_event)
             self._kb_subscribed = True
         # Warm the model in the background so the first dictation is fast (no
-        # wait while a ~GB model loads).  Live always warms the Vosk model it
-        # needs; the batch local backend honours the opt-in preload checkbox.
+        # wait while the model loads).  The local backend honours the opt-in
+        # preload checkbox.  (Live is retired; its "live" value is migrated to
+        # "local" on load, so it never reaches here.)
         backend = self._settings.get("backend", "cloud")
-        if backend == "live":
-            threading.Thread(target=self._preload_live, daemon=True).start()
-        elif self._settings.get("preload_model") and backend == "local":
+        if backend == "live":                       # safety net if not migrated
+            backend = "local"
+        if self._settings.get("preload_model") and backend == "local":
             threading.Thread(target=self._preload_model, daemon=True).start()
         bus.publish("module.started", module_id=self.MODULE_ID)
 
@@ -1556,6 +1540,8 @@ class DictationModule(BaseModule):
 
     def load_settings(self, settings: dict[str, Any]) -> None:
         self._settings = settings
+        if self._settings.get("backend") == "live":   # live retired → local
+            self._settings["backend"] = "local"
         self._error_memory = None       # rebuild from the new profile's data
         self.on_settings_changed()
 
@@ -1599,7 +1585,13 @@ class DictationModule(BaseModule):
                     on_reselect_target=self.reselect_target,
                     on_confirm_words=self.confirm_words,
                     on_add_vocab=self.add_spoken_form,
+                    on_ai_action=self.run_ai_action,
+                    on_edit_ai_action=self.edit_ai_action,
                     on_geometry_changed=self._save_geometry,
+                    on_history_toggle=self._save_history_visible,
+                    ai_actions=self.ai_actions(),
+                    history_visible=bool(
+                        self._settings.get("history_visible", False)),
                     geometry=self._settings.get("win_geo"),
                     history=list(self._settings.get("history", [])),
                     t=_t)
@@ -1712,7 +1704,7 @@ class DictationModule(BaseModule):
         except Exception:
             self._reselect_start_fg = 0
         if self._window is not None:
-            self._window.set_target("… Ziel-App anklicken (Escape bricht ab)")
+            self._window.set_reselecting(True)      # highlight the button
         from PySide6.QtCore import QTimer
         if self._reselect_timer is None:
             self._reselect_timer = QTimer()
@@ -1726,6 +1718,7 @@ class DictationModule(BaseModule):
             if self._reselect_timer is not None:
                 self._reselect_timer.stop()
             if self._window is not None:
+                self._window.set_reselecting(False)
                 self._window.set_target(self._target_name())
             return
         try:
@@ -1740,6 +1733,7 @@ class DictationModule(BaseModule):
             if self._reselect_timer is not None:
                 self._reselect_timer.stop()
             if self._window is not None:
+                self._window.set_reselecting(False)
                 self._window.set_target(self._target_name())
                 # The user picked the target app (it's now in front) – but their
                 # next step is dictating, so bring the dictation window back to
@@ -1748,6 +1742,10 @@ class DictationModule(BaseModule):
 
     def _save_geometry(self, geom: list) -> None:
         self._settings["win_geo"] = list(geom)
+        self.on_settings_changed()
+
+    def _save_history_visible(self, visible: bool) -> None:
+        self._settings["history_visible"] = bool(visible)
         self.on_settings_changed()
 
     def _insert_into_target(self, text: str) -> bool:
@@ -1956,7 +1954,8 @@ class DictationModule(BaseModule):
         text = (text or "").strip()
         if text and self._settings.get("collect_training"):
             self._save_training_sample(wav, text)   # opt-in data for later
-        if text:
+        if text and not self._settings.get("raw_recognition"):
+            # „reine Erkennung“ off → apply the normal refinements.
             # User dictionary (spoken → written) is deterministic user intent.
             forms = self.spoken_forms()
             if forms:
@@ -1972,6 +1971,12 @@ class DictationModule(BaseModule):
                 from commands_de import parse as _parse
                 if _parse(text) is None:
                     text = self._ai_cleanup(text)
+            # Restore the „?" on polite questions Whisper ended with a period
+            # („Können Sie …") – only on real dictation, not commands.
+            if self._active_mode != "command":
+                from postprocess import fix_casing, fix_question_marks
+                text = fix_casing(text)          # undo stray capitalisation
+                text = fix_question_marks(text)
         self._set_state("idle")
         if text:
             if self._window_mode() and self._window is not None:
@@ -2151,7 +2156,8 @@ class DictationModule(BaseModule):
             text = apply_spoken_forms(text, forms)
         mem = self._memory()
         text = mem.apply_all(text) if aggressive else mem.apply(text)
-        return apply_inline_punctuation(text)
+        from postprocess import fix_question_marks
+        return fix_question_marks(apply_inline_punctuation(text))
 
     def _apply_live_partial(self, text: str) -> str:
         """Light pipeline for the grey provisional words: apply the user's own
@@ -2365,8 +2371,7 @@ class DictationModule(BaseModule):
         except Exception:
             raw, low = "", []
         self._last_low_words = low
-        from postprocess import strip_hallucinations, strip_repetitions
-        raw = strip_repetitions(strip_hallucinations((raw or "").strip()))
+        raw = self._postprocess_asr(raw)
         polished = self._apply_text_pipeline(raw)
         if not polished:
             if final:
@@ -2478,6 +2483,16 @@ class DictationModule(BaseModule):
             return self._transcribe_local(wav_bytes)
         return self._transcribe_cloud(wav_bytes)
 
+    def _postprocess_asr(self, text: str) -> str:
+        """Strip typical Whisper hallucinations / repetition loops – but NOT in
+        „reine Erkennung“ mode, where we want the recogniser's plain output for
+        diagnosing punctuation/casing."""
+        text = (text or "").strip()
+        if self._settings.get("raw_recognition"):
+            return text
+        from postprocess import strip_hallucinations, strip_repetitions
+        return strip_repetitions(strip_hallucinations(text))
+
     def _language(self) -> str | None:
         lang = self._settings.get("language", "auto")
         return None if lang in ("", "auto") else lang
@@ -2531,7 +2546,7 @@ class DictationModule(BaseModule):
         self.on_settings_changed()
 
     # origin -> short human label shown in the editor
-    _SRC_LABELS = {"user": "ich", "import": "Import", "learned": "gelernt"}
+    _SRC_LABELS = {"user": "von mir", "import": "Import", "learned": "gelernt"}
 
     def dictionary_rows(self, category: str = "all") -> list[tuple]:
         """Editor rows: ``(kind, key, trigger, result, source-label)``.
@@ -2806,8 +2821,7 @@ class DictationModule(BaseModule):
 
         if resp.status_code != 200:
             raise RuntimeError(f"API {resp.status_code}: {resp.text[:120]}")
-        from postprocess import strip_hallucinations
-        return strip_hallucinations(resp.json().get("text", ""))
+        return self._postprocess_asr(resp.json().get("text", ""))
 
     # -- Local (faster-whisper) ------------------------------------------
 
@@ -2923,8 +2937,7 @@ class DictationModule(BaseModule):
                         if token:
                             low.append(token)
             self._last_low_words = low
-        from postprocess import strip_hallucinations, strip_repetitions
-        return strip_repetitions(strip_hallucinations(" ".join(parts)))
+        return self._postprocess_asr(" ".join(parts))
 
     # -- optional AI cleanup (local Ollama / cloud chat) -----------------
 
@@ -2941,7 +2954,8 @@ class DictationModule(BaseModule):
         from postprocess import guard_cleanup
         return guard_cleanup(text, cleaned)
 
-    def _ai_local_chat(self, text: str) -> str:
+    def _ai_local_chat(self, text: str, system: str | None = None,
+                       temperature: float = 0) -> str:
         import requests
 
         from postprocess import build_cleanup_prompt
@@ -2950,17 +2964,24 @@ class DictationModule(BaseModule):
             "http://localhost:11434/api/chat"
         payload = {
             "model": model, "stream": False,
-            "options": {"temperature": 0},
+            "think": False,          # skip „thinking“ models' slow reasoning
+            "options": {"temperature": temperature},
             "messages": [
-                {"role": "system", "content": build_cleanup_prompt()},
+                {"role": "system", "content": system or build_cleanup_prompt()},
                 {"role": "user", "content": text},
             ],
         }
-        resp = requests.post(url, json=payload, timeout=60)
-        resp.raise_for_status()
+        resp = requests.post(url, json=payload, timeout=180)
+        if not resp.ok:                     # surface Ollama's own error text
+            try:
+                err = resp.json().get("error")
+            except Exception:
+                err = None
+            raise RuntimeError(err or f"{resp.status_code} {resp.reason}")
         return resp.json().get("message", {}).get("content", "")
 
-    def _ai_cloud_chat(self, text: str) -> str:
+    def _ai_cloud_chat(self, text: str, system: str | None = None,
+                       temperature: float = 0) -> str:
         import requests
 
         from postprocess import build_cleanup_prompt
@@ -2969,17 +2990,130 @@ class DictationModule(BaseModule):
             raise RuntimeError("cloud AI not configured")
         model = self._settings.get("ai_model") or "gpt-4o-mini"
         payload = {
-            "model": model, "temperature": 0,
+            "model": model, "temperature": temperature,
             "messages": [
-                {"role": "system", "content": build_cleanup_prompt()},
+                {"role": "system", "content": system or build_cleanup_prompt()},
                 {"role": "user", "content": text},
             ],
         }
         resp = requests.post(
             f"{base_url}/chat/completions", json=payload,
-            headers={"Authorization": f"Bearer {api_key}"}, timeout=60)
-        resp.raise_for_status()
+            headers={"Authorization": f"Bearer {api_key}"}, timeout=120)
+        if not resp.ok:                     # surface the provider's error text
+            try:
+                err = resp.json().get("error")
+                msg = err.get("message") if isinstance(err, dict) else err
+            except Exception:
+                msg = None
+            raise RuntimeError(msg or f"{resp.status_code} {resp.reason}")
         return resp.json()["choices"][0]["message"]["content"]
+
+    # ------------------------------------------------------------------
+    # KI-Aktionen: user-defined prompt buttons in the dictation window
+    # ------------------------------------------------------------------
+
+    _DEFAULT_AI_ACTIONS = [
+        {"name": "E-Mail",
+         "prompt": "Formuliere den folgenden diktierten Text als höfliche, gut "
+                   "strukturierte deutsche E-Mail (passende Anrede und "
+                   "Grußformel, sinnvolle Absätze). Gib nur die E-Mail zurück, "
+                   "ohne Erklärungen."},
+        {"name": "Stichpunkte",
+         "prompt": "Fasse den folgenden Text als klare, kurze Stichpunkte "
+                   "zusammen. Gib nur die Liste zurück."},
+        {"name": "Sauber formulieren",
+         "prompt": "Formuliere den folgenden Text in klarem, korrektem Deutsch "
+                   "aus (Rechtschreibung, Grammatik, Zeichensetzung, flüssige "
+                   "Sätze), ohne die Bedeutung zu verändern. Gib nur den Text "
+                   "zurück."},
+    ]
+
+    def ai_actions(self) -> list[tuple[str, str]]:
+        """The configured (name, prompt) buttons; seeded with examples once."""
+        raw = self._settings.get("ai_actions")
+        if raw is None:
+            raw = [dict(a) for a in self._DEFAULT_AI_ACTIONS]
+            self._settings["ai_actions"] = raw
+        out = []
+        for a in raw:
+            if isinstance(a, dict) and str(a.get("name", "")).strip() \
+                    and str(a.get("prompt", "")).strip():
+                out.append((str(a["name"]).strip(), str(a["prompt"]).strip()))
+        return out
+
+    def ai_actions_raw(self) -> list[dict]:
+        """The configured actions as editable dicts (for the settings editor)."""
+        self.ai_actions()      # ensure the defaults are seeded once
+        return [dict(a) for a in self._settings.get("ai_actions", [])]
+
+    def save_ai_actions(self, actions: list[dict]) -> None:
+        self._settings["ai_actions"] = [
+            {"name": str(a.get("name", "")).strip(),
+             "prompt": str(a.get("prompt", "")).strip()}
+            for a in actions
+            if str(a.get("name", "")).strip() and str(a.get("prompt", "")).strip()]
+        self.on_settings_changed()
+        if self._window is not None:
+            self._window.set_ai_actions(self.ai_actions())
+
+    def edit_ai_action(self, index: int) -> None:
+        """Open the KI-Aktionen editor pre-selected on one action – wired to the
+        right-click menu on the window's buttons for quick editing."""
+        from settings_dialogs import AiActionsDialog
+        dlg = AiActionsDialog(self.ai_actions_raw(),
+                              on_save=self.save_ai_actions,
+                              select_index=index, parent=self._window)
+        dlg.exec()
+
+    def run_ai_action(self, prompt: str) -> None:
+        """Apply a prompt to the dictation buffer via the configured LLM and put
+        the result back into the window (undoable).  Runs off the GUI thread."""
+        if self._window is None:
+            return
+        text = self._window.text().strip()
+        if not text:
+            self._window.ai_message("(kein Text im Diktierfenster)")
+            return
+        backend = self._settings.get("ai_backend", "local")
+        self._window.ai_busy(True)
+
+        def work() -> None:
+            try:
+                if backend == "cloud":
+                    result = self._ai_cloud_chat(text, system=prompt,
+                                                 temperature=0.3)
+                else:
+                    result = self._ai_local_chat(text, system=prompt,
+                                                 temperature=0.3)
+            except Exception as exc:
+                _log.exception("KI-Aktion fehlgeschlagen")
+                if self._window is not None:
+                    self._window.ai_busy(False)
+                    self._window.ai_message(
+                        "KI nicht erreichbar/konfiguriert: " + str(exc)[:70])
+                return
+            import re
+            # drop any <think>…</think> reasoning that „thinking“ models emit
+            result = re.sub(r"(?is)<think>.*?</think>", "", result or "")
+            result = result.strip().strip("\"'„“”").strip()
+            if result:
+                # finish the KI result like a dictation: restore „?" on polite
+                # questions the model missed, and apply the user's dictionary.
+                from postprocess import fix_question_marks
+                result = fix_question_marks(result)
+                forms = self.spoken_forms()
+                if forms:
+                    from vocabulary import apply_spoken_forms
+                    result = apply_spoken_forms(result, forms)
+            if self._window is None:
+                return
+            if result:
+                self._window.ai_result(result)
+            else:
+                self._window.ai_busy(False)
+                self._window.ai_message("KI lieferte kein Ergebnis.")
+
+        threading.Thread(target=work, daemon=True).start()
 
     # ------------------------------------------------------------------
     # Text insertion

@@ -132,3 +132,98 @@ def guard_cleanup(original: str, cleaned: str) -> str:
     if o and (len(c) < len(o) * 0.5 or len(c) > len(o) * 1.8):
         return original       # too much changed → distrust it
     return c
+
+
+# German yes/no questions put a finite verb first (V1 word order): „Können Sie
+# …", „Ist das …", „Hast du …".  Whisper often ends such polite questions with a
+# period; this restores the question mark.  Kept to modal + sein/haben/werden
+# forms so it is high-precision (declaratives are V2, so a leading modal is a
+# strong question signal).
+_Q_OPENERS = frozenset((
+    "kann kannst können könnt könnte könntest könnten könntet "
+    "würde würdest würden würdet "
+    "darf darfst dürfen dürft dürfte dürftest dürften dürftet "
+    "hab habe hast hat habt haben hätte hättest hätten hättet "
+    "bin bist ist sind seid wäre wärst wären wärt war warst waren wart "
+    "soll sollst sollen sollt sollte solltest sollten solltet "
+    "will willst wollen wollt wollte wolltest wollten wolltet "
+    "muss musst müssen müsst müsste müsstest müssten müsstet "
+    "mag magst mögen mögt möchte möchtest möchten möchtet "
+    "wird wirst werden werdet weiß weißt wisst wissen").split())
+
+
+def fix_question_marks(text: str) -> str:
+    """Give a period-ended sentence a question mark when it clearly opens a
+    yes/no question (a finite modal/auxiliary verb in first position).
+    Conservative: only these openers, only a trailing period, never touches
+    „!" or an existing „?"."""
+    if not text or not text.strip():
+        return text
+    parts = re.split(r"(?<=[.!?…])\s+", text.strip())
+    out = []
+    for part in parts:
+        s = part.strip()
+        if not s:
+            continue
+        first = re.split(r"[\s,]", s, 1)[0].lower().strip(".,!?…")
+        if s.endswith(".") and not s.endswith("..") and first in _Q_OPENERS:
+            s = s[:-1] + "?"
+        out.append(s)
+    return " ".join(out)
+
+
+# Words German only ever capitalises at the very start of a sentence – never as
+# a noun, and never the formal „Sie"/„Ihr" (those are deliberately kept out).
+# Used to undo Whisper's occasional mid-sentence over-capitalisation ("Ich gehe
+# Nach Hause") without ever touching a real (always-capitalised) German noun.
+_LOWER_WORDS = frozenset((
+    # articles / determiners
+    "der die das den dem des ein eine einen einem einer eines "
+    "dieser diese dieses jener jene jenes jeder jede jedes "
+    "kein keine keinen keinem keiner welcher welche welches "
+    "solcher solche solches mancher manche manches "
+    # safe personal pronouns (no sie/Sie, ihr/Ihr, ihnen/Ihnen – ambiguous)
+    "ich du er es wir mich dich mir dir ihn ihm uns euch man "
+    # prepositions
+    "in an auf aus bei mit nach seit von zu zum zur über unter vor "
+    "hinter neben zwischen durch für gegen ohne um bis ab am im ins "
+    "vom beim gegenüber "
+    # conjunctions
+    "und oder aber denn sondern weil dass wenn als ob damit obwohl "
+    "während bevor nachdem sobald sowie sowohl also dennoch trotzdem "
+    # adverbs / particles that are never nouns
+    "dann jetzt hier dort schon noch auch nur sehr immer wieder nicht "
+    "eigentlich vielleicht wirklich gerne ziemlich sofort bald oft "
+    "manchmal nie niemals überhaupt eben"
+).split())
+
+# A single Capitalised word, optional leading/trailing quotes+punctuation.
+_CAP_WORD = re.compile(
+    r"([\"'„»«(\[]*)([A-ZÄÖÜ])([a-zäöüß'’\-]*)([.,;:!?…)\]\"'“”»]*)$")
+
+
+def fix_casing(text: str) -> str:
+    """Undo Whisper's occasional mid-sentence over-capitalisation.
+
+    A word is lower-cased only when (a) it is *not* the first word of its
+    sentence and (b) it is a pure function word German never capitalises except
+    at a sentence start (see ``_LOWER_WORDS``).  German nouns – always
+    capitalised – are therefore never touched, acronyms (all-caps) are left
+    alone, and the formal „Sie"/„Ihr" is preserved (kept out of the list)."""
+    if not text or not text.strip():
+        return text
+    parts = re.split(r"(?<=[.!?…])\s+", text.strip())
+    out = []
+    for part in parts:
+        tokens = part.split(" ")
+        for i, tok in enumerate(tokens):
+            if i == 0 or not tok:
+                continue                       # keep each sentence's first word
+            m = _CAP_WORD.match(tok)
+            if not m:
+                continue                       # not a simple Capitalised word
+            lead, head, rest, trail = m.groups()
+            if (head + rest).lower() in _LOWER_WORDS:
+                tokens[i] = lead + head.lower() + rest + trail
+        out.append(" ".join(tokens))
+    return " ".join(out)

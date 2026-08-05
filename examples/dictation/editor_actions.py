@@ -173,6 +173,16 @@ class Editor:
             return ActionResult("info", message=f"unbekannt: {cmd.kind}")
         return handler(cmd.data)
 
+    def cancel_pending(self) -> bool:
+        """Forget a deferred multi-match selection („nimm N").  Returns True if
+        there was one to cancel."""
+        had = self._pending is not None
+        self._pending = None
+        return had
+
+    def has_pending(self) -> bool:
+        return self._pending is not None
+
     # -- pick (resolve an ambiguous target) ----------------------------
 
     def _do_pick(self, data: dict) -> ActionResult:

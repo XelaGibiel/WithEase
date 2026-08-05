@@ -490,6 +490,163 @@ class ListEditorDialog(QDialog):
             self._reload()
 
 
+class AiActionsDialog(QDialog):
+    """Manage the user's „KI-Aktionen“: a list of (name, prompt) buttons that
+    appear in the dictation window.  Left: the list; right: name + prompt."""
+
+    def __init__(self, actions: list, on_save: Callable[[list], None],
+                 select_index: int | None = None,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("KI-Aktionen")
+        self.resize(640, 460)
+        self._actions = [dict(a) for a in actions]     # working copy
+        self._on_save = on_save
+        self._cur = -1
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            "Belegen Sie Buttons für das Diktierfenster. Jeder Button schickt "
+            "seinen Prompt zusammen mit dem Fensterinhalt an die eingestellte "
+            "KI und ersetzt den Text durch das Ergebnis. Beispiel-Prompt: "
+            "„Formuliere den folgenden Text als höfliche E-Mail.“")
+        intro.setWordWrap(True)
+        intro.setStyleSheet(_READABLE)
+        layout.addWidget(intro)
+
+        body = QHBoxLayout()
+        left = QVBoxLayout()
+        self._list = QListWidget()
+        self._list.currentRowChanged.connect(self._select)
+        left.addWidget(self._list, 1)
+        lbtn = QHBoxLayout()
+        addb = QPushButton("Neu")
+        addb.clicked.connect(self._add)
+        lbtn.addWidget(addb)
+        self._delb = QPushButton("Entfernen")
+        self._delb.clicked.connect(self._remove)
+        lbtn.addWidget(self._delb)
+        left.addLayout(lbtn)
+        mbtn = QHBoxLayout()          # reorder → the window buttons follow suit
+        self._upb = QPushButton("▲ Hoch")
+        self._upb.setToolTip("Ausgewählte Aktion nach oben")
+        self._upb.clicked.connect(lambda: self._move(-1))
+        mbtn.addWidget(self._upb)
+        self._downb = QPushButton("▼ Runter")
+        self._downb.setToolTip("Ausgewählte Aktion nach unten")
+        self._downb.clicked.connect(lambda: self._move(1))
+        mbtn.addWidget(self._downb)
+        left.addLayout(mbtn)
+        lw = QWidget()
+        lw.setLayout(left)
+        lw.setFixedWidth(200)
+        body.addWidget(lw)
+
+        right = QVBoxLayout()
+        right.addWidget(QLabel("Button-Name:"))
+        self._name = QLineEdit()
+        self._name.setMaxLength(24)
+        self._name.textChanged.connect(self._name_changed)
+        right.addWidget(self._name)
+        right.addWidget(QLabel("Prompt (Anweisung an die KI):"))
+        self._prompt = QPlainTextEdit()
+        self._prompt.setPlaceholderText(
+            "z. B. Formuliere den folgenden Text als höfliche, gut "
+            "strukturierte E-Mail. Gib nur die E-Mail zurück.")
+        self._prompt.textChanged.connect(self._prompt_changed)
+        right.addWidget(self._prompt, 1)
+        rw = QWidget()
+        rw.setLayout(right)
+        body.addWidget(rw, 1)
+        layout.addLayout(body, 1)
+
+        footer = QHBoxLayout()
+        footer.addStretch()
+        close = QPushButton("Schließen")
+        close.clicked.connect(self.accept)
+        footer.addWidget(close)
+        layout.addLayout(footer)
+
+        self._reload_list()
+        if self._actions:
+            row = (select_index if select_index is not None
+                   and 0 <= select_index < len(self._actions) else 0)
+            self._list.setCurrentRow(row)
+        else:
+            self._set_editor(False)
+
+    def _reload_list(self) -> None:
+        self._list.blockSignals(True)
+        self._list.clear()
+        for a in self._actions:
+            self._list.addItem(a.get("name") or "(ohne Namen)")
+        self._list.blockSignals(False)
+
+    def _set_editor(self, on: bool) -> None:
+        self._name.setEnabled(on)
+        self._prompt.setEnabled(on)
+        self._delb.setEnabled(on)
+        self._upb.setEnabled(on)
+        self._downb.setEnabled(on)
+
+    def _move(self, delta: int) -> None:
+        cur = self._cur
+        new = cur + delta
+        if 0 <= cur < len(self._actions) and 0 <= new < len(self._actions):
+            self._actions[cur], self._actions[new] = \
+                self._actions[new], self._actions[cur]
+            self._reload_list()
+            self._list.setCurrentRow(new)     # keep the moved item selected
+
+    def _select(self, row: int) -> None:
+        self._cur = row
+        if 0 <= row < len(self._actions):
+            a = self._actions[row]
+            self._name.blockSignals(True)
+            self._prompt.blockSignals(True)
+            self._name.setText(a.get("name", ""))
+            self._prompt.setPlainText(a.get("prompt", ""))
+            self._name.blockSignals(False)
+            self._prompt.blockSignals(False)
+            self._set_editor(True)
+        else:
+            self._set_editor(False)
+
+    def _name_changed(self, text: str) -> None:
+        if 0 <= self._cur < len(self._actions):
+            self._actions[self._cur]["name"] = text
+            item = self._list.item(self._cur)
+            if item is not None:
+                item.setText(text or "(ohne Namen)")
+
+    def _prompt_changed(self) -> None:
+        if 0 <= self._cur < len(self._actions):
+            self._actions[self._cur]["prompt"] = self._prompt.toPlainText()
+
+    def _add(self) -> None:
+        self._actions.append({"name": "Neue Aktion", "prompt": ""})
+        self._reload_list()
+        self._list.setCurrentRow(len(self._actions) - 1)
+        self._name.setFocus()
+        self._name.selectAll()
+
+    def _remove(self) -> None:
+        if 0 <= self._cur < len(self._actions):
+            del self._actions[self._cur]
+            self._reload_list()
+            if self._actions:
+                self._list.setCurrentRow(min(self._cur, len(self._actions) - 1))
+            else:
+                self._cur = -1
+                self._name.clear()
+                self._prompt.clear()
+                self._set_editor(False)
+
+    def done(self, r: int) -> None:      # save on any close (Schließen or X)
+        self._on_save(self._actions)
+        super().done(r)
+
+
 class DictionaryDialog(QDialog):
     """Unified custom-dictionary editor (Dragon-style): each row shows the
     written form and its optional spoken form side by side plus an origin tag;
@@ -582,6 +739,14 @@ class DictionaryDialog(QDialog):
             QAbstractItemView.EditTrigger.DoubleClicked
             | QAbstractItemView.EditTrigger.EditKeyPressed
             | QAbstractItemView.EditTrigger.AnyKeyPressed)
+        # The system accent (e.g. orange) makes a selected row unreadable; use a
+        # neutral translucent-grey selection that stays legible in light + dark
+        # and keeps the normal text colour.
+        self._table.setStyleSheet(
+            "QTableWidget::item:selected {"
+            " background: rgba(128,128,128,90); color: palette(text); }"
+            "QTableWidget::item:selected:!active {"
+            " background: rgba(128,128,128,70); color: palette(text); }")
         hh = self._table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -638,9 +803,8 @@ class DictionaryDialog(QDialog):
                 spoken.setToolTip("Automatisch erkannt – nicht editierbar")
             self._table.setItem(r, 1, spoken)
             origin = QTableWidgetItem(src)
-            origin.setFlags(noedit)
-            origin.setForeground(Qt.GlobalColor.gray)
-            self._table.setItem(r, 2, origin)
+            origin.setFlags(noedit)      # read-only; no grey foreground so it
+            self._table.setItem(r, 2, origin)   # stays readable when selected
             btn = QPushButton("✕")
             btn.setFixedWidth(28)
             btn.setToolTip("Entfernen")

@@ -25,7 +25,7 @@ import re
 import sys
 from typing import Callable
 
-from PySide6.QtCore import QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QPainter,
@@ -34,6 +34,7 @@ from PySide6.QtGui import (
     QTextCursor,
 )
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QHBoxLayout,
     QInputDialog,
@@ -54,6 +55,75 @@ from PySide6.QtWidgets import (
 import commands_de as cde
 import correction as co
 import editor_actions as ea
+
+
+def _diff_html(original: str, result: str) -> str:
+    """HTML of ``result`` with the words that differ from ``original`` marked
+    green, so a KI-Aktion's changes are easy to see and compare."""
+    import difflib
+    import html as _html
+
+    def toks(t: str) -> list[str]:
+        return re.findall(r"\S+|\n", t)
+
+    sm = difflib.SequenceMatcher(None, toks(original), toks(result))
+    b = toks(result)
+    parts: list[str] = []
+    for tag, _i1, _i2, j1, j2 in sm.get_opcodes():
+        for tok in b[j1:j2]:
+            if tok == "\n":
+                parts.append("<br>")
+                continue
+            esc = _html.escape(tok)
+            if tag != "equal":
+                esc = ('<span style="background:#2e7d32; color:#fff; '
+                       'border-radius:3px; padding:0 2px;">' + esc + "</span>")
+            parts.append(esc + " ")
+    return "".join(parts)
+
+
+class _AiPreview(QDialog):
+    """Preview a KI-Aktion result with its changes highlighted, so the user can
+    compare it against the original and decide whether to keep it."""
+
+    def __init__(self, original: str, result: str,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("KI-Vorschau")
+        self.resize(660, 480)
+        self._original = original
+        self._result = result
+        layout = QVBoxLayout(self)
+        info = QLabel("Ergebnis der KI-Aktion – grün = geändert oder ergänzt.")
+        info.setWordWrap(True)
+        info.setStyleSheet("color: palette(windowText);")
+        layout.addWidget(info)
+        self._view = QTextBrowser()
+        layout.addWidget(self._view, 1)
+        self._show_diff()
+        row = QHBoxLayout()
+        self._toggle = QCheckBox("Nur Original anzeigen")
+        self._toggle.toggled.connect(self._on_toggle)
+        row.addWidget(self._toggle)
+        row.addStretch()
+        discard = QPushButton("Verwerfen")
+        discard.clicked.connect(self.reject)
+        row.addWidget(discard)
+        keep = QPushButton("Übernehmen")
+        keep.setDefault(True)
+        keep.clicked.connect(self.accept)
+        row.addWidget(keep)
+        layout.addLayout(row)
+
+    def _show_diff(self) -> None:
+        self._view.setHtml(_diff_html(self._original, self._result))
+
+    def _on_toggle(self, on: bool) -> None:
+        if on:
+            import html as _html
+            self._view.setHtml(_html.escape(self._original).replace("\n", "<br>"))
+        else:
+            self._show_diff()
 
 # Status colours (match the floating chip in module.py).
 _STATE = {
@@ -335,6 +405,10 @@ class DictationWindow(QWidget):
     _partial_sig = Signal(str)                 # live provisional text
     _final_sig = Signal(str)                   # live finalised segment
     _polish_sig = Signal(str, bool)            # Whisper-polished sentence, commit
+    _ai_actions_sig = Signal(object)           # rebuild the AI action buttons
+    _ai_busy_sig = Signal(bool)                # AI request running (disable UI)
+    _ai_result_sig = Signal(str)               # replace buffer with AI result
+    _ai_msg_sig = Signal(str)                  # short status/error message
 
     def __init__(self, on_insert: Callable[[str], None] | None = None,
                  on_copy: Callable[[str], None] | None = None,
@@ -344,7 +418,12 @@ class DictationWindow(QWidget):
                  on_reselect_target: Callable[[], None] | None = None,
                  on_confirm_words: Callable[[list], None] | None = None,
                  on_add_vocab: Callable[[str, str], None] | None = None,
+                 on_ai_action: Callable[[str], None] | None = None,
+                 on_edit_ai_action: Callable[[int], None] | None = None,
                  on_geometry_changed: Callable[[list], None] | None = None,
+                 on_history_toggle: Callable[[bool], None] | None = None,
+                 ai_actions: list | None = None,
+                 history_visible: bool = False,
                  geometry: list | None = None,
                  history: list[str] | None = None,
                  t: Callable[[str], str] | None = None) -> None:
@@ -357,7 +436,12 @@ class DictationWindow(QWidget):
         self._on_reselect_target = on_reselect_target or (lambda: None)
         self._on_confirm_words = on_confirm_words or (lambda _words: None)
         self._on_add_vocab = on_add_vocab or (lambda _s, _w: None)
+        self._on_ai_action = on_ai_action or (lambda _prompt: None)
+        self._on_edit_ai_action = on_edit_ai_action or (lambda _i: None)
+        self._ai_actions = list(ai_actions or [])   # [(name, prompt), …]
         self._on_geometry_changed = on_geometry_changed or (lambda _g: None)
+        self._on_history_toggle = on_history_toggle or (lambda _v: None)
+        self._history_shown = bool(history_visible)
         self._restore_geometry = geometry
         self._pending_low_words: list[str] = []   # flagged-but-still-here words
         self._tr = t or (lambda s: s)
@@ -418,11 +502,28 @@ class DictationWindow(QWidget):
         right.setMinimumWidth(150)
         right.setMaximumWidth(280)
         split.addWidget(right)
+        self._history_panel = right
+        right.setVisible(self._history_shown)   # default collapsed, remembered
 
         split.setStretchFactor(0, 1)    # editor grows
         split.setStretchFactor(1, 0)    # history keeps its width
         split.setSizes([560, 200])
-        layout.addWidget(split, 1)
+
+        # Left column: user-configurable "KI-Aktionen" – each button applies its
+        # own prompt to the buffer via the configured LLM (e.g. turn the text
+        # into an email or bullet points).
+        mid = QHBoxLayout()
+        mid.setSpacing(8)
+        self._ai_bar = QVBoxLayout()
+        self._ai_bar.setSpacing(4)
+        self._ai_widget = QWidget()
+        self._ai_widget.setLayout(self._ai_bar)
+        self._ai_widget.setFixedWidth(140)
+        self._ai_buttons: list = []
+        mid.addWidget(self._ai_widget)
+        mid.addWidget(split, 1)
+        layout.addLayout(mid, 1)
+        self._rebuild_ai_bar()
 
         # Which app "einfügen" will paste into.
         self._target_label = QLabel("")
@@ -437,6 +538,12 @@ class DictationWindow(QWidget):
         redo_btn = QPushButton("↷ Wiederholen")
         redo_btn.clicked.connect(lambda: self._editor.te.redo())
         tools.addWidget(redo_btn)
+        clear_btn = QPushButton("🗑 Leeren")
+        clear_btn.setToolTip("Diktierfenster leeren und frisch anfangen "
+                             "(wird in den Verlauf gesichert; Strg+Z macht es "
+                             "rückgängig)")
+        clear_btn.clicked.connect(self._do_clear)
+        tools.addWidget(clear_btn)
         vocab_btn = QPushButton("＋ Wörterbuch")
         vocab_btn.setToolTip("Markiertes Wort ins Wörterbuch aufnehmen und "
                              "angeben, wie es gesprochen wird")
@@ -448,7 +555,17 @@ class DictationWindow(QWidget):
         help_btn = QPushButton("❓ Befehle")
         help_btn.clicked.connect(self._show_cheatsheet)
         tools.addWidget(help_btn)
+        self._history_btn = QPushButton()
+        self._history_btn.setToolTip("Verlauf ein-/ausklappen (merkt sich den "
+                                     "Zustand). Standardmäßig eingeklappt, damit "
+                                     "man nicht versehentlich einen Eintrag lädt.")
+        self._history_btn.clicked.connect(self._toggle_history)
+        tools.addWidget(self._history_btn)
+        self._update_history_btn()
         tools.addStretch()
+        self._counter = QLabel("")               # live char/word count
+        self._counter.setStyleSheet("color: palette(mid);")
+        tools.addWidget(self._counter)
         layout.addLayout(tools)
 
         # Readout of what Whisper heard + what happened with it.  Fixed height,
@@ -492,11 +609,23 @@ class DictationWindow(QWidget):
         layout.addLayout(row)
 
         self._editor = ea.Editor(self._edit)
+        self._rec_timer = QTimer(self)          # recording elapsed-time ticker
+        self._rec_timer.setInterval(1000)
+        self._rec_timer.timeout.connect(self._tick_recording)
+        self._rec_secs = 0
+        self._status_base = ""
+        self._edit.textChanged.connect(self._update_counter)
+        self._update_counter()
+        self._edit.installEventFilter(self)      # Escape cancels „nimm N“
         self._load_initial_history(history or [])
         self._transcript_sig.connect(self._on_transcript)
         self._state_sig.connect(self._apply_state)
         self._open_sig.connect(self.open_for_dictation)
         self._target_sig.connect(self._apply_target)
+        self._ai_actions_sig.connect(self._apply_ai_actions)
+        self._ai_busy_sig.connect(self._apply_ai_busy)
+        self._ai_result_sig.connect(self._apply_ai_result)
+        self._ai_msg_sig.connect(self._apply_ai_message)
         self._partial_sig.connect(self._apply_partial)
         self._final_sig.connect(self._apply_final)
         self._polish_sig.connect(self._apply_polish)
@@ -521,6 +650,92 @@ class DictationWindow(QWidget):
     def set_target(self, name: str) -> None:
         """Set the app name shown for „einfügen" (safe from a worker thread)."""
         self._target_sig.emit(name or "")
+
+    # -- KI-Aktionen (thread-safe) -------------------------------------
+
+    def set_ai_actions(self, actions: list) -> None:
+        self._ai_actions_sig.emit(list(actions or []))
+
+    def ai_busy(self, on: bool = True) -> None:
+        self._ai_busy_sig.emit(bool(on))
+
+    def ai_result(self, text: str) -> None:
+        self._ai_result_sig.emit(text or "")
+
+    def ai_message(self, msg: str) -> None:
+        self._ai_msg_sig.emit(msg or "")
+
+    def _rebuild_ai_bar(self) -> None:
+        while self._ai_bar.count():
+            item = self._ai_bar.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._ai_buttons = []
+        if not self._ai_actions:
+            self._ai_widget.setVisible(False)
+            return
+        self._ai_widget.setVisible(True)
+        header = QLabel("KI-Aktionen")
+        header.setStyleSheet("color: palette(windowText); font-weight: bold;")
+        self._ai_bar.addWidget(header)
+        for idx, (name, prompt) in enumerate(self._ai_actions):
+            btn = QPushButton(name or "…")
+            btn.setToolTip((prompt[:300] + "\n\n") + "Rechtsklick: bearbeiten")
+            btn.clicked.connect(
+                lambda _=False, p=prompt: self._on_ai_action(p))
+            btn.setContextMenuPolicy(
+                Qt.ContextMenuPolicy.CustomContextMenu)
+            btn.customContextMenuRequested.connect(
+                lambda pos, i=idx, b=btn: self._ai_button_menu(i, b, pos))
+            self._ai_bar.addWidget(btn)
+            self._ai_buttons.append(btn)
+        self._ai_bar.addStretch()
+
+    def _ai_button_menu(self, index: int, button, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(button)
+        edit = menu.addAction("Bearbeiten …")
+        edit.triggered.connect(lambda: self._on_edit_ai_action(index))
+        menu.exec(button.mapToGlobal(pos))
+
+    def _apply_ai_actions(self, actions: list) -> None:
+        self._ai_actions = list(actions or [])
+        self._rebuild_ai_bar()
+
+    def _apply_ai_busy(self, on: bool) -> None:
+        for b in self._ai_buttons:
+            b.setEnabled(not on)
+        if on:
+            self._hint.setText("KI arbeitet …")
+
+    def _apply_ai_message(self, msg: str) -> None:
+        self._hint.setText(msg)
+
+    def _apply_ai_result(self, text: str) -> None:
+        for b in self._ai_buttons:
+            b.setEnabled(True)
+        original = self._edit.toPlainText()
+        if original.strip() == text.strip():
+            self._hint.setText("KI: keine Änderung nötig")
+            return
+        # Preview with the changes highlighted → compare, then decide.  Modal
+        # but non-blocking (show(), not exec()) so nothing freezes.
+        dlg = _AiPreview(original, text, parent=self)
+        dlg.setModal(True)
+        dlg.accepted.connect(lambda t=text: self._ai_apply_accepted(t))
+        dlg.rejected.connect(lambda: self._set_hint("KI-Ergebnis verworfen"))
+        self._ai_preview = dlg          # keep a ref so it isn't GC'd
+        dlg.show()
+
+    def _ai_apply_accepted(self, text: str) -> None:
+        cur = self._edit.textCursor()
+        cur.beginEditBlock()
+        cur.select(QTextCursor.SelectionType.Document)
+        cur.insertText(text)
+        cur.endEditBlock()
+        self._edit.setTextCursor(cur)
+        self._set_hint("✓ KI-Ergebnis übernommen – Strg+Z macht rückgängig")
 
     # -- live dictation (thread-safe) ----------------------------------
 
@@ -701,9 +916,44 @@ class DictationWindow(QWidget):
         label, colour = _STATE.get(state, _STATE["idle"])
         if mode and state in ("recording", "transcribing"):
             label = f"{label}   ·   {mode}"
-        self._status.setText(label)
+        # Keep the font size identical across every state so the label's height
+        # never changes and the window doesn't shift up/down when recording
+        # starts/stops.  Recording still stands out via the red colour and the
+        # running timer – not a bigger font.
+        if state == "recording":
+            self._rec_secs = 0
+            self._status_base = label
+            self._status.setText(f"{label}    0 s")
+            colour = "#e53935"
+            self._rec_timer.start()
+        else:
+            self._rec_timer.stop()
+            self._status.setText(label)
         self._status.setStyleSheet(
             f"font-weight: bold; font-size: larger; color: {colour};")
+
+    def _tick_recording(self) -> None:
+        self._rec_secs += 1
+        self._status.setText(f"{self._status_base}    {self._rec_secs} s")
+
+    def _update_counter(self) -> None:
+        text = self._edit.toPlainText()
+        words = len(text.split())
+        self._counter.setText(f"{len(text)} Zeichen · {words} Wörter")
+
+    def _do_clear(self) -> None:
+        """Leeren-Button: keep the text (archive to history), then clear the
+        buffer undoably (Strg+Z restores it)."""
+        if self._edit.toPlainText().strip():
+            self._archive()
+        cur = self._edit.textCursor()
+        cur.beginEditBlock()
+        cur.select(QTextCursor.SelectionType.Document)
+        cur.removeSelectedText()
+        cur.endEditBlock()
+        self._editor = ea.Editor(self._edit)
+        self._clear_marks()
+        self._set_hint("geleert – im Verlauf gesichert, Strg+Z macht rückgängig")
 
     def _on_transcript(self, text: str, mode: str = "auto",
                        low_words: list | None = None) -> None:
@@ -903,9 +1153,43 @@ class DictationWindow(QWidget):
         name = (name or "").strip()
         if len(name) > 60:
             name = name[:59] + "…"
-        self._target_label.setText(
-            f"→ „Einfügen“ fügt ein in:  {name}" if name
-            else "→ „Einfügen“: (noch keine Ziel-App gemerkt)")
+        if name:
+            self._target_label.setText(f"→ „Einfügen“ fügt ein in:  {name}")
+            self._target_label.setStyleSheet("color: palette(windowText);")
+        else:
+            self._target_label.setText(
+                "⚠  Keine Ziel-App gewählt – „Einfügen“ landet nur in der "
+                "Zwischenablage.  Bitte „🎯 Ziel-App wählen“.")
+            self._target_label.setStyleSheet(
+                "color: #e0812b; font-weight: bold;")
+
+    def set_reselecting(self, on: bool) -> None:
+        """Highlight the target-app button while the user is picking an app."""
+        if on:
+            self._reselect_btn.setText("🎯 … Ziel-App anklicken (Esc)")
+            self._reselect_btn.setStyleSheet(
+                "QPushButton { background: #e0812b; color: white;"
+                " font-weight: bold; }")
+        else:
+            self._reselect_btn.setText("🎯 Ziel-App wählen")
+            self._reselect_btn.setStyleSheet("")
+            # Setting a QSS with font properties (font-weight above) bakes the
+            # current font size onto the button and breaks its inheritance of
+            # the app font – so it stayed enlarged after the global font size
+            # was changed back.  A default QFont() clears that override so the
+            # button follows the application font again.
+            from PySide6.QtGui import QFont
+            self._reselect_btn.setFont(QFont())
+
+    def _update_history_btn(self) -> None:
+        self._history_btn.setText(
+            "🗂 Verlauf ▾" if self._history_shown else "🗂 Verlauf ▸")
+
+    def _toggle_history(self) -> None:
+        self._history_shown = not self._history_shown
+        self._history_panel.setVisible(self._history_shown)
+        self._update_history_btn()
+        self._on_history_toggle(self._history_shown)
 
     def _highlight_low_words(self, low_words: list | None) -> None:
         """Tint words Whisper was unsure about (confidence heatmap).  Matches by
@@ -951,9 +1235,15 @@ class DictationWindow(QWidget):
         text = item.data(Qt.ItemDataRole.UserRole)
         if not text:
             return
-        # Keep whatever is currently in the buffer before replacing it.
+        # Keep whatever is currently in the buffer before replacing it (it is
+        # also archived to the history).  Use an undoable select-all + insert so
+        # Strg+Z brings the previous text back — setPlainText would wipe undo.
         self._archive()
-        self._edit.setPlainText(text)
+        cur = self._edit.textCursor()
+        cur.beginEditBlock()
+        cur.select(QTextCursor.SelectionType.Document)
+        cur.insertText(text)
+        cur.endEditBlock()
         self._editor = ea.Editor(self._edit)
         self._clear_marks()
         cur = self._edit.textCursor()
@@ -1047,6 +1337,21 @@ class DictationWindow(QWidget):
         self._hint.setText(f"erkannt: „{raw}“   →   {outcome}")
 
     # -- numbered "nimm N" candidates ----------------------------------
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt override)
+        # Escape while the numbered „nimm N“ choices are showing → cancel them
+        # (instead of picking one).
+        if (obj is self._edit and event.type() == QEvent.Type.KeyPress
+                and event.key() == Qt.Key.Key_Escape
+                and self._editor.has_pending()):
+            self._cancel_candidates()
+            return True
+        return super().eventFilter(obj, event)
+
+    def _cancel_candidates(self) -> None:
+        self._editor.cancel_pending()
+        self._clear_marks()
+        self._set_hint("Auswahl abgebrochen (Escape)")
 
     def _mark_candidates(self, matches: list[tuple[int, int]]) -> str:
         """Highlight the „nimm N“ choices in the text, paint numbered badges
