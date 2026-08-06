@@ -25,6 +25,7 @@ from withease.modules.base import BaseModule
 
 from withease.core.keyboard_hook import (
     MOD_VK,
+    foreground_is_own_process,
     inject_modifier_release,
     is_altgr_fake_lctrl,
     shared_keyboard_hook,
@@ -235,8 +236,12 @@ class KeyboardModule(BaseModule):
                 if self._mod_down[m]:
                     self._mod_used[m] = True
 
-        # Key delay: suppress rapid repeats of the same key.
-        if self._settings.get("delay_enabled"):
+        # Key delay: suppress rapid repeats of the same key.  Skipped while one
+        # of WithEase's own windows is focused: there Qt handles input natively
+        # and the debounce would otherwise swallow the auto-repeat of Backspace
+        # / arrow keys, making it impossible to reliably edit dictated text in
+        # the dictation window.
+        if self._settings.get("delay_enabled") and not foreground_is_own_process():
             key_str = vk_to_combo_str(vk)
             exceptions = self._settings.get("delay_exceptions", [])
             if key_str is None or key_str not in exceptions:

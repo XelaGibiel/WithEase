@@ -17,6 +17,7 @@ through to the rest of the system.
 from __future__ import annotations
 
 import ctypes
+import os
 import threading
 from ctypes import wintypes
 from typing import Callable
@@ -175,6 +176,27 @@ def effective_modifiers() -> frozenset[str]:
     if (state(0x5B) | state(0x5C)) & 0x8000:
         mods.add("win")
     return frozenset(mods)
+
+
+def foreground_is_own_process() -> bool:
+    """True when the focused (foreground) window belongs to THIS process.
+
+    The keyboard-assistance features remap input for *other* applications; they
+    must never interfere with typing inside WithEase's own windows.  In
+    particular, editing dictated text in the dictation window has to stay fully
+    reliable, and the key-repeat delay would otherwise swallow the auto-repeat
+    of Backspace / arrow keys while correcting text there.
+    """
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        pid = wintypes.DWORD(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value == os.getpid()
+    except Exception:
+        return False
 
 
 def current_combo_str(vk: int) -> str | None:

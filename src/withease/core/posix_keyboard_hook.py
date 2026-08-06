@@ -205,6 +205,16 @@ def release_all_modifiers() -> None:
         inject_modifier_release(name)
 
 
+def foreground_is_own_process() -> bool:
+    """Mirror of the Windows helper – see :mod:`win_keyboard_hook`.
+
+    There is no dependency-free, portable way to map the focused X11 window to
+    its PID here, and pynput cannot suppress keys on Linux anyway (so the
+    key-delay debounce this guards is already a no-op).  Report ``False`` so
+    behaviour is unchanged on POSIX."""
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Shared hook – same subscribe/unsubscribe surface as the Windows backend.
 # ---------------------------------------------------------------------------
