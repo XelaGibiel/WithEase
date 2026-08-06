@@ -16,7 +16,12 @@ und das wiederverwendbare HotkeyEdit-Widget).  Der Kern weiß nichts von ihm.
 
 Optionale Abhängigkeiten (nur bei Nutzung nötig):
     pip install sounddevice requests          # Aufnahme + Cloud
+    pip install audioop-lts                    # nur Python ≥ 3.13 (stdlib-Ersatz)
     pip install faster-whisper                # lokale Erkennung
+
+Einfacher: In den Diktat-Einstellungen erledigt der Knopf „Automatisch
+installieren“ das für den Nutzer (siehe ``missing_audio_packages`` und
+``requirements.txt`` in diesem Ordner).
 """
 from __future__ import annotations
 
@@ -46,9 +51,27 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 # which is what crashed the app when they lived together.
 import warnings as _warnings
 
-with _warnings.catch_warnings():
-    _warnings.simplefilter("ignore", DeprecationWarning)  # audioop -> 3.13
-    import audioop
+# ``audioop`` was removed from the stdlib in Python 3.13.  The drop-in
+# replacement is the ``audioop-lts`` package (it still imports as ``audioop``).
+# Import it defensively: a missing audioop must NEVER crash the whole add-on at
+# import time, or the module never loads and the user never even sees the
+# one-click installer that would fix it.  When it is absent the recording path
+# stays disabled and the settings page offers to install it (see
+# ``audio_available`` / ``missing_audio_packages``).  Every audioop call site is
+# already wrapped in try/except with a safe fallback, so ``audioop = None`` is
+# handled gracefully throughout.
+try:
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore", DeprecationWarning)  # audioop -> 3.13
+        import audioop
+except ImportError:
+    audioop = None  # type: ignore[assignment]
+
+
+def audioop_available() -> bool:
+    """True if ``audioop`` is importable (stdlib, or the ``audioop-lts``
+    backport on Python ≥ 3.13 where it was removed from the stdlib)."""
+    return audioop is not None
 
 # Allow importing this add-on's sibling files (commands_de, editor_actions,
 # dictation_window) both when loaded by WithEase and when run standalone.
@@ -169,6 +192,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local.install.failed": "Die Installation hat leider nicht geklappt: {err}\nBitte versuche es erneut oder nutze die Anleitung.",
         "local.howto": "Anleitung anzeigen",
         "local.howto.text": "So installierst du die lokale Spracherkennung von Hand:\n\n1. Öffne die Eingabeaufforderung (Windows-Taste drücken, „cmd“ eintippen, Enter).\n2. Tippe ein:  pip install faster-whisper\n3. Drücke Enter und warte, bis die Installation fertig ist.\n4. Starte WithEase neu.\n\nTipp: Der Knopf „Automatisch installieren“ erledigt genau diese Schritte für dich.",
+        "deps.title": "Komponenten für „Diktieren“",
+        "deps.missing": "⚠ Für dieses Add-on fehlen noch Komponenten ({pkgs}). Ein Klick auf „Automatisch installieren“ richtet alles für dich ein – keine Vorkenntnisse nötig. Danach WithEase neu starten.",
+        "deps.install": "Automatisch installieren",
+        "deps.install.running": "Wird installiert … Das kann einige Minuten dauern. Du kannst das Fenster geöffnet lassen.",
+        "deps.install.done": "Fertig! Die Komponenten sind installiert. Bitte starte WithEase einmal neu, damit „Diktieren“ vollständig einsatzbereit ist.",
+        "deps.install.failed": "Die Installation hat leider nicht geklappt: {err}\nBitte versuche es erneut oder nutze die Anleitung.",
+        "deps.howto.text": "So installierst du die fehlenden Komponenten von Hand:\n\n1. Öffne die Eingabeaufforderung (Windows-Taste drücken, „cmd“ eintippen, Enter).\n2. Tippe ein:  pip install {pkgs}\n3. Drücke Enter und warte, bis die Installation fertig ist.\n4. Starte WithEase neu.\n\nTipp: Der Knopf „Automatisch installieren“ erledigt genau diese Schritte für dich.",
         "language": "Sprache",
         "lang.auto": "Automatisch erkennen",
         "glossary": "Eigene Wörter",
@@ -200,9 +230,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ai.hint": "Korrigiert nur Grammatik/Zeichensetzung, ändert die Bedeutung nicht. Läuft nur bei reinem Diktat (nicht bei Befehlen); Ergebnis erscheint im Diktierfenster.",
         "ai.backend": "KI läuft",
         "ai.local": "Lokal (Ollama, bleibt auf dem PC)",
+        "ai.ollama": "Ollama (lokal, bleibt auf dem PC)",
+        "ai.lmstudio": "LM Studio (lokal, bleibt auf dem PC)",
         "ai.cloud": "Cloud (Text wird an den Anbieter gesendet)",
         "ai.model": "KI-Modell",
-        "ai.model.hint": "z. B. „llama3.2“ (lokal) oder „gpt-4o-mini“ (Cloud)",
+        "ai.model.hint": "Bei Ollama/LM Studio aus der Liste wählbar (↻ lädt die im Programm verfügbaren Modelle); Cloud als Freitext, z. B. „gpt-4o-mini“.",
+        "ai.model.refresh": "↻",
+        "ai.model.refresh.hint": "Modell-Liste vom laufenden Programm (Ollama/LM Studio) neu laden",
+        "ai.model.none": "Keine Modelle gefunden – läuft Ollama bzw. LM Studio und ist ein Modell geladen?",
         "raw": "Nur reine Erkennung (keine Nachbearbeitung)",
         "raw.hint": "Zeigt die reine Ausgabe der Spracherkennung – ohne unsere Nachbearbeitung (keine Satzzeichen-Korrektur, kein Wörterbuch, kein Fehler-Gedächtnis, keine Halluzinations-Filter, keine KI-Bereinigung). Zum Diagnostizieren: So sieht man, ob Fehler von der Erkennung selbst oder von der Nachbearbeitung kommen.",
         "ai.actions": "KI-Aktionen",
@@ -293,6 +328,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local.install.failed": "The installation did not work: {err}\nPlease try again or use the instructions.",
         "local.howto": "Show instructions",
         "local.howto.text": "How to install local speech recognition manually:\n\n1. Open the command prompt (press the Windows key, type \"cmd\", press Enter).\n2. Type:  pip install faster-whisper\n3. Press Enter and wait until the installation finishes.\n4. Restart WithEase.\n\nTip: the \"Install automatically\" button does exactly these steps for you.",
+        "deps.title": "Components for \"Dictation\"",
+        "deps.missing": "⚠ This add-on is still missing components ({pkgs}). One click on \"Install automatically\" sets everything up for you – no technical knowledge needed. Restart WithEase afterwards.",
+        "deps.install": "Install automatically",
+        "deps.install.running": "Installing … This may take a few minutes. You can keep this window open.",
+        "deps.install.done": "Done! The components are installed. Please restart WithEase once so \"Dictation\" is fully ready to use.",
+        "deps.install.failed": "The installation did not work: {err}\nPlease try again or use the instructions.",
+        "deps.howto.text": "How to install the missing components manually:\n\n1. Open the command prompt (press the Windows key, type \"cmd\", press Enter).\n2. Type:  pip install {pkgs}\n3. Press Enter and wait until the installation finishes.\n4. Restart WithEase.\n\nTip: the \"Install automatically\" button does exactly these steps for you.",
         "language": "Language",
         "lang.auto": "Detect automatically",
         "glossary": "Custom words",
@@ -324,9 +366,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ai.hint": "Fixes only grammar/punctuation, never the meaning. Runs on plain dictation (not commands); result appears in the dictation window.",
         "ai.backend": "AI runs",
         "ai.local": "Local (Ollama, stays on this PC)",
+        "ai.ollama": "Ollama (local, stays on this PC)",
+        "ai.lmstudio": "LM Studio (local, stays on this PC)",
         "ai.cloud": "Cloud (text is sent to the provider)",
         "ai.model": "AI model",
-        "ai.model.hint": "e.g. \"llama3.2\" (local) or \"gpt-4o-mini\" (cloud)",
+        "ai.model.hint": "For Ollama/LM Studio pick from the list (↻ loads the models available in the program); cloud is free-text, e.g. \"gpt-4o-mini\".",
+        "ai.model.refresh": "↻",
+        "ai.model.refresh.hint": "Reload the model list from the running program (Ollama/LM Studio)",
+        "ai.model.none": "No models found – is Ollama or LM Studio running with a model loaded?",
         "raw": "Raw recognition only (no post-processing)",
         "raw.hint": "Shows the recogniser's plain output – without any of our post-processing (no punctuation fixes, no dictionary, no error memory, no hallucination filter, no AI cleanup). For diagnosing whether errors come from recognition itself or from post-processing.",
         "ai.actions": "AI actions",
@@ -571,13 +618,38 @@ def open_input_stream(sd: Any, device: int | None,
 
 
 def audio_available() -> bool:
-    """True if the optional recording/cloud dependencies are installed."""
+    """True if the optional recording/cloud dependencies are all present.
+
+    Needs ``requests`` (cloud API), ``sounddevice`` (mic capture) and
+    ``audioop`` (live noise-gate + resampling – stdlib until 3.12, the
+    ``audioop-lts`` backport from 3.13 on)."""
     try:
         import requests  # noqa: F401
         import sounddevice  # noqa: F401
-        return True
     except ImportError:
         return False
+    return audioop_available()
+
+
+def missing_audio_packages() -> list[str]:
+    """pip package names for the recording/cloud dependencies that are not yet
+    importable on this Python, in install order.  Empty when nothing is missing.
+
+    ``audioop-lts`` is only added on Python ≥ 3.13, where ``audioop`` was
+    removed from the standard library; on 3.12 and earlier audioop ships with
+    Python and needs no package."""
+    missing: list[str] = []
+    try:
+        import sounddevice  # noqa: F401
+    except ImportError:
+        missing.append("sounddevice")
+    try:
+        import requests  # noqa: F401
+    except ImportError:
+        missing.append("requests")
+    if sys.version_info >= (3, 13) and not audioop_available():
+        missing.append("audioop-lts")
+    return missing
 
 
 def local_backend_available() -> bool:
@@ -850,6 +922,10 @@ class _InstallBridge(QObject):
     finished = Signal(bool, str)   # ok, error text
 
 
+class _AiModelsBridge(QObject):
+    loaded = Signal(list)          # model names fetched from the local provider
+
+
 class DictationSettingsWidget(QWidget):
     def __init__(self, module: "DictationModule",
                  parent: QWidget | None = None) -> None:
@@ -860,6 +936,10 @@ class DictationSettingsWidget(QWidget):
         self._test_bridge.finished.connect(self._on_test_finished)
         self._install_bridge = _InstallBridge()
         self._install_bridge.finished.connect(self._on_install_finished)
+        self._deps_bridge = _InstallBridge()
+        self._deps_bridge.finished.connect(self._on_deps_install_finished)
+        self._ai_models_bridge = _AiModelsBridge()
+        self._ai_models_bridge.loaded.connect(self._on_ai_models_loaded)
         self._build_ui()
         _sync_module_checkbox(self, module, self._enabled_cb,
                               self._update_enabled_state)
@@ -887,11 +967,9 @@ class DictationSettingsWidget(QWidget):
         desc.setWordWrap(True)
         layout.addWidget(desc)
 
-        if not audio_available():
-            missing = QLabel(_t("deps_missing"))
-            missing.setStyleSheet(_warn_style())
-            missing.setWordWrap(True)
-            layout.addWidget(missing)
+        self._deps_box = self._build_deps_box()
+        layout.addWidget(self._deps_box)
+        self._deps_box.setVisible(not audio_available())
 
         def _group(title: str) -> QFormLayout:
             box = QGroupBox(title)
@@ -948,6 +1026,26 @@ class DictationSettingsWidget(QWidget):
             self._backend.setCurrentIndex(idx)
         self._backend.currentIndexChanged.connect(self._on_backend_changed)
         rec.addRow(_t("backend"), self._backend)
+
+        # Microphone – applies to both cloud and local backends, so it lives
+        # here in the Speech-recognition group (always visible), not tucked away
+        # in the advanced section.
+        self._device = QComboBox()
+        self._device.addItem(_t("device.default"), "default")
+        try:
+            for dev_idx, name in list_input_devices():
+                self._device.addItem(name, dev_idx)
+        except Exception:
+            pass
+        saved_dev = self._settings.get("input_device", "default")
+        for i in range(self._device.count()):
+            data = self._device.itemData(i)
+            if data == saved_dev or self._device.itemText(i) == saved_dev:
+                self._device.setCurrentIndex(i)
+                break
+        self._device.currentIndexChanged.connect(
+            lambda i: self._save("input_device", self._device.itemData(i)))
+        rec.addRow(_t("device"), self._device)
 
         # Cloud fields
         self._provider = QComboBox()
@@ -1103,22 +1201,41 @@ class DictationSettingsWidget(QWidget):
         ai.addRow("", _ai_hint)
 
         self._ai_backend = QComboBox()
-        self._ai_backend.addItem(_t("ai.local"), "local")
+        self._ai_backend.addItem(_t("ai.ollama"), "ollama")
+        self._ai_backend.addItem(_t("ai.lmstudio"), "lmstudio")
         self._ai_backend.addItem(_t("ai.cloud"), "cloud")
-        if self._settings.get("ai_backend", "local") == "cloud":
-            self._ai_backend.setCurrentIndex(1)
-        self._ai_backend.currentIndexChanged.connect(
-            lambda i: self._save("ai_backend", self._ai_backend.itemData(i)))
+        saved_ai_backend = self._settings.get("ai_backend", "ollama")
+        if saved_ai_backend == "local":          # legacy value → Ollama
+            saved_ai_backend = "ollama"
+        bidx = self._ai_backend.findData(saved_ai_backend)
+        if bidx >= 0:
+            self._ai_backend.setCurrentIndex(bidx)
+        self._ai_backend.currentIndexChanged.connect(self._on_ai_backend_changed)
         ai.addRow(_t("ai.backend"), self._ai_backend)
         self._ai_backend_label = ai.labelForField(self._ai_backend)
 
-        self._ai_model = QLineEdit(self._settings.get("ai_model", ""))
-        self._ai_model.setPlaceholderText(_t("ai.model.hint"))
+        # Model as an editable dropdown, populated from the running local
+        # provider (Ollama / LM Studio); still free-text for the cloud backend.
+        self._ai_model = QComboBox()
+        self._ai_model.setEditable(True)
+        self._ai_model.setMinimumWidth(220)
         self._ai_model.setToolTip(_t("ai.model.hint"))
-        self._ai_model.editingFinished.connect(
-            lambda: self._save("ai_model", self._ai_model.text().strip()))
-        ai.addRow(_t("ai.model"), self._ai_model)
-        self._ai_model_label = ai.labelForField(self._ai_model)
+        saved_ai_model = self._settings.get("ai_model", "")
+        if saved_ai_model:
+            self._ai_model.setEditText(saved_ai_model)
+        self._ai_model.currentTextChanged.connect(
+            lambda t: self._save("ai_model", t.strip()))
+        self._ai_model_refresh = QPushButton(_t("ai.model.refresh"))
+        self._ai_model_refresh.setFixedWidth(36)
+        self._ai_model_refresh.setToolTip(_t("ai.model.refresh.hint"))
+        self._ai_model_refresh.clicked.connect(self._refresh_ai_models)
+        self._ai_model_container = QWidget()
+        model_row = QHBoxLayout(self._ai_model_container)
+        model_row.setContentsMargins(0, 0, 0, 0)
+        model_row.addWidget(self._ai_model, 1)
+        model_row.addWidget(self._ai_model_refresh)
+        ai.addRow(_t("ai.model"), self._ai_model_container)
+        self._ai_model_label = ai.labelForField(self._ai_model_container)
 
         # -- (5) Erweitert (collapsed by default) ----------------------
         adv_section = _Collapsible(
@@ -1141,23 +1258,6 @@ class DictationSettingsWidget(QWidget):
         _cmd_hint.setWordWrap(True)
         _cmd_hint.setStyleSheet(_hint_style())
         adv.addRow("", _cmd_hint)
-
-        self._device = QComboBox()
-        self._device.addItem(_t("device.default"), "default")
-        try:
-            for dev_idx, name in list_input_devices():
-                self._device.addItem(name, dev_idx)
-        except Exception:
-            pass
-        saved_dev = self._settings.get("input_device", "default")
-        for i in range(self._device.count()):
-            data = self._device.itemData(i)
-            if data == saved_dev or self._device.itemText(i) == saved_dev:
-                self._device.setCurrentIndex(i)
-                break
-        self._device.currentIndexChanged.connect(
-            lambda i: self._save("input_device", self._device.itemData(i)))
-        adv.addRow(_t("device"), self._device)
 
         self._max_seconds = QSpinBox()
         self._max_seconds.setRange(0, 3600)     # 0 = endless (no auto-stop)
@@ -1222,9 +1322,47 @@ class DictationSettingsWidget(QWidget):
         configured KI-Aktionen (both need a backend + model)."""
         visible = self._ai_enable.isChecked() or bool(self._module.ai_actions())
         for w in (self._ai_backend, getattr(self, "_ai_backend_label", None),
-                  self._ai_model, getattr(self, "_ai_model_label", None)):
+                  self._ai_model_container, getattr(self, "_ai_model_label", None)):
             if w is not None:
                 w.setVisible(visible)
+        if visible:
+            self._refresh_ai_models()
+
+    def _on_ai_backend_changed(self, index: int) -> None:
+        self._save("ai_backend", self._ai_backend.itemData(index))
+        self._refresh_ai_models()
+
+    def _refresh_ai_models(self) -> None:
+        """Reload the model dropdown from the running local provider (async).
+
+        Cloud keeps free-text (no list to fetch), so the refresh button is
+        hidden there."""
+        is_cloud = self._ai_backend.currentData() == "cloud"
+        self._ai_model_refresh.setVisible(not is_cloud)
+        if is_cloud:
+            return
+        self._ai_model_refresh.setEnabled(False)
+
+        def run() -> None:
+            try:
+                models = self._module.list_ai_models()
+            except Exception:
+                models = []
+            self._ai_models_bridge.loaded.emit(models)
+
+        threading.Thread(target=run, daemon=True, name="ai-models").start()
+
+    def _on_ai_models_loaded(self, models: list) -> None:
+        self._ai_model_refresh.setEnabled(True)
+        current = self._ai_model.currentText()
+        self._ai_model.blockSignals(True)   # repopulating must not clear the setting
+        self._ai_model.clear()
+        for name in models:
+            self._ai_model.addItem(name)
+        self._ai_model.setEditText(current)  # keep the user's choice/typed value
+        self._ai_model.blockSignals(False)
+        self._ai_model.setToolTip(
+            _t("ai.model.hint") if models else _t("ai.model.none"))
 
     def _open_ai_actions(self) -> None:
         from settings_dialogs import AiActionsDialog
@@ -1359,6 +1497,101 @@ class DictationSettingsWidget(QWidget):
     def _on_show_howto(self) -> None:
         QMessageBox.information(self, _t("local.howto"),
                                 _t("local.howto.text"))
+
+    # ------------------------------------------------------------------
+    # Core add-on dependencies (audio + cloud) – one-click installer
+    # ------------------------------------------------------------------
+
+    def _build_deps_box(self) -> QWidget:
+        """The 'missing components' panel with a one-click auto-installer.
+
+        Covers the recording/cloud dependencies (sounddevice, requests, and
+        audioop-lts on Python ≥ 3.13).  Hidden entirely once everything is
+        present; the install button is hidden in the frozen .exe (no pip)."""
+        import sys as _sys
+        box = QGroupBox(_t("deps.title"))
+        v = QVBoxLayout(box)
+        v.setSpacing(6)
+
+        self._deps_note = QLabel(self._deps_note_text())
+        self._deps_note.setStyleSheet(_warn_style())
+        self._deps_note.setWordWrap(True)
+        v.addWidget(self._deps_note)
+
+        btns = QHBoxLayout()
+        self._deps_install_btn = QPushButton(_t("deps.install"))
+        self._deps_install_btn.clicked.connect(self._on_install_deps)
+        self._deps_install_btn.setVisible(not getattr(_sys, "frozen", False))
+        btns.addWidget(self._deps_install_btn)
+        deps_howto = QPushButton(_t("local.howto"))
+        deps_howto.clicked.connect(self._on_show_deps_howto)
+        btns.addWidget(deps_howto)
+        btns.addStretch()
+        v.addLayout(btns)
+
+        self._deps_status = QLabel("")
+        self._deps_status.setWordWrap(True)
+        v.addWidget(self._deps_status)
+        return box
+
+    @staticmethod
+    def _deps_note_text() -> str:
+        missing = missing_audio_packages()
+        if not missing:
+            return _t("deps.title")
+        return _t("deps.missing", pkgs=", ".join(missing))
+
+    def _on_install_deps(self) -> None:
+        packages = missing_audio_packages()
+        if not packages:
+            self._refresh_deps_box()
+            return
+        self._deps_install_btn.setEnabled(False)
+        self._deps_status.setStyleSheet(_hint_style())
+        self._deps_status.setText(_t("deps.install.running"))
+
+        import subprocess
+        import sys
+
+        def run() -> None:
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", *packages],
+                    capture_output=True, text=True, timeout=900,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                if result.returncode != 0:
+                    tail = (result.stderr or result.stdout or "").strip()
+                    self._deps_bridge.finished.emit(False, tail[-300:])
+                else:
+                    self._deps_bridge.finished.emit(True, "")
+            except Exception as exc:
+                self._deps_bridge.finished.emit(False, str(exc)[:300])
+
+        threading.Thread(target=run, daemon=True,
+                         name="dictation-deps-install").start()
+
+    def _on_deps_install_finished(self, ok: bool, err: str) -> None:
+        self._deps_install_btn.setEnabled(True)
+        if ok:
+            # audioop / sounddevice are imported at module load, so a restart is
+            # the clean way to pick them up – guide the user to do that.
+            self._deps_status.setStyleSheet(_hint_style())
+            self._deps_status.setText("")
+            QMessageBox.information(self, _t("deps.install"),
+                                    _t("deps.install.done"))
+        else:
+            self._deps_status.setStyleSheet(_warn_style())
+            self._deps_status.setText(_t("deps.install.failed", err=err))
+
+    def _on_show_deps_howto(self) -> None:
+        pkgs = " ".join(missing_audio_packages() or ["sounddevice", "requests"])
+        QMessageBox.information(self, _t("local.howto"),
+                                _t("deps.howto.text", pkgs=pkgs))
+
+    def _refresh_deps_box(self) -> None:
+        if hasattr(self, "_deps_box"):
+            self._deps_box.setVisible(not audio_available())
+            self._deps_note.setText(self._deps_note_text())
 
     # ------------------------------------------------------------------
     # Test recording (3 s → transcribe → show result)
@@ -2960,14 +3193,38 @@ class DictationModule(BaseModule):
         from postprocess import guard_cleanup
         return guard_cleanup(text, cleaned)
 
+    # Local AI providers – both run on the user's own PC.  Ollama speaks its
+    # own /api/chat; LM Studio exposes an OpenAI-compatible /v1 API.  The model
+    # lists come from each program's running instance (see list_ai_models).
+    _AI_LOCAL_DEFAULTS = {
+        "ollama": {"chat": "http://localhost:11434/api/chat",
+                   "models": "http://localhost:11434/api/tags"},
+        "lmstudio": {"chat": "http://localhost:1234/v1/chat/completions",
+                     "models": "http://localhost:1234/v1/models"},
+    }
+
+    def _ai_local_provider(self) -> str:
+        """Normalised local AI provider: ``"ollama"`` or ``"lmstudio"``.
+
+        Legacy profiles stored ``"local"`` (Ollama only) – treat that as
+        Ollama so nothing breaks on upgrade."""
+        return ("lmstudio"
+                if self._settings.get("ai_backend") == "lmstudio"
+                else "ollama")
+
     def _ai_local_chat(self, text: str, system: str | None = None,
                        temperature: float = 0) -> str:
-        import requests
+        if self._ai_local_provider() == "lmstudio":
+            return self._ai_lmstudio_chat(text, system, temperature)
+        return self._ai_ollama_chat(text, system, temperature)
 
+    def _ai_ollama_chat(self, text: str, system: str | None = None,
+                        temperature: float = 0) -> str:
+        import requests
         from postprocess import build_cleanup_prompt
         model = self._settings.get("ai_model") or "llama3.2"
-        url = self._settings.get("ai_local_url") or \
-            "http://localhost:11434/api/chat"
+        url = (self._settings.get("ai_local_url")
+               or self._AI_LOCAL_DEFAULTS["ollama"]["chat"])
         payload = {
             "model": model, "stream": False,
             "think": False,          # skip „thinking“ models' slow reasoning
@@ -2986,10 +3243,54 @@ class DictationModule(BaseModule):
             raise RuntimeError(err or f"{resp.status_code} {resp.reason}")
         return resp.json().get("message", {}).get("content", "")
 
+    def _ai_lmstudio_chat(self, text: str, system: str | None = None,
+                          temperature: float = 0) -> str:
+        import requests
+        from postprocess import build_cleanup_prompt
+        model = self._settings.get("ai_model") or ""
+        url = (self._settings.get("ai_lmstudio_url")
+               or self._AI_LOCAL_DEFAULTS["lmstudio"]["chat"])
+        payload = {
+            "model": model, "stream": False, "temperature": temperature,
+            "messages": [
+                {"role": "system", "content": system or build_cleanup_prompt()},
+                {"role": "user", "content": text},
+            ],
+        }
+        resp = requests.post(url, json=payload, timeout=180)
+        if not resp.ok:                     # surface LM Studio's own error text
+            try:
+                err = resp.json().get("error")
+                msg = err.get("message") if isinstance(err, dict) else err
+            except Exception:
+                msg = None
+            raise RuntimeError(msg or f"{resp.status_code} {resp.reason}")
+        return resp.json()["choices"][0]["message"]["content"]
+
+    def list_ai_models(self) -> list[str]:
+        """Model names offered by the running local AI provider – Ollama's
+        pulled models or LM Studio's loaded models.  Blocking (short timeout);
+        returns ``[]`` on any error or when the program is not running, and for
+        the cloud backend (there the model is free-text)."""
+        if self._settings.get("ai_backend") == "cloud":
+            return []
+        import requests
+        provider = self._ai_local_provider()
+        url = self._AI_LOCAL_DEFAULTS[provider]["models"]
+        try:
+            resp = requests.get(url, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            return []
+        if provider == "lmstudio":     # OpenAI shape: {"data": [{"id": ...}]}
+            return [str(m["id"]) for m in data.get("data", []) if m.get("id")]
+        # Ollama shape: {"models": [{"name": ...}]}
+        return [str(m["name"]) for m in data.get("models", []) if m.get("name")]
+
     def _ai_cloud_chat(self, text: str, system: str | None = None,
                        temperature: float = 0) -> str:
         import requests
-
         from postprocess import build_cleanup_prompt
         base_url, _style, _model, api_key = self._cloud_config()
         if not base_url or not api_key:

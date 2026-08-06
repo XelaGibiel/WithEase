@@ -1,0 +1,23 @@
+# Dependencies for the "Diktieren" / Dictation add-on.
+#
+# These are intentionally NOT part of WithEase's core package (see the root
+# requirements.txt / pyproject.toml) so the core app stays lean. The add-on
+# installs them on demand: the "Automatisch installieren" button in the
+# Dictation settings runs exactly this set for the current Python environment.
+#
+# You can also install them by hand from this folder:
+#     pip install -r requirements.txt
+
+# Recording (microphone capture) and the cloud speech-to-text API:
+sounddevice>=0.4.6
+requests>=2.28
+
+# audioop was removed from the Python standard library in 3.13; the
+# audioop-lts backport provides it again (used for the live noise-gate and
+# mic-to-16kHz resampling). Only needed on Python >= 3.13.
+audioop-lts>=0.2.1; python_version >= "3.13"
+
+# Optional: local (offline) recognition via faster-whisper. Large download –
+# left commented so the base install stays small. Enable it via the
+# "Install automatically" button under the local backend, or uncomment here.
+# faster-whisper>=1.0

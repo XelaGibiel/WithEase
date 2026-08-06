@@ -453,9 +453,11 @@ def test_whisper_only_polish_without_vosk_run(app):
 # --- live noise gate --------------------------------------------------------
 
 def test_chunk_rms_gate():
-    import numpy as np
+    np = pytest.importorskip("numpy")
 
     import module as mod
+    if not mod.audioop_available():
+        pytest.skip("audioop unavailable (Python >= 3.13 without audioop-lts)")
     rms = mod.DictationModule._chunk_rms
     silence = np.zeros(2000, dtype=np.int16).tobytes()
     loud = (np.ones(2000, dtype=np.int16) * 4000).tobytes()
