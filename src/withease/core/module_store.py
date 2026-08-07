@@ -47,6 +47,7 @@ class StoreModule:
     download_url: str
     subdir: str            # folder within the archive, "" = archive root
     min_app_version: str
+    icon: str = ""         # emoji shown as the module's preview icon
 
     # Filled in against the local install state:
     installed_version: str | None = None
@@ -114,6 +115,7 @@ def _parse_index(data: dict) -> list[StoreModule]:
                 download_url=str(entry["download_url"]),
                 subdir=str(entry.get("subdir", "")),
                 min_app_version=str(entry.get("min_app_version", "0")),
+                icon=str(entry.get("icon", "")),
             )
         except (KeyError, TypeError):
             log.warning("skipping malformed store entry: %r", entry)

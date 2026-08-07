@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -155,9 +155,24 @@ class StorePage(QWidget):
         card.setObjectName("storeCard")
         card.setStyleSheet(
             "#storeCard { border: 1px solid palette(mid); border-radius: 8px; }")
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(14, 12, 14, 12)
+
+        # Icon on the left, the module's text block on the right, so the list is
+        # easier to scan at a glance.
+        outer = QHBoxLayout(card)
+        outer.setContentsMargins(14, 12, 14, 12)
+        outer.setSpacing(14)
+
+        icon = QLabel(module.icon or "🧩")
+        icon.setStyleSheet("font-size: 34px;")
+        icon.setFixedWidth(52)
+        icon.setAlignment(
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        outer.addWidget(icon)
+
+        lay = QVBoxLayout()
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
+        outer.addLayout(lay, 1)
 
         header = QHBoxLayout()
         name = QLabel(module.name)
