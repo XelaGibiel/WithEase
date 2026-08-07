@@ -1,6 +1,9 @@
-"""KeyListEdit – records individual key presses into a removable list.
+"""KeyListEdit – pick exception keys as toggleable "key caps".
 
-Usage:
+The common editing/navigation keys are offered as one-tap toggles (highlighted
+when active); anything else is added via "other key" recording and shown as a
+removable cap.
+
     widget = KeyListEdit(current_keys=["Key.space", "Key.enter"])
     widget.keys_changed.connect(lambda keys: print(keys))
 """
@@ -8,8 +11,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeyEvent
-
-from withease.core.i18n import tr
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -20,21 +21,50 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-# PySide6 doesn't ship QFlowLayout – use a simple wrapping implementation
+from withease.core.i18n import tr
+
+# The keys people almost always want as exceptions, offered as quick toggles.
+# (pynput key string, optional fixed label – None = use the localised name.)
+_PRESETS: list[tuple[str, str | None]] = [
+    ("Key.left", "←"),
+    ("Key.up", "↑"),
+    ("Key.down", "↓"),
+    ("Key.right", "→"),
+    ("Key.backspace", None),
+    ("Key.delete", None),
+    ("Key.space", None),
+    ("Key.enter", None),
+]
+_PRESET_KEYS = {k for k, _ in _PRESETS}
+
+_CAP_STYLE = """
+QPushButton {
+    border: 0.5px solid palette(mid);
+    border-bottom: 2px solid palette(mid);
+    border-radius: 7px;
+    padding: 5px 12px;
+    background: palette(base);
+}
+QPushButton:hover { border-color: palette(highlight); }
+QPushButton:checked {
+    background: palette(highlight);
+    color: palette(highlighted-text);
+    border-color: palette(highlight);
+}
+"""
+
 
 class _KeyChip(QWidget):
-    """A single removable key chip."""
+    """A single removable key cap (used for custom, non-preset keys)."""
     removed = Signal(str)
 
     def __init__(self, key: str, label: str) -> None:
         super().__init__()
         self._key = key
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 2, 2, 2)
-        layout.setSpacing(2)
-
-        lbl = QLabel(label)
-        layout.addWidget(lbl)
+        layout.setContentsMargins(10, 4, 4, 4)
+        layout.setSpacing(4)
+        layout.addWidget(QLabel(label))
 
         from withease.gui.ui_utils import em
         btn = QPushButton("✕")
@@ -45,14 +75,13 @@ class _KeyChip(QWidget):
         layout.addWidget(btn)
 
         self.setStyleSheet(
-            "QWidget { background: palette(button); border: 1px solid palette(mid);"
-            " border-radius: 10px; }"
-        )
+            "QWidget { background: palette(button); border: 0.5px solid"
+            " palette(mid); border-radius: 8px; }")
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
 
 class KeyListEdit(QWidget):
-    """Records key presses one at a time into a visual list."""
+    """Pick exception keys via preset toggles + custom recording."""
 
     keys_changed = Signal(list)  # emits list[str] of pynput key strings
 
@@ -64,24 +93,44 @@ class KeyListEdit(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(6)
+        outer.setSpacing(8)
 
-        # Chip area – two-column grid, sorted alphabetically
+        # Preset quick-toggles (4 per row).
+        self._preset_area = QWidget()
+        preset_grid = QGridLayout(self._preset_area)
+        preset_grid.setContentsMargins(0, 0, 0, 0)
+        preset_grid.setSpacing(6)
+        self._preset_btns: dict[str, QPushButton] = {}
+        for i, (key, fixed) in enumerate(_PRESETS):
+            btn = QPushButton(fixed or self._format_key(key))
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(_CAP_STYLE)
+            btn.toggled.connect(lambda on, k=key: self._on_preset_toggled(k, on))
+            preset_grid.addWidget(btn, i // 4, i % 4)
+            self._preset_btns[key] = btn
+        preset_grid.setColumnStretch(4, 1)
+        outer.addWidget(self._preset_area)
+
+        # Custom (non-preset) keys, shown as removable caps.
         self._chip_area = QWidget()
         self._chip_layout = QGridLayout(self._chip_area)
         self._chip_layout.setContentsMargins(0, 0, 0, 0)
-        self._chip_layout.setSpacing(4)
-        self._chip_layout.setColumnStretch(0, 1)
-        self._chip_layout.setColumnStretch(1, 1)
+        self._chip_layout.setSpacing(6)
+        self._chip_layout.setColumnStretch(3, 1)
         outer.addWidget(self._chip_area)
 
-        # Add button
         from withease.gui.ui_utils import em
-        self._add_btn = QPushButton(tr("keylist.add"))
+        self._add_btn = QPushButton(tr("keylist.add_other"))
         self._add_btn.setFixedHeight(max(28, em(1.7)))
         self._add_btn.clicked.connect(self._start_recording)
-        outer.addWidget(self._add_btn)
+        add_row = QHBoxLayout()
+        add_row.setContentsMargins(0, 0, 0, 0)
+        add_row.addWidget(self._add_btn)
+        add_row.addStretch()
+        outer.addLayout(add_row)
 
+        self._sync_presets()
         self._rebuild_chips()
 
     # ------------------------------------------------------------------
@@ -91,9 +140,49 @@ class KeyListEdit(QWidget):
 
     def set_keys(self, keys: list[str]) -> None:
         self._keys = list(keys)
+        self._sync_presets()
         self._rebuild_chips()
 
     # ------------------------------------------------------------------
+
+    def _emit(self) -> None:
+        self.keys_changed.emit(list(self._keys))
+
+    def _on_preset_toggled(self, key: str, on: bool) -> None:
+        if on and key not in self._keys:
+            self._keys.append(key)
+            self._emit()
+        elif not on and key in self._keys:
+            self._keys.remove(key)
+            self._emit()
+
+    def _sync_presets(self) -> None:
+        """Reflect the current keys in the preset toggle states (no signals)."""
+        for key, btn in self._preset_btns.items():
+            btn.blockSignals(True)
+            btn.setChecked(key in self._keys)
+            btn.blockSignals(False)
+
+    def _remove_key(self, key: str) -> None:
+        if key in self._keys:
+            self._keys.remove(key)
+            self._rebuild_chips()
+            self._emit()
+
+    def _rebuild_chips(self) -> None:
+        while self._chip_layout.count():
+            item = self._chip_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+        custom = sorted((k for k in self._keys if k not in _PRESET_KEYS),
+                        key=lambda k: self._format_key(k).lower())
+        for i, key in enumerate(custom):
+            chip = _KeyChip(key, self._format_key(key))
+            chip.removed.connect(self._remove_key)
+            self._chip_layout.addWidget(chip, i // 3, i % 3)
+        self._chip_area.setVisible(bool(custom))
+
+    # -- custom key recording ("other key") ----------------------------
 
     def _start_recording(self) -> None:
         self._recording = True
@@ -105,7 +194,6 @@ class KeyListEdit(QWidget):
         if not self._recording:
             super().keyPressEvent(event)
             return
-
         qt_key = event.key()
         if qt_key in (Qt.Key.Key_Shift, Qt.Key.Key_Control,
                       Qt.Key.Key_Alt, Qt.Key.Key_Meta, Qt.Key.Key_AltGr):
@@ -113,45 +201,18 @@ class KeyListEdit(QWidget):
         if qt_key == Qt.Key.Key_Escape:
             self._stop_recording()
             return
-
         pynput_key = self._qt_key_to_pynput(qt_key, event.text())
         self._stop_recording()
-
         if pynput_key and pynput_key not in self._keys:
             self._keys.append(pynput_key)
+            self._sync_presets()      # a preset key recorded this way still lights up
             self._rebuild_chips()
-            self.keys_changed.emit(self._keys)
+            self._emit()
 
     def _stop_recording(self) -> None:
         self._recording = False
         self.releaseKeyboard()
-        self._add_btn.setText(tr("keylist.add"))
-
-    def _remove_key(self, key: str) -> None:
-        if key in self._keys:
-            self._keys.remove(key)
-            self._rebuild_chips()
-            self.keys_changed.emit(self._keys)
-
-    def _rebuild_chips(self) -> None:
-        # Clear existing grid
-        while self._chip_layout.count():
-            item = self._chip_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-
-        # Sort alphabetically by display label
-        sorted_keys = sorted(self._keys, key=lambda k: self._format_key(k).lower())
-
-        for i, key in enumerate(sorted_keys):
-            chip = _KeyChip(key, self._format_key(key))
-            chip.removed.connect(self._remove_key)
-            row, col = divmod(i, 2)
-            self._chip_layout.addWidget(chip, row, col)
-
-        self._chip_area.setVisible(bool(self._keys))
-        self._chip_area.updateGeometry()
-        self.updateGeometry()
+        self._add_btn.setText(tr("keylist.add_other"))
 
     # ------------------------------------------------------------------
 
@@ -162,7 +223,7 @@ class KeyListEdit(QWidget):
             return display_key_name(key[4:])
         bare = key.strip("'").lower()
         if bare in ("alt", "ctrl", "shift", "win", "altgr"):
-            return tr(f"key.mod.{bare}")   # "Strg" instead of "CTRL"
+            return tr(f"key.mod.{bare}")
         return key.strip("'").upper()
 
     @staticmethod

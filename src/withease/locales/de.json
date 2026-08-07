@@ -122,6 +122,7 @@
   "hotkey.taken": "⚠ Taste nicht übernommen – bereits belegt durch: {name}",
   "hotkey.not_assigned": "— nicht belegt —",
   "keylist.add": "+ Taste hinzufügen",
+  "keylist.add_other": "+ Andere Taste …",
   "hotkey.press": "[ Taste drücken … ]",
   "hotkey.clear": "Taste entfernen",
   "settings.actions.clear": "Entfernen",
