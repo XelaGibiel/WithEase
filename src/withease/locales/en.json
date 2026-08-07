@@ -221,6 +221,8 @@
   "module.macros.add": "Add macro",
   "module.macros.edit": "Edit",
   "module.macros.delete": "Delete",
+  "module.macros.move_up": "Move up (order for \"Manual\")",
+  "module.macros.move_down": "Move down (order for \"Manual\")",
   "module.macros.import": "Import …",
   "module.macros.export": "Export …",
   "module.macros.import.title": "Import macros",

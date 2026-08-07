@@ -221,6 +221,8 @@
   "module.macros.add": "Makro hinzufügen",
   "module.macros.edit": "Bearbeiten",
   "module.macros.delete": "Löschen",
+  "module.macros.move_up": "Nach oben (Reihenfolge für „Manuell“)",
+  "module.macros.move_down": "Nach unten (Reihenfolge für „Manuell“)",
   "module.macros.import": "Importieren …",
   "module.macros.export": "Exportieren …",
   "module.macros.import.title": "Makros importieren",

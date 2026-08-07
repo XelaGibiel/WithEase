@@ -1010,6 +1010,21 @@ class MacrosSettingsWidget(QWidget):
         self._del_btn.clicked.connect(self._on_delete)
         btn_row.addWidget(self._del_btn)
 
+        # Reorder – this is the order the overlay's "manual" sort follows.
+        self._up_btn = QPushButton("▲")
+        self._up_btn.setFixedHeight(max(28, em(1.7)))
+        self._up_btn.setFixedWidth(max(32, em(2)))
+        self._up_btn.setToolTip(tr("module.macros.move_up"))
+        self._up_btn.clicked.connect(lambda: self._move_macro(-1))
+        btn_row.addWidget(self._up_btn)
+
+        self._down_btn = QPushButton("▼")
+        self._down_btn.setFixedHeight(max(28, em(1.7)))
+        self._down_btn.setFixedWidth(max(32, em(2)))
+        self._down_btn.setToolTip(tr("module.macros.move_down"))
+        self._down_btn.clicked.connect(lambda: self._move_macro(1))
+        btn_row.addWidget(self._down_btn)
+
         btn_row.addStretch()
 
         self._import_btn = QPushButton(tr("module.macros.import"))
@@ -1190,6 +1205,18 @@ class MacrosSettingsWidget(QWidget):
         QMessageBox.information(self, tr("module.macros.import.title"),
                                tr("module.macros.import.done", n=str(added)))
 
+    def _move_macro(self, delta: int) -> None:
+        """Move the selected macro up/down – this defines the 'manual' order."""
+        idx = self._selected_index()
+        new = idx + delta
+        macros = self._module._macros
+        if idx < 0 or not (0 <= new < len(macros)):
+            return
+        macros[idx], macros[new] = macros[new], macros[idx]
+        self._module.on_settings_changed()
+        self._refresh_table()
+        self._table.selectRow(new)
+
     def _on_trigger_changed(self, key: str) -> None:
         self._module._settings["trigger_key"] = key
         self._module.on_settings_changed()
@@ -1205,5 +1232,6 @@ class MacrosSettingsWidget(QWidget):
         for w in (self._trigger_edit, self._chip_size, self._preview_cb,
                   self._ov_enabled, self._ov_sort, self._ov_pos,
                   self._table, self._add_btn, self._edit_btn, self._del_btn,
+                  self._up_btn, self._down_btn,
                   self._import_btn, self._export_btn):
             w.setEnabled(enabled)

@@ -33,6 +33,15 @@ class _EmergencyBridge(QObject):
     triggered = Signal()
 
 
+class _SaveBridge(QObject):
+    """Marshals a profile save from a worker thread to the main thread.
+
+    Used to persist macro usage counters, which are bumped on the macro
+    execution (Timer) thread – saving there directly would touch the save
+    indicator widget cross-thread."""
+    requested = Signal()
+
+
 class WithEaseApp:
     def __init__(self, qt_app: QApplication) -> None:
         self._qt_app = qt_app
@@ -75,6 +84,9 @@ class WithEaseApp:
         self._emergency_trigger = ""
         self._emergency_bridge = _EmergencyBridge()
         self._emergency_bridge.triggered.connect(self.toggle_emergency)
+        self._save_bridge = _SaveBridge()
+        self._save_bridge.requested.connect(
+            lambda: self._save_current_profile(silent=True))
         shared_keyboard_hook.subscribe(self._on_emergency_key)
 
         # Registered only so the hotkey shows up in conflict checks; the key
@@ -134,6 +146,9 @@ class WithEaseApp:
         bus.subscribe("module.settings_changed", lambda **_: self._save_current_profile())
         bus.subscribe("module.started",          lambda **_: self._save_current_profile())
         bus.subscribe("module.stopped",          lambda **_: self._save_current_profile())
+        # Persist macro usage counters (bumped on the macro Timer thread) via the
+        # main thread, quietly (no "saved" toast on every macro use).
+        bus.subscribe("macros.executed", lambda **_: self._save_bridge.requested.emit())
 
         if self._app_config.get("first_run", True):
             self.show_settings()
@@ -292,7 +307,7 @@ class WithEaseApp:
         finally:
             self._loading_profile = False
 
-    def _save_current_profile(self) -> None:
+    def _save_current_profile(self, silent: bool = False) -> None:
         import logging
         if getattr(self, "_loading_profile", False):
             return  # mid-load events must not overwrite the new profile
@@ -305,7 +320,8 @@ class WithEaseApp:
             config.save_profile(self._active_profile, self._profile_data)
             logging.getLogger(__name__).info(
                 "profile %r saved", self._active_profile)
-            bus.publish("profile.saved", name=self._active_profile)
+            if not silent:   # silent saves (e.g. usage counters) skip the toast
+                bus.publish("profile.saved", name=self._active_profile)
         except Exception:
             logging.getLogger(__name__).exception("saving profile failed")
             raise

@@ -33,3 +33,21 @@ def test_new_macro_defaults(app):
     data = dlg.result_data()
     assert data["category"] == ""
     assert data["uses"] == 0
+
+
+def test_move_macro_reorders_the_list(app):
+    from withease.modules.macros import MacrosModule
+    from withease.gui.settings.macros_settings import MacrosSettingsWidget
+    mod = MacrosModule()
+    mod.load_settings({"macros": [
+        {"id": "a", "label": "A", "trigger_key": "'a'", "type": "text"},
+        {"id": "b", "label": "B", "trigger_key": "'b'", "type": "text"},
+        {"id": "c", "label": "C", "trigger_key": "'c'", "type": "text"},
+    ]})
+    w = MacrosSettingsWidget(mod)
+    w._table.selectRow(2)
+    w._move_macro(-1)
+    assert [m.label for m in mod._macros] == ["A", "C", "B"]
+    w._table.selectRow(0)
+    w._move_macro(-1)                       # already at top → no-op
+    assert [m.label for m in mod._macros] == ["A", "C", "B"]
