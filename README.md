@@ -30,14 +30,18 @@ WithEase runs quietly in the system tray and helps users with limited motor cont
 - Screen zones: jump cursor to predefined screen regions via hotkey
 
 ### Keyboard Module
-- Key delay: prevents unintended repeated keystrokes when a key is held
-- Per-key exception list
+- Key delay: prevents accidental fast double-strikes (adjustable minimum gap)
+- Hold = one keystroke: a held key counts only once – no unwanted auto-repeat
+- Per-key exception lists for both, picked as one-tap presets or custom keys
 - Sticky Keys: Shift, Ctrl, Alt, Win – press once, stays active until next non-modifier key
 - Live modifier status display in the GUI
 
 ### Macros Module
 - Macro mode: press trigger key → press second key → action executes → macro mode ends
-- Supported actions: type text, send key combination, launch app/script
+- Actions: type text, send a key combination, launch an app/script, or a mouse/keyboard sequence
+- In-macro-mode command overlay grouped by category, with favourites and a usage counter
+- Sort the overlay manually, alphabetically, or by frequency; assign categories and reorder
+- Import / export macros as a file to back them up or share them
 
 ### Profiles
 - Create unlimited profiles (e.g. Work, Home, Gaming, Guest)
@@ -54,8 +58,9 @@ WithEase runs quietly in the system tray and helps users with limited motor cont
 - **Drink break** – reminds you to drink at a configurable interval, as a
   discreet pop-up or a full-screen rain overlay
 - **Dictation** – speech to text via Whisper (cloud: OpenRouter / OpenAI /
-  Groq, or local on your PC in the source version). 🧪 *Still in an early
-  beta – it may not work flawlessly right away.*
+  Groq, or local on your PC in the source version); optional AI dictionary
+  actions via Ollama or LM Studio; one-click setup of its components. 🧪
+  *Still in an early beta – it may not work flawlessly right away.*
 
 ### General
 - Emergency stop: one key disables everything instantly (also in tray menu)
@@ -75,7 +80,8 @@ This makes WithEase input-device agnostic – new devices can be supported witho
 ## Download & Run (no installation needed)
 
 Open the [**Releases**](https://github.com/XelaGibiel/WithEase/releases) page
-and download the archive for your system.
+and download the archive for your system. See
+[CHANGELOG.md](CHANGELOG.md) for what's new in each version.
 
 ### Windows
 
