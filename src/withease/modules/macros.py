@@ -34,6 +34,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -181,6 +182,24 @@ class Macro:
     trigger_key: str
     type: MacroType
     payload: dict[str, Any] = field(default_factory=dict)
+    category: str = ""          # user-defined group, "" = uncategorised
+    uses: int = 0               # execution counter, for "sort by usage"
+
+
+_MACRO_FIELDS = {"id", "label", "trigger_key", "type", "payload",
+                 "category", "uses"}
+
+
+def macro_from_dict(data: dict[str, Any]) -> Macro:
+    """Build a Macro from a stored/imported dict, ignoring unknown keys so a
+    newer/foreign schema never breaks loading (forward-compatible + safe for
+    import)."""
+    known = {k: v for k, v in data.items() if k in _MACRO_FIELDS}
+    known.setdefault("id", str(uuid.uuid4()))
+    known.setdefault("label", "")
+    known.setdefault("trigger_key", "")
+    known.setdefault("type", "text")
+    return Macro(**known)
 
 
 class MacrosModule(BaseModule):
@@ -227,7 +246,8 @@ class MacrosModule(BaseModule):
 
     def load_settings(self, settings: dict[str, Any]) -> None:
         self._settings = settings
-        self._macros = [Macro(**m) for m in settings.get("macros", [])]
+        self._macros = [macro_from_dict(m) for m in settings.get("macros", [])
+                        if isinstance(m, dict)]
 
     def dump_settings(self) -> dict[str, Any]:
         return {
@@ -238,6 +258,41 @@ class MacrosModule(BaseModule):
     def on_settings_changed(self) -> None:
         self._refresh_trigger()
         bus.publish("module.settings_changed", module_id=self.MODULE_ID)
+
+    # ------------------------------------------------------------------
+    # Command overlay (P3): shown while macro mode is active, listing every
+    # macro grouped by category.  Config + read access for the overlay widget.
+    # ------------------------------------------------------------------
+
+    _CMD_OVERLAY_DEFAULTS = {
+        "enabled": True,
+        "position": "top-center",   # see actions_overlay.POSITIONS
+        "sort": "manual",           # manual | alpha | usage
+        "font_size": 13,
+    }
+
+    def cmd_overlay_config(self) -> dict[str, Any]:
+        cfg = self._settings.setdefault("cmd_overlay", {})
+        for key, val in self._CMD_OVERLAY_DEFAULTS.items():
+            cfg.setdefault(key, val)
+        return cfg
+
+    def set_cmd_overlay_option(self, key: str, value: Any) -> None:
+        self.cmd_overlay_config()[key] = value
+        bus.publish("module.settings_changed", module_id=self.MODULE_ID)
+
+    def macros(self) -> list[Macro]:
+        """The current macros (live objects – treat as read-only)."""
+        return list(self._macros)
+
+    def categories(self) -> list[str]:
+        """Distinct non-empty user categories, in first-seen order."""
+        seen: list[str] = []
+        for macro in self._macros:
+            cat = (macro.category or "").strip()
+            if cat and cat not in seen:
+                seen.append(cat)
+        return seen
 
     # ------------------------------------------------------------------
     # Low-level hook – trigger detection + one-shot macro key capture
@@ -338,6 +393,7 @@ class MacrosModule(BaseModule):
                                  macro.payload.get("args", []))
             elif macro.type == "mouse":
                 self._run_sequence(macro.payload.get("steps", []))
+            macro.uses += 1        # for "sort by usage" in the command overlay
             bus.publish("macros.executed", macro_id=macro.id)
         except Exception as e:
             bus.publish("macros.error", macro_id=macro.id, error=str(e))

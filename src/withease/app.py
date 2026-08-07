@@ -110,6 +110,10 @@ class WithEaseApp:
         self._direction_arrow = DirectionArrowOverlay()
         from withease.gui.widgets.actions_overlay import ActionsOverlay
         self._actions_overlay = ActionsOverlay(self)
+        from withease.gui.widgets.macro_commands_overlay import (
+            MacroCommandsOverlay,
+        )
+        self._macro_commands_overlay = MacroCommandsOverlay(self)
 
         # Realise the cursor overlay windows off-screen a few seconds after
         # start, once the desktop is ready.  On a cold Windows autostart a
@@ -388,6 +392,73 @@ class WithEaseApp:
         cfg["position"] = "custom"
         self._save_current_profile()
         bus.publish("overlay.config_changed")
+
+    # ------------------------------------------------------------------
+    # Macro command overlay (P3): the in-macro-mode list of macro commands
+    # ------------------------------------------------------------------
+
+    def _macros_module(self):
+        for module in self._modules:
+            if module.MODULE_ID == "macros":
+                return module
+        return None
+
+    def get_macro_commands_config(self) -> dict:
+        mod = self._macros_module()
+        return mod.cmd_overlay_config() if mod is not None else {"enabled": False}
+
+    def get_macro_command_groups(self):
+        """Grouped rows for the macro command overlay: a leading ★ favourites
+        group, then the remaining macros grouped by category and sorted per the
+        configured mode.  Each row is ``(label, formatted_hotkey, is_favourite)``.
+        """
+        from withease.gui.widgets.hotkey_edit import HotkeyEdit
+        mod = self._macros_module()
+        if mod is None:
+            return []
+        macros = mod.macros()
+        if not macros:
+            return []
+        sort = mod.cmd_overlay_config().get("sort", "manual")
+
+        def fmt(mac) -> str:
+            return (HotkeyEdit._format_key(mac.trigger_key)
+                    if mac.trigger_key else "—")
+
+        fav_ids = [f[6:] for f in self.get_favorites() if f.startswith("macro:")]
+        fav_set = set(fav_ids)
+        by_id = {m.id: m for m in macros}
+
+        groups: list[tuple[str, list[tuple[str, str, bool]]]] = []
+        fav_macros = [by_id[i] for i in fav_ids if i in by_id]
+        if fav_macros:
+            groups.append((tr("module.macros.overlay.favorites"),
+                           [(m.label, fmt(m), True) for m in fav_macros]))
+
+        rest = [m for m in macros if m.id not in fav_set]
+        cats: list[str] = []
+        for m in rest:
+            c = (m.category or "").strip()
+            if c and c not in cats:
+                cats.append(c)
+        ordered = list(cats)
+        if any(not (m.category or "").strip() for m in rest):
+            ordered.append("")   # uncategorised group goes last
+        for c in ordered:
+            members = self._sort_macros(
+                [m for m in rest if (m.category or "").strip() == c], sort)
+            label = c or tr("module.macros.overlay.uncategorised")
+            groups.append(
+                (label, [(m.label, fmt(m), False) for m in members]))
+        return groups
+
+    @staticmethod
+    def _sort_macros(members, sort):
+        if sort == "alpha":
+            return sorted(members, key=lambda m: m.label.lower())
+        if sort == "usage":
+            return sorted(members, key=lambda m: -int(getattr(m, "uses", 0)))
+        return members   # "manual" keeps the macro-list order
 
     # ------------------------------------------------------------------
     # Emergency key

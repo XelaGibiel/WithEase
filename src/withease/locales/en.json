@@ -236,6 +236,8 @@
   "module.macros.dialog.app.args.placeholder": "e.g. --minimized file.txt",
   "module.macros.unnamed": "Unnamed macro",
   "module.macros.indicator_label": "⌨ Macro mode",
+  "module.macros.overlay.favorites": "★ Favourites",
+  "module.macros.overlay.uncategorised": "Uncategorised",
   "module.macros.dialog.type": "Type",
   "module.macros.dialog.text": "Text",
   "module.macros.dialog.combination": "Key combination (e.g. ctrl+c)",
