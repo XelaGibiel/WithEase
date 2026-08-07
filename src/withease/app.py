@@ -452,8 +452,12 @@ class WithEaseApp:
         by_id = {m.id: m for m in macros}
 
         groups: list[tuple[str, list[tuple[str, str, bool]]]] = []
+        # Favourites keep their own arranged order in "manual"; otherwise the
+        # chosen sort applies here too, so the whole list responds to it.
         fav_macros = [by_id[i] for i in fav_ids if i in by_id]
         if fav_macros:
+            if sort != "manual":
+                fav_macros = self._sort_macros(fav_macros, sort)
             groups.append((tr("module.macros.overlay.favorites"),
                            [(m.label, fmt(m), True) for m in fav_macros]))
 
@@ -463,6 +467,18 @@ class WithEaseApp:
             c = (m.category or "").strip()
             if c and c not in cats:
                 cats.append(c)
+        # The sort also reorders the category groups themselves (not just the
+        # macros within them), so it's visibly useful even with one macro per
+        # category.  Uncategorised always goes last.
+        if sort == "alpha":
+            cats.sort(key=str.lower)
+        elif sort == "usage":
+            totals: dict[str, int] = {}
+            for m in rest:
+                c = (m.category or "").strip()
+                if c:
+                    totals[c] = totals.get(c, 0) + int(getattr(m, "uses", 0))
+            cats.sort(key=lambda c: -totals.get(c, 0))
         ordered = list(cats)
         if any(not (m.category or "").strip() for m in rest):
             ordered.append("")   # uncategorised group goes last

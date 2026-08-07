@@ -87,3 +87,21 @@ def test_sort_alpha_and_usage():
     usage = _groups(_sample(), favorites=[], sort="usage")
     email_usage = [label for label, _k, _f in usage[0][1]]
     assert email_usage == ["Signatur", "Gruß"]   # 20 uses before 5
+
+
+def test_sort_reorders_category_groups():
+    # _sample: E-Mail (Gruß 5 + Signatur 20 = 25 uses), Word (0), uncategorised.
+    manual = [h for h, _ in _groups(_sample(), favorites=[], sort="manual")]
+    assert manual[:2] == ["E-Mail", "Word"]          # first-seen order
+
+    alpha = [h for h, _ in _groups(_sample(), favorites=[], sort="alpha")]
+    assert alpha.index("E-Mail") < alpha.index("Word")   # alphabetical
+
+    usage = [h for h, _ in _groups(_sample(), favorites=[], sort="usage")]
+    assert usage.index("E-Mail") < usage.index("Word")   # 25 uses before 0
+
+
+def test_sort_applies_within_favourites_group():
+    groups = _groups(_sample(), favorites=["macro:g", "macro:s"], sort="usage")
+    fav_rows = [label for label, _k, _f in groups[0][1]]
+    assert fav_rows == ["Signatur", "Gruß"]   # 20 before 5, even in favourites
