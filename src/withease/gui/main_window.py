@@ -406,6 +406,10 @@ class MainWindow(QMainWindow):
             pic = QLabel()
             pic.setPixmap(pixmap)
             pic.setFixedSize(96, 96)
+            # Clamp the pixmap to the 96×96 box: under display scaling the
+            # rendered pixmap can be larger and would otherwise bleed out of the
+            # label and overlap the text below it.
+            pic.setScaledContents(True)
             header.addWidget(pic, 0, Qt.AlignmentFlag.AlignTop)
 
         # Text in its own container, top-aligned next to the logo.  (A bare
