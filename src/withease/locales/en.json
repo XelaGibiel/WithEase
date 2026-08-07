@@ -291,6 +291,7 @@
   "module.macros.col.key": "Key",
   "module.macros.col.type": "Type",
   "module.macros.col.category": "Category",
+  "module.macros.col.uses": "Frequency",
   "module.macros.col.content": "Content",
   "module.macros.dialog.category": "Category",
   "module.macros.dialog.category.placeholder": "e.g. E-mail, Word (optional)",

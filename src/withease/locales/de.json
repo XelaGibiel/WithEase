@@ -291,6 +291,7 @@
   "module.macros.col.key": "Taste",
   "module.macros.col.type": "Typ",
   "module.macros.col.category": "Kategorie",
+  "module.macros.col.uses": "Häufigkeit",
   "module.macros.col.content": "Inhalt",
   "module.macros.dialog.category": "Kategorie",
   "module.macros.dialog.category.placeholder": "z. B. E-Mail, Word (optional)",

@@ -966,12 +966,13 @@ class MacrosSettingsWidget(QWidget):
         list_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(list_label)
 
-        self._table = QTableWidget(0, 5)
+        self._table = QTableWidget(0, 6)
         self._table.setHorizontalHeaderLabels([
             tr("module.macros.col.name"),
             tr("module.macros.col.key"),
             tr("module.macros.col.type"),
             tr("module.macros.col.category"),
+            tr("module.macros.col.uses"),
             tr("module.macros.col.content"),
         ])
         self._table.horizontalHeader().setStretchLastSection(True)
@@ -1073,7 +1074,7 @@ class MacrosSettingsWidget(QWidget):
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             placeholder.setForeground(QBrush(QColor("gray")))
             self._table.setItem(0, 0, placeholder)
-            self._table.setSpan(0, 0, 1, 5)
+            self._table.setSpan(0, 0, 1, 6)
             self._edit_btn.setEnabled(False)
             self._del_btn.setEnabled(False)
         else:
@@ -1083,7 +1084,11 @@ class MacrosSettingsWidget(QWidget):
                 self._table.setItem(row, 1, QTableWidgetItem(_format_key(m.trigger_key)))
                 self._table.setItem(row, 2, QTableWidgetItem(tr(f"module.macros.type.{m.type}")))
                 self._table.setItem(row, 3, QTableWidgetItem(m.category))
-                self._table.setItem(row, 4, QTableWidgetItem(_macro_content_preview(m)))
+                uses_item = QTableWidgetItem(str(int(getattr(m, "uses", 0))))
+                uses_item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self._table.setItem(row, 4, uses_item)
+                self._table.setItem(row, 5, QTableWidgetItem(_macro_content_preview(m)))
             self._edit_btn.setEnabled(True)
             self._del_btn.setEnabled(True)
 
