@@ -1005,6 +1005,17 @@ class MacrosSettingsWidget(QWidget):
         btn_row.addWidget(self._del_btn)
 
         btn_row.addStretch()
+
+        self._import_btn = QPushButton(tr("module.macros.import"))
+        self._import_btn.setFixedHeight(max(28, em(1.7)))
+        self._import_btn.clicked.connect(self._on_import)
+        btn_row.addWidget(self._import_btn)
+
+        self._export_btn = QPushButton(tr("module.macros.export"))
+        self._export_btn.setFixedHeight(max(28, em(1.7)))
+        self._export_btn.clicked.connect(self._on_export)
+        btn_row.addWidget(self._export_btn)
+
         layout.addLayout(btn_row)
 
         layout.addStretch()
@@ -1104,6 +1115,75 @@ class MacrosSettingsWidget(QWidget):
             self._module.on_settings_changed()
             self._refresh_table()
 
+    # -- Import / export -------------------------------------------------
+
+    def _on_export(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+        if not self._module._macros:
+            QMessageBox.information(self, tr("module.macros.export.title"),
+                                    tr("module.macros.no_macros"))
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, tr("module.macros.export.title"), "withease-makros.json",
+            tr("module.macros.iefilter"))
+        if not path:
+            return
+        if not path.lower().endswith(".json"):
+            path += ".json"
+        import json
+        # Share the definitions, not the personal usage counter.
+        payload = {"withease_macros": 1, "macros": [
+            {k: v for k, v in vars(m).items() if k != "uses"}
+            for m in self._module._macros]}
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+        except OSError as exc:
+            QMessageBox.warning(self, tr("module.macros.export.title"),
+                                tr("module.macros.export.failed", err=str(exc)))
+            return
+        QMessageBox.information(
+            self, tr("module.macros.export.title"),
+            tr("module.macros.export.done", n=str(len(self._module._macros))))
+
+    def _on_import(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr("module.macros.import.title"), "",
+            tr("module.macros.iefilter"))
+        if not path:
+            return
+        import json
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            QMessageBox.warning(self, tr("module.macros.import.title"),
+                                tr("module.macros.import.failed", err=str(exc)))
+            return
+        raw = data.get("macros") if isinstance(data, dict) else data
+        if not isinstance(raw, list):
+            QMessageBox.warning(self, tr("module.macros.import.title"),
+                                tr("module.macros.import.invalid"))
+            return
+        import uuid
+
+        from withease.modules.macros import macro_from_dict
+        added = 0
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            macro = macro_from_dict(entry)
+            macro.id = str(uuid.uuid4())   # fresh id so imports never clash
+            macro.uses = 0
+            self._module._macros.append(macro)
+            added += 1
+        if added:
+            self._module.on_settings_changed()
+            self._refresh_table()
+        QMessageBox.information(self, tr("module.macros.import.title"),
+                               tr("module.macros.import.done", n=str(added)))
+
     def _on_trigger_changed(self, key: str) -> None:
         self._module._settings["trigger_key"] = key
         self._module.on_settings_changed()
@@ -1118,5 +1198,6 @@ class MacrosSettingsWidget(QWidget):
     def _update_enabled_state(self, enabled: bool) -> None:
         for w in (self._trigger_edit, self._chip_size, self._preview_cb,
                   self._ov_enabled, self._ov_sort, self._ov_pos,
-                  self._table, self._add_btn, self._edit_btn, self._del_btn):
+                  self._table, self._add_btn, self._edit_btn, self._del_btn,
+                  self._import_btn, self._export_btn):
             w.setEnabled(enabled)
