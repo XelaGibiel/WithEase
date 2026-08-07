@@ -407,6 +407,12 @@ class WithEaseApp:
         mod = self._macros_module()
         return mod.cmd_overlay_config() if mod is not None else {"enabled": False}
 
+    def get_macro_chip_size(self) -> int:
+        """Height (px) of the macro-mode indicator chip, so the command overlay
+        can position itself clear of it when both sit at the top centre."""
+        mod = self._macros_module()
+        return int(mod._settings.get("chip_size", 28)) if mod is not None else 28
+
     def get_macro_command_groups(self):
         """Grouped rows for the macro command overlay: a leading ★ favourites
         group, then the remaining macros grouped by category and sorted per the

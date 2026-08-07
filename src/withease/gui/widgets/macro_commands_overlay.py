@@ -141,14 +141,26 @@ class MacroCommandsOverlay(QWidget):
         if not screen:
             return
         geom = screen.availableGeometry()
+
         if "left" in pos:
             x = geom.x() + _MARGIN
         elif "right" in pos:
             x = geom.x() + geom.width() - self.width() - _MARGIN
-        else:
+        else:   # center columns
             x = geom.x() + (geom.width() - self.width()) // 2
-        y = (geom.y() + _MARGIN if "top" in pos
-             else geom.y() + geom.height() - self.height() - _MARGIN)
+
+        if pos == "center":
+            y = geom.y() + (geom.height() - self.height()) // 2
+        elif "top" in pos:
+            y = geom.y() + _MARGIN
+            # The macro-mode chip also sits at the top centre while macro mode
+            # is on (and this overlay only shows then), so drop a top-centre
+            # list below the chip band to avoid overlapping it.
+            if pos == "top-center":
+                chip_band = self._app.get_macro_chip_size() + 2 * _MARGIN
+                y += chip_band + _MARGIN
+        else:   # bottom
+            y = geom.y() + geom.height() - self.height() - _MARGIN
         self.move(x, y)
 
     # ------------------------------------------------------------------

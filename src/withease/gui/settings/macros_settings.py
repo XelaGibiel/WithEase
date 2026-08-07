@@ -579,11 +579,14 @@ class _StepDialog(QDialog):
 class _MacroDialog(QDialog):
     def __init__(self, macro: "Macro | None" = None,
                  existing_keys: list[str] | None = None,
+                 categories: list[str] | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._macro = macro
         # Keys already used by other macros (for duplicate detection)
         self._existing_keys = existing_keys or []
+        # Existing category names, offered as suggestions in the combo.
+        self._categories = categories or []
         title_key = "module.macros.dialog.edit" if macro else "module.macros.dialog.add"
         self.setWindowTitle(tr(title_key))
         self.setMinimumWidth(440)
@@ -599,10 +602,31 @@ class _MacroDialog(QDialog):
 
         form = QFormLayout()
         form.setSpacing(8)
+        # Let the input fields use the full dialog width – the editable category
+        # combo was cramped otherwise (barely any room to type next to the
+        # dropdown arrow once a category existed).
+        form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
         self._name = QLineEdit()
         self._name.setPlaceholderText(tr("module.macros.dialog.name"))
         form.addRow(tr("module.macros.dialog.name"), self._name)
+
+        # Category (free text; existing categories offered as suggestions).
+        self._category = QComboBox()
+        self._category.setEditable(True)
+        self._category.setMinimumWidth(260)
+        self._category.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self._category.addItem("")   # "" = uncategorised
+        for cat in self._categories:
+            self._category.addItem(cat)
+        self._category.setCurrentIndex(0)
+        line_edit = self._category.lineEdit()
+        if line_edit is not None:
+            line_edit.setPlaceholderText(
+                tr("module.macros.dialog.category.placeholder"))
+        form.addRow(tr("module.macros.dialog.category"), self._category)
 
         self._key_rec = _KeyRecorder()
         self._key_rec.key_changed.connect(self._check_duplicate)
@@ -782,6 +806,9 @@ class _MacroDialog(QDialog):
 
     def _load(self, macro: "Macro") -> None:
         self._name.setText(macro.label)
+        line_edit = self._category.lineEdit()
+        if line_edit is not None:
+            line_edit.setText(macro.category)
         self._key_rec.blockSignals(True)
         self._key_rec.set_key(macro.trigger_key)
         self._key_rec.blockSignals(False)
@@ -821,6 +848,9 @@ class _MacroDialog(QDialog):
             "trigger_key": self._key_rec.get_key(),
             "type": t,
             "payload": payload,
+            "category": self._category.currentText().strip(),
+            # Preserve the usage counter across edits (0 for a new macro).
+            "uses": self._macro.uses if self._macro else 0,
         }
 
 
@@ -887,16 +917,55 @@ class MacrosSettingsWidget(QWidget):
 
         layout.addLayout(trigger_form)
 
+        # ── Command overlay (the in-macro-mode command list) ───────
+        ov_form = QFormLayout()
+        ov_form.setSpacing(8)
+        cfg = self._module.cmd_overlay_config()
+
+        self._ov_enabled = QCheckBox(tr("module.macros.overlay.enabled"))
+        self._ov_enabled.setChecked(bool(cfg.get("enabled", True)))
+        self._ov_enabled.toggled.connect(
+            lambda v: self._module.set_cmd_overlay_option("enabled", v))
+        ov_form.addRow(tr("module.macros.overlay.title"), self._ov_enabled)
+
+        self._ov_sort = QComboBox()
+        for val, key in (("manual", "module.macros.overlay.sort.manual"),
+                         ("alpha", "module.macros.overlay.sort.alpha"),
+                         ("usage", "module.macros.overlay.sort.usage")):
+            self._ov_sort.addItem(tr(key), val)
+        si = self._ov_sort.findData(cfg.get("sort", "manual"))
+        if si >= 0:
+            self._ov_sort.setCurrentIndex(si)
+        self._ov_sort.currentIndexChanged.connect(
+            lambda i: self._module.set_cmd_overlay_option(
+                "sort", self._ov_sort.itemData(i)))
+        ov_form.addRow(tr("module.macros.overlay.sort"), self._ov_sort)
+
+        self._ov_pos = QComboBox()
+        for val in ("top-center", "top-left", "top-right", "center",
+                    "bottom-center", "bottom-left", "bottom-right"):
+            self._ov_pos.addItem(tr(f"module.macros.overlay.pos.{val}"), val)
+        pi = self._ov_pos.findData(cfg.get("position", "top-center"))
+        if pi >= 0:
+            self._ov_pos.setCurrentIndex(pi)
+        self._ov_pos.currentIndexChanged.connect(
+            lambda i: self._module.set_cmd_overlay_option(
+                "position", self._ov_pos.itemData(i)))
+        ov_form.addRow(tr("module.macros.overlay.position"), self._ov_pos)
+
+        layout.addLayout(ov_form)
+
         # ── Macro list ─────────────────────────────────────────────
         list_label = QLabel(tr("module.macros.list"))
         list_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(list_label)
 
-        self._table = QTableWidget(0, 4)
+        self._table = QTableWidget(0, 5)
         self._table.setHorizontalHeaderLabels([
             tr("module.macros.col.name"),
             tr("module.macros.col.key"),
             tr("module.macros.col.type"),
+            tr("module.macros.col.category"),
             tr("module.macros.col.content"),
         ])
         self._table.horizontalHeader().setStretchLastSection(True)
@@ -972,7 +1041,7 @@ class MacrosSettingsWidget(QWidget):
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             placeholder.setForeground(QBrush(QColor("gray")))
             self._table.setItem(0, 0, placeholder)
-            self._table.setSpan(0, 0, 1, 4)
+            self._table.setSpan(0, 0, 1, 5)
             self._edit_btn.setEnabled(False)
             self._del_btn.setEnabled(False)
         else:
@@ -981,7 +1050,8 @@ class MacrosSettingsWidget(QWidget):
                 self._table.setItem(row, 0, QTableWidgetItem(m.label))
                 self._table.setItem(row, 1, QTableWidgetItem(_format_key(m.trigger_key)))
                 self._table.setItem(row, 2, QTableWidgetItem(tr(f"module.macros.type.{m.type}")))
-                self._table.setItem(row, 3, QTableWidgetItem(_macro_content_preview(m)))
+                self._table.setItem(row, 3, QTableWidgetItem(m.category))
+                self._table.setItem(row, 4, QTableWidgetItem(_macro_content_preview(m)))
             self._edit_btn.setEnabled(True)
             self._del_btn.setEnabled(True)
 
@@ -999,11 +1069,12 @@ class MacrosSettingsWidget(QWidget):
     def _on_add(self) -> None:
         dlg = _MacroDialog(
             existing_keys=self._existing_keys_except(-1),
+            categories=self._module.categories(),
             parent=self,
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            from withease.modules.macros import Macro
-            self._module._macros.append(Macro(**dlg.result_data()))
+            from withease.modules.macros import macro_from_dict
+            self._module._macros.append(macro_from_dict(dlg.result_data()))
             self._module.on_settings_changed()
             self._refresh_table()
 
@@ -1015,11 +1086,12 @@ class MacrosSettingsWidget(QWidget):
         dlg = _MacroDialog(
             macro=macro,
             existing_keys=self._existing_keys_except(idx),
+            categories=self._module.categories(),
             parent=self,
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            from withease.modules.macros import Macro
-            self._module._macros[idx] = Macro(**dlg.result_data())
+            from withease.modules.macros import macro_from_dict
+            self._module._macros[idx] = macro_from_dict(dlg.result_data())
             self._module.on_settings_changed()
             self._refresh_table()
 
@@ -1045,5 +1117,6 @@ class MacrosSettingsWidget(QWidget):
 
     def _update_enabled_state(self, enabled: bool) -> None:
         for w in (self._trigger_edit, self._chip_size, self._preview_cb,
+                  self._ov_enabled, self._ov_sort, self._ov_pos,
                   self._table, self._add_btn, self._edit_btn, self._del_btn):
             w.setEnabled(enabled)
