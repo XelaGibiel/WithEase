@@ -26,12 +26,18 @@ _HEADER_FG = QColor(255, 176, 110)     # category headers
 _LABEL_FG = QColor(235, 238, 245)
 _KEY_FG = QColor(255, 176, 110)
 _FAV_FG = QColor(255, 213, 128)        # favourites: warm gold
+_COUNT_FG = QColor(150, 162, 178)      # usage count: muted
 _RADIUS = 8
 _PAD = 12
 _COL_GAP = 18
+_COUNT_GAP = 12
 _GROUP_GAP = 8
 _MARGIN = 12
 _DEFAULT_FONT_PX = 13
+
+
+def _count_text(uses: int) -> str:
+    return f"{uses}×" if uses > 0 else ""
 
 
 class _Bridge(QObject):
@@ -109,24 +115,26 @@ class MacroCommandsOverlay(QWidget):
         bold.setBold(True)
         return base, bold
 
-    def _column_widths(self) -> tuple[int, int, int]:
+    def _column_widths(self) -> tuple[int, int, int, int]:
         base, bold = self._fonts()
         fm, fm_bold = QFontMetrics(base), QFontMetrics(bold)
-        label_w = key_w = header_w = 0
+        label_w = count_w = key_w = header_w = 0
         for header, rows in self._groups:
             header_w = max(header_w, fm_bold.horizontalAdvance(header))
-            for label, key, fav in rows:
+            for label, key, fav, uses in rows:
                 text = ("★ " + label) if fav else label
                 label_w = max(label_w, fm.horizontalAdvance(text))
                 key_w = max(key_w, fm_bold.horizontalAdvance(key))
-        return label_w, key_w + 4, header_w
+                count_w = max(count_w, fm.horizontalAdvance(_count_text(uses)))
+        return label_w, count_w, key_w + 4, header_w
 
     def _resize_to_content(self) -> None:
         font = self.font()
         font.setPixelSize(self._font_px)
         self.setFont(font)
-        label_w, key_w, header_w = self._column_widths()
-        body_w = label_w + _COL_GAP + key_w
+        label_w, count_w, key_w, header_w = self._column_widths()
+        count_col = (count_w + _COUNT_GAP) if count_w else 0
+        body_w = label_w + _COL_GAP + count_col + key_w
         w = min(max(180, max(body_w, header_w) + 2 * _PAD), 720)
         h = 2 * _PAD
         for i, (_header, rows) in enumerate(self._groups):
@@ -176,8 +184,9 @@ class MacroCommandsOverlay(QWidget):
         p.drawPath(path)
 
         base, bold = self._fonts()
-        label_w, _key_w, _header_w = self._column_widths()
-        key_left = _PAD + label_w + _COL_GAP
+        label_w, count_w, _key_w, _header_w = self._column_widths()
+        count_x = _PAD + label_w + _COL_GAP
+        key_left = count_x + ((count_w + _COUNT_GAP) if count_w else 0)
         key_rect_w = self.width() - key_left - _PAD
         row_h, header_h = self._row_h(), self._header_h()
         y = _PAD
@@ -188,13 +197,19 @@ class MacroCommandsOverlay(QWidget):
                        Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                        header)
             y += header_h
-            for label, key, fav in rows:
+            for label, key, fav, uses in rows:
                 text = ("★ " + label) if fav else label
                 p.setFont(base)
                 p.setPen(_FAV_FG if fav else _LABEL_FG)
                 p.drawText(QRect(_PAD, y, label_w, row_h),
                            Qt.AlignmentFlag.AlignVCenter
                            | Qt.AlignmentFlag.AlignLeft, text)
+                if count_w:
+                    p.setFont(base)
+                    p.setPen(_COUNT_FG)
+                    p.drawText(QRect(count_x, y, count_w, row_h),
+                               Qt.AlignmentFlag.AlignVCenter
+                               | Qt.AlignmentFlag.AlignRight, _count_text(uses))
                 p.setFont(bold)
                 p.setPen(_FAV_FG if fav else _KEY_FG)
                 p.drawText(QRect(key_left, y, key_rect_w, row_h),

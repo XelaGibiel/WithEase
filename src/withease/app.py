@@ -432,7 +432,8 @@ class WithEaseApp:
     def get_macro_command_groups(self):
         """Grouped rows for the macro command overlay: a leading ★ favourites
         group, then the remaining macros grouped by category and sorted per the
-        configured mode.  Each row is ``(label, formatted_hotkey, is_favourite)``.
+        configured mode.  Each row is
+        ``(label, formatted_hotkey, is_favourite, uses)``.
         """
         from withease.gui.widgets.hotkey_edit import HotkeyEdit
         mod = self._macros_module()
@@ -459,7 +460,8 @@ class WithEaseApp:
             if sort != "manual":
                 fav_macros = self._sort_macros(fav_macros, sort)
             groups.append((tr("module.macros.overlay.favorites"),
-                           [(m.label, fmt(m), True) for m in fav_macros]))
+                           [(m.label, fmt(m), True, int(getattr(m, "uses", 0)))
+                            for m in fav_macros]))
 
         rest = [m for m in macros if m.id not in fav_set]
         cats: list[str] = []
@@ -487,7 +489,8 @@ class WithEaseApp:
                 [m for m in rest if (m.category or "").strip() == c], sort)
             label = c or tr("module.macros.overlay.uncategorised")
             groups.append(
-                (label, [(m.label, fmt(m), False) for m in members]))
+                (label, [(m.label, fmt(m), False, int(getattr(m, "uses", 0)))
+                         for m in members]))
         return groups
 
     @staticmethod

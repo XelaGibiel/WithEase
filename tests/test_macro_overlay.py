@@ -66,9 +66,9 @@ def test_favourites_group_first_and_not_duplicated():
     groups = _groups(_sample(), favorites=["macro:z"])
     assert groups[0][0].endswith("Favoriten") or "Favourite" in groups[0][0]
     fav_rows = groups[0][1]
-    assert fav_rows == [("Zettel", "Z", True)]
+    assert fav_rows == [("Zettel", "Z", True, 0)]
     # the favourite must not reappear in the category groups
-    later = [label for _h, rows in groups[1:] for label, _k, _f in rows]
+    later = [label for _h, rows in groups[1:] for label, _k, _f, _u in rows]
     assert "Zettel" not in later
 
 
@@ -81,11 +81,11 @@ def test_category_groups_and_uncategorised_last():
 
 def test_sort_alpha_and_usage():
     alpha = _groups(_sample(), favorites=[], sort="alpha")
-    email_alpha = [label for label, _k, _f in alpha[0][1]]
+    email_alpha = [label for label, _k, _f, _u in alpha[0][1]]
     assert email_alpha == ["Gruß", "Signatur"]
 
     usage = _groups(_sample(), favorites=[], sort="usage")
-    email_usage = [label for label, _k, _f in usage[0][1]]
+    email_usage = [label for label, _k, _f, _u in usage[0][1]]
     assert email_usage == ["Signatur", "Gruß"]   # 20 uses before 5
 
 
@@ -103,5 +103,5 @@ def test_sort_reorders_category_groups():
 
 def test_sort_applies_within_favourites_group():
     groups = _groups(_sample(), favorites=["macro:g", "macro:s"], sort="usage")
-    fav_rows = [label for label, _k, _f in groups[0][1]]
+    fav_rows = [label for label, _k, _f, _u in groups[0][1]]
     assert fav_rows == ["Signatur", "Gruß"]   # 20 before 5, even in favourites
