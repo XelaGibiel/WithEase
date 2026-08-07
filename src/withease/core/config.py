@@ -66,6 +66,8 @@ DEFAULT_PROFILE: dict[str, Any] = {
             "delay_enabled": False,
             "delay_ms": 500,
             "delay_exceptions": [],
+            "no_repeat_enabled": False,
+            "no_repeat_exceptions": [],
             "sticky_enabled": False,
             "sticky_shift": False,
             "sticky_ctrl": False,

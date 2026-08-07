@@ -25,7 +25,6 @@ from withease.modules.base import BaseModule
 
 from withease.core.keyboard_hook import (
     MOD_VK,
-    foreground_is_own_process,
     inject_modifier_release,
     is_altgr_fake_lctrl,
     shared_keyboard_hook,
@@ -55,6 +54,10 @@ class KeyboardModule(BaseModule):
         self._settings: dict[str, Any] = {}
         self._kb_subscribed = False
         self._last_key_time: dict[int, float] = {}
+        # Non-modifier keys currently held down (no key-up seen since key-down).
+        # Used by the no-repeat protection to tell an auto-repeat from a fresh
+        # press.
+        self._keys_held: set[int] = set()
         self._sticky_state: dict[str, bool] = {k: False for k in _MODIFIERS}
         # Per-modifier physical tracking, used to decide latching on RELEASE:
         #   _mod_down – the modifier key is physically held right now
@@ -94,6 +97,7 @@ class KeyboardModule(BaseModule):
             self._kb_subscribed = False
         self._release_all_sticky()
         self._last_key_time.clear()
+        self._keys_held.clear()
         bus.publish("module.stopped", module_id=self.MODULE_ID)
         bus.publish("keyboard.modifier_status", state=self._sticky_state.copy())
 
@@ -236,12 +240,22 @@ class KeyboardModule(BaseModule):
                 if self._mod_down[m]:
                     self._mod_used[m] = True
 
-        # Key delay: suppress rapid repeats of the same key.  Skipped while one
-        # of WithEase's own windows is focused: there Qt handles input natively
-        # and the debounce would otherwise swallow the auto-repeat of Backspace
-        # / arrow keys, making it impossible to reliably edit dictated text in
-        # the dictation window.
-        if self._settings.get("delay_enabled") and not foreground_is_own_process():
+        # No-repeat protection: while a key is physically held, Windows fires
+        # auto-repeat key-downs with no key-up in between.  When enabled, count
+        # a held key as a single press – swallow every repeat until it is
+        # released and pressed again.  Listed exception keys keep repeating
+        # (e.g. arrow keys / Backspace for editing).
+        with self._lock:
+            already_held = vk in self._keys_held
+            self._keys_held.add(vk)
+        if self._settings.get("no_repeat_enabled") and already_held:
+            key_str = vk_to_combo_str(vk)
+            exceptions = self._settings.get("no_repeat_exceptions", [])
+            if key_str is None or key_str not in exceptions:
+                return True  # auto-repeat while held → swallow
+
+        # Key delay: suppress rapid repeats of the same key.
+        if self._settings.get("delay_enabled"):
             key_str = vk_to_combo_str(vk)
             exceptions = self._settings.get("delay_exceptions", [])
             if key_str is None or key_str not in exceptions:
@@ -299,6 +313,7 @@ class KeyboardModule(BaseModule):
             self._release_all_sticky()
         with self._lock:
             self._last_key_time.pop(vk, None)
+            self._keys_held.discard(vk)   # no longer held → next press counts
         return False
 
     # ------------------------------------------------------------------

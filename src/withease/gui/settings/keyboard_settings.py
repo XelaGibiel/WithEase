@@ -88,6 +88,29 @@ class KeyboardSettingsWidget(QWidget):
         self._delay_sec.content_layout.addWidget(delay_form_widget)
         layout.addWidget(self._delay_sec)
 
+        # ── No-repeat protection (hold = single keystroke) ───────────
+        self._norepeat_sec = CollapsibleSection(
+            tr("module.keyboard.no_repeat"),
+            self._settings.get("no_repeat_enabled", False),
+            description=tr("module.keyboard.no_repeat.description"),
+        )
+        self._norepeat_sec.toggled.connect(
+            lambda v: self._save("no_repeat_enabled", v))
+
+        norepeat_form = QFormLayout()
+        norepeat_form.setSpacing(8)
+        self._no_repeat_exceptions = KeyListEdit(
+            self._settings.get("no_repeat_exceptions", []))
+        self._no_repeat_exceptions.keys_changed.connect(
+            lambda keys: self._save("no_repeat_exceptions", keys))
+        norepeat_form.addRow(tr("module.keyboard.no_repeat.exceptions"),
+                             self._no_repeat_exceptions)
+
+        norepeat_form_widget = QWidget()
+        norepeat_form_widget.setLayout(norepeat_form)
+        self._norepeat_sec.content_layout.addWidget(norepeat_form_widget)
+        layout.addWidget(self._norepeat_sec)
+
         # ── Sticky Keys ──────────────────────────────────────────────
         sticky_enabled = self._settings.get(
             "sticky_enabled",
@@ -160,7 +183,7 @@ class KeyboardSettingsWidget(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
 
-        self._sections = [self._delay_sec, self._sticky_sec]
+        self._sections = [self._delay_sec, self._norepeat_sec, self._sticky_sec]
         self._update_enabled_state(self._module.enabled)
 
     # ------------------------------------------------------------------
