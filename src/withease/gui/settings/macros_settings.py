@@ -312,6 +312,8 @@ class _StepDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(tr("module.macros.step.title"))
         self.setMinimumWidth(380)
+        # Window-modal so the dictation window stays reachable (see _MacroDialog).
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self._capturing = False
         self._pos_captured.connect(self._on_pos_captured)
         self._capture_cancelled.connect(self._stop_capture)
@@ -590,6 +592,10 @@ class _MacroDialog(QDialog):
         title_key = "module.macros.dialog.edit" if macro else "module.macros.dialog.add"
         self.setWindowTitle(tr(title_key))
         self.setMinimumWidth(440)
+        # Window-modal (not application-modal): block only the settings window,
+        # so the always-on-top dictation window stays clickable – otherwise you
+        # can't dictate into the Name/category fields (dictate → "insert").
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self._build_ui()
         from withease.gui.ui_utils import compact_fields
         compact_fields(self)
