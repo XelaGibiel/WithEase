@@ -93,3 +93,17 @@ def test_fix_casing_preserves_nouns_sentence_start_formal_and_acronyms():
     assert f("Können Sie Mir helfen?") == "Können Sie mir helfen?"  # formal Sie kept
     assert f("Das ist die EU.") == "Das ist die EU."                # acronym kept
     assert f("Hallo. Und tschüss.") == "Hallo. Und tschüss."        # new sentence start
+
+
+def test_strip_repetitions_collapses_double_phrase_and_function_word():
+    s = pp.strip_repetitions
+    # the real-world garbled webcam dictation
+    assert s("Proton mit Thunderbird verbinden in in Karte Whisper Karte "
+             "Whisper") == "Proton mit Thunderbird verbinden in Karte Whisper"
+    # a 2x multi-word repeat collapses to one
+    assert s("das Auto das Auto") == "das Auto"
+    # a doubled function word collapses ("in in" -> "in")
+    assert s("ich bin in in der Stadt") == "ich bin in der Stadt"
+    # genuine emphasis doubles + normal doubles are kept
+    assert s("das war sehr sehr gut") == "das war sehr sehr gut"
+    assert s("die die dort stehen") == "die die dort stehen"  # not immediate glitch style? keep

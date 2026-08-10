@@ -147,6 +147,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "group.recognition": "Spracherkennung",
         "group.output": "Textausgabe",
         "group.vocab_ai": "Wörterbuch & KI",
+        "group.vocab": "Wörterbuch",
+        "group.ai": "KI (zum Ausklappen anhaken)",
         "group.advanced": "▸ Erweitert",
         "group.advanced.open": "▾ Erweitert",
         "action": "Diktat starten/stoppen",
@@ -187,6 +189,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local.not_installed": "Die lokale Erkennung ist auf diesem PC noch nicht installiert. Du kannst sie mit einem Klick automatisch installieren lassen – es sind keine Vorkenntnisse nötig.",
         "local.frozen_note": "Die lokale Erkennung ist in der App-Version (.exe) nicht verfügbar – dafür nutze bitte das Cloud-Backend oben. Wer die lokale Erkennung möchte, verwendet die Quellcode-Version von WithEase.",
         "local.install": "Automatisch installieren",
+        "local.install.gpu": "GPU-Beschleunigung einrichten",
+        "local.ready": "✓ Lokale Erkennung ist installiert und einsatzbereit.",
+        "local.ready_gpu": "✓ Lokale Erkennung ist installiert. Du hast eine NVIDIA-Grafikkarte – mit „GPU-Beschleunigung einrichten“ installierst du die CUDA-Komponenten für deutlich schnelleres Diktieren. Danach WithEase neu starten.",
         "local.install.running": "Wird installiert … Das kann einige Minuten dauern. Du kannst das Fenster geöffnet lassen.",
         "local.install.done": "Fertig! Die lokale Spracherkennung ist jetzt installiert und kann verwendet werden.",
         "local.install.failed": "Die Installation hat leider nicht geklappt: {err}\nBitte versuche es erneut oder nutze die Anleitung.",
@@ -282,6 +287,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "group.recognition": "Speech recognition",
         "group.output": "Text output",
         "group.vocab_ai": "Dictionary & AI",
+        "group.vocab": "Dictionary",
+        "group.ai": "AI (tick to expand)",
         "group.advanced": "▸ Advanced",
         "group.advanced.open": "▾ Advanced",
         "deps_missing": "⚠ This add-on is missing components. To enable it, run in the program folder:  pip install sounddevice requests  (for local recognition also: faster-whisper)",
@@ -323,6 +330,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local.not_installed": "Local recognition is not installed on this PC yet. You can have it installed automatically with one click – no technical knowledge needed.",
         "local.frozen_note": "Local recognition is not available in the packaged app (.exe) – please use the cloud backend above instead. If you want local recognition, use the source-code version of WithEase.",
         "local.install": "Install automatically",
+        "local.install.gpu": "Set up GPU acceleration",
+        "local.ready": "✓ Local recognition is installed and ready to use.",
+        "local.ready_gpu": "✓ Local recognition is installed. You have an NVIDIA GPU – use “Set up GPU acceleration” to install the CUDA components for much faster dictation, then restart WithEase.",
         "local.install.running": "Installing … This may take a few minutes. You can keep this window open.",
         "local.install.done": "Done! Local speech recognition is now installed and ready to use.",
         "local.install.failed": "The installation did not work: {err}\nPlease try again or use the instructions.",
@@ -578,42 +588,61 @@ def list_input_devices() -> list[tuple[int, str]]:
 
 
 def resolve_input_device(value: Any) -> int | None:
-    """Translate the stored device setting into a sounddevice index."""
+    """Translate the stored device setting into a sounddevice index.
+
+    Returns None (= system default) when the setting is empty *or* points at a
+    device that isn't a usable microphone.  Stored indices go stale whenever
+    audio devices are added/removed and can end up on an output device (0 input
+    channels) – opening that as a mic fails with "Invalid number of channels".
+    """
     if value in (None, "", "default"):
         return None
+    idx: int | None = None
     if isinstance(value, int):
-        return value
-    for idx, name in list_input_devices():
-        if name == value:
-            return idx
-    return None
+        idx = value
+    else:
+        for i, name in list_input_devices():
+            if name == value:
+                idx = i
+                break
+    if idx is not None:
+        try:
+            import sounddevice as sd
+            if int(sd.query_devices(idx).get("max_input_channels", 0)) > 0:
+                return idx
+        except Exception:
+            pass
+    return None    # invalid / stale / not an input device → system default
 
 
 def open_input_stream(sd: Any, device: int | None,
                       callback: Any) -> tuple[Any, int, int]:
-    """Open a RawInputStream, falling back to the device's native format."""
-    try:
-        info = sd.query_devices(device, "input")
-    except Exception:
-        info = {"default_samplerate": 48_000, "max_input_channels": 1}
-    native_rate = int(info.get("default_samplerate") or 48_000)
-    max_ch = max(1, int(info.get("max_input_channels") or 1))
-
-    attempts = [(_SAMPLE_RATE, 1)]
-    if (native_rate, 1) not in attempts:
-        attempts.append((native_rate, 1))
-    attempts.append((native_rate, min(2, max_ch)))
-
+    """Open a RawInputStream, falling back to the device's native format and,
+    if the chosen device can't be opened at all, to the system default."""
+    devices_to_try = [device] + ([None] if device is not None else [])
     last_exc: Exception | None = None
-    for rate, channels in attempts:
+    for dev in devices_to_try:
         try:
-            stream = sd.RawInputStream(
-                samplerate=rate, channels=channels, dtype="int16",
-                callback=callback, device=device)
-            stream.start()
-            return stream, rate, channels
-        except Exception as exc:
-            last_exc = exc
+            info = sd.query_devices(dev, "input")
+        except Exception:
+            info = {"default_samplerate": 48_000, "max_input_channels": 1}
+        native_rate = int(info.get("default_samplerate") or 48_000)
+        max_ch = max(1, int(info.get("max_input_channels") or 1))
+
+        attempts = [(_SAMPLE_RATE, 1)]
+        if (native_rate, 1) not in attempts:
+            attempts.append((native_rate, 1))
+        attempts.append((native_rate, min(2, max_ch)))
+
+        for rate, channels in attempts:
+            try:
+                stream = sd.RawInputStream(
+                    samplerate=rate, channels=channels, dtype="int16",
+                    callback=callback, device=dev)
+                stream.start()
+                return stream, rate, channels
+            except Exception as exc:
+                last_exc = exc
     raise last_exc or RuntimeError("no usable input format")
 
 
@@ -657,6 +686,20 @@ def local_backend_available() -> bool:
     # CTranslate2/PyAV into this process – exactly what we avoid).
     import importlib.util
     return importlib.util.find_spec("faster_whisper") is not None
+
+
+def _has_nvidia_gpu() -> bool:
+    """True if an NVIDIA GPU with a working driver is present.
+
+    Cheap and dependency-free: the CUDA driver installs ``nvcuda.dll`` into
+    System32 and puts ``nvidia-smi`` on PATH. We avoid importing torch/
+    ctranslate2 just to detect the GPU."""
+    if sys.platform == "win32":
+        sysroot = os.environ.get("SystemRoot", r"C:\Windows")
+        if os.path.exists(os.path.join(sysroot, "System32", "nvcuda.dll")):
+            return True
+    import shutil
+    return shutil.which("nvidia-smi") is not None
 
 
 class WhisperProc:
@@ -1109,12 +1152,9 @@ class DictationSettingsWidget(QWidget):
         install_layout = QVBoxLayout(self._install_box)
         install_layout.setContentsMargins(0, 0, 0, 0)
         install_layout.setSpacing(6)
-        install_note = QLabel(
-            _t("local.frozen_note") if self._frozen
-            else _t("local.not_installed"))
-        install_note.setStyleSheet(_warn_style())
-        install_note.setWordWrap(True)
-        install_layout.addWidget(install_note)
+        self._install_note = QLabel()
+        self._install_note.setWordWrap(True)
+        install_layout.addWidget(self._install_note)
         install_btns = QHBoxLayout()
         self._install_btn = QPushButton(_t("local.install"))
         self._install_btn.clicked.connect(self._on_install_local)
@@ -1129,6 +1169,7 @@ class DictationSettingsWidget(QWidget):
         self._install_status.setWordWrap(True)
         install_layout.addWidget(self._install_status)
         rec.addRow("", self._install_box)
+        self._update_install_note()
 
         self._test_btn = QPushButton(_t("test"))
         self._test_btn.clicked.connect(self._on_test)
@@ -1162,10 +1203,8 @@ class DictationSettingsWidget(QWidget):
             lambda v: self._save("keep_in_clipboard", v))
         out.addRow("", self._keep_clipboard)
 
-        # -- (4) Woerterbuch & KI --------------------------------------
-        ai = _group(_t("group.vocab_ai"))
-        self._form_ai = ai
-
+        # -- (4) Woerterbuch -------------------------------------------
+        vocab = _group(_t("group.vocab"))
         dict_row = QHBoxLayout()
         self._dict_summary = QLabel(self._dict_summary_text())
         self._dict_summary.setStyleSheet(_hint_style())
@@ -1177,7 +1216,25 @@ class DictationSettingsWidget(QWidget):
         dict_edit = QPushButton(_t("edit"))
         dict_edit.clicked.connect(self._open_dictionary)
         dict_row.addWidget(dict_edit)
-        ai.addRow(_t("vocab"), dict_row)
+        vocab.addRow(_t("vocab"), dict_row)
+
+        # -- (5) KI (checkable – folded away while unused) -------------
+        ki_box = QGroupBox(_t("group.ai"))
+        ki_box.setCheckable(True)
+        ki_box.setChecked(bool(self._settings.get("ai_group_open", False)))
+        ki_outer = QVBoxLayout(ki_box)
+        ki_outer.setContentsMargins(8, 4, 8, 8)
+        ki_content = QWidget()
+        ai = QFormLayout(ki_content)
+        ai.setSpacing(8)
+        ai.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self._form_ai = ai
+        ki_outer.addWidget(ki_content)
+        ki_content.setVisible(ki_box.isChecked())
+        ki_box.toggled.connect(ki_content.setVisible)
+        ki_box.toggled.connect(lambda v: self._save("ai_group_open", bool(v)))
+        layout.addWidget(ki_box)
 
         aiact_row = QHBoxLayout()
         _aiact_hint = QLabel(_t("ai.actions.hint"))
@@ -1229,11 +1286,13 @@ class DictationSettingsWidget(QWidget):
         self._ai_model_refresh.setFixedWidth(36)
         self._ai_model_refresh.setToolTip(_t("ai.model.refresh.hint"))
         self._ai_model_refresh.clicked.connect(self._refresh_ai_models)
+        self._ai_model.setMinimumWidth(240)
         self._ai_model_container = QWidget()
         model_row = QHBoxLayout(self._ai_model_container)
         model_row.setContentsMargins(0, 0, 0, 0)
-        model_row.addWidget(self._ai_model, 1)
+        model_row.addWidget(self._ai_model)
         model_row.addWidget(self._ai_model_refresh)
+        model_row.addStretch(1)          # keep dropdown+refresh together, left
         ai.addRow(_t("ai.model"), self._ai_model_container)
         self._ai_model_label = ai.labelForField(self._ai_model_container)
 
@@ -1443,8 +1502,12 @@ class DictationSettingsWidget(QWidget):
             self._form_rec.setRowVisible(widget, cloud)
         self._form_rec.setRowVisible(self._local_model, not cloud)
         self._form_rec.setRowVisible(self._local_hint, not cloud)
-        self._form_rec.setRowVisible(
-            self._install_box, not cloud and not local_backend_available())
+        # The setup box stays visible for the whole local backend – so the
+        # "Automatisch installieren" button is always reachable (also to set up
+        # GPU acceleration), not only when faster-whisper is still missing.
+        self._form_rec.setRowVisible(self._install_box, not cloud)
+        if not cloud:
+            self._update_install_note()
         self._update_cloud_rows()
 
     def _update_cloud_rows(self) -> None:
@@ -1456,6 +1519,24 @@ class DictationSettingsWidget(QWidget):
     # Local backend installation (one click, no command line)
     # ------------------------------------------------------------------
 
+    def _update_install_note(self) -> None:
+        """Note + button label reflecting what setup is still useful."""
+        if self._frozen:
+            self._install_note.setStyleSheet(_warn_style())
+            self._install_note.setText(_t("local.frozen_note"))
+            return
+        gpu = _has_nvidia_gpu()
+        if local_backend_available():
+            self._install_note.setStyleSheet(_hint_style())
+            self._install_note.setText(
+                _t("local.ready_gpu") if gpu else _t("local.ready"))
+            self._install_btn.setText(
+                _t("local.install.gpu") if gpu else _t("local.install"))
+        else:
+            self._install_note.setStyleSheet(_warn_style())
+            self._install_note.setText(_t("local.not_installed"))
+            self._install_btn.setText(_t("local.install"))
+
     def _on_install_local(self) -> None:
         self._install_btn.setEnabled(False)
         self._install_status.setStyleSheet(_hint_style())
@@ -1466,15 +1547,28 @@ class DictationSettingsWidget(QWidget):
 
         def run() -> None:
             try:
+                pkgs = ["faster-whisper"]
+                if _has_nvidia_gpu():
+                    # CUDA cuBLAS + runtime for GPU inference (CTranslate2
+                    # bundles cuDNN but not these). pip skips what's satisfied.
+                    pkgs += ["nvidia-cublas-cu12", "nvidia-cuda-runtime-cu12"]
                 result = subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "faster-whisper"],
-                    capture_output=True, text=True, timeout=900,
+                    [sys.executable, "-m", "pip", "install", *pkgs],
+                    capture_output=True, text=True, timeout=1800,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 if result.returncode != 0:
                     tail = (result.stderr or result.stdout or "").strip()
                     self._install_bridge.finished.emit(False, tail[-300:])
-                else:
-                    self._install_bridge.finished.emit(True, "")
+                    return
+                # Put the CUDA DLLs into CTranslate2's folder now, so GPU works
+                # after the next restart. Safe in this process: the worker's
+                # helper only copies files (it never imports ctranslate2).
+                try:
+                    import whisper_worker
+                    whisper_worker._ensure_cuda_libs()
+                except Exception:
+                    pass
+                self._install_bridge.finished.emit(True, "")
             except Exception as exc:
                 self._install_bridge.finished.emit(False, str(exc)[:300])
 
@@ -1486,7 +1580,7 @@ class DictationSettingsWidget(QWidget):
         if ok and local_backend_available():
             self._install_status.setText("")
             self._backend.setItemText(1, _t("backend.local"))
-            self._form_rec.setRowVisible(self._install_box, False)
+            self._update_install_note()          # box stays visible
             QMessageBox.information(self, _t("local.install"),
                                     _t("local.install.done"))
         else:
@@ -1828,9 +1922,12 @@ class DictationModule(BaseModule):
                     on_edit_ai_action=self.edit_ai_action,
                     on_geometry_changed=self._save_geometry,
                     on_history_toggle=self._save_history_visible,
+                    on_ai_toggle=self._save_ai_visible,
                     ai_actions=self.ai_actions(),
                     history_visible=bool(
                         self._settings.get("history_visible", False)),
+                    ai_visible=bool(
+                        self._settings.get("ai_panel_visible", True)),
                     geometry=self._settings.get("win_geo"),
                     history=list(self._settings.get("history", [])),
                     t=_t)
@@ -1985,6 +2082,10 @@ class DictationModule(BaseModule):
 
     def _save_history_visible(self, visible: bool) -> None:
         self._settings["history_visible"] = bool(visible)
+        self.on_settings_changed()
+
+    def _save_ai_visible(self, visible: bool) -> None:
+        self._settings["ai_panel_visible"] = bool(visible)
         self.on_settings_changed()
 
     def _insert_into_target(self, text: str) -> bool:

@@ -24,7 +24,7 @@
     {
       "id": "dictation",
       "name": "Diktieren",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "author": "WithEase",
       "icon": "🎙️",
       "description": "Sprache zu Text per Whisper – Cloud (OpenRouter/OpenAI/Groq) oder lokal auf diesem PC.",

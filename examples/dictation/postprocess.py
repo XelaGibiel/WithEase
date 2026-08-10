@@ -78,6 +78,19 @@ def strip_hallucinations(text: str) -> str:
     return " ".join(kept).strip()
 
 
+# Words that are never doubled on purpose, so an immediate "X X" is a
+# recognition glitch ("in in", "und und").  Only prepositions and conjunctions:
+# articles/pronouns are excluded because "die die dort stehen" / "der der da
+# steht" are valid relative clauses, and emphasis adverbs ("sehr sehr") double
+# legitimately too.
+_NEVER_DOUBLED = frozenset((
+    # prepositions
+    "in an auf aus bei mit nach seit von zu über unter vor durch für gegen "
+    "ohne um im am ins vom zum zur gegenüber "
+    # conjunctions
+    "und oder aber denn sondern").split())
+
+
 def strip_repetitions(text: str) -> str:
     """Collapse Whisper's repetition-loop hallucinations, where a short phrase
     is repeated over and over ("Und so. Und so. Und so.") – something a person
@@ -96,13 +109,21 @@ def strip_repetitions(text: str) -> str:
             continue                # same sentence again → skip
         kept.append(part.strip())
     text = " ".join(kept).strip()
-    # 2) word/phrase-level: a 1–4 word group immediately repeated 3+ times.
-    text = re.sub(
-        r"\b(\w+(?:\W+\w+){0,3})(?:\W+\1\b){2,}",
-        lambda m: m.group(1),
-        text,
-        flags=re.IGNORECASE,
-    )
+    # 2) word/phrase-level. Single-word loops first, so the multi-word rule
+    #    below can't mis-read "ja ja ja ja" as "ja ja" repeated.
+    # a) a single word repeated 3+ times ("ja ja ja ja" → "ja"); genuine
+    #    emphasis doubles ("sehr sehr") are deliberately kept.
+    text = re.sub(r"\b(\w+)(?:\W+\1\b){2,}", lambda m: m.group(1), text,
+                  flags=re.IGNORECASE)
+    # b) an immediate double of a never-doubled function word ("in in" → "in").
+    _SEP = r"[ \t,;:/–-]+"        # separators that stay within one sentence
+    text = re.sub(r"\b(" + "|".join(_NEVER_DOUBLED) + rf"){_SEP}\1\b",
+                  lambda m: m.group(1), text, flags=re.IGNORECASE)
+    # c) a multi-word group (2–4 words) repeated within a sentence
+    #    ("Karte Whisper Karte Whisper" → "Karte Whisper"); the separators
+    #    exclude "." "!" "?" so it never merges across two sentences.
+    text = re.sub(rf"\b(\w+(?:{_SEP}\w+){{1,3}})(?:{_SEP}\1\b)+",
+                  lambda m: m.group(1), text, flags=re.IGNORECASE)
     return re.sub(r"\s{2,}", " ", text).strip()
 
 

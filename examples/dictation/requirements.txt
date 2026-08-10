@@ -21,3 +21,11 @@ audioop-lts>=0.2.1; python_version >= "3.13"
 # left commented so the base install stays small. Enable it via the
 # "Install automatically" button under the local backend, or uncomment here.
 # faster-whisper>=1.0
+
+# Optional: NVIDIA GPU (CUDA) acceleration for the local backend. CTranslate2
+# bundles cuDNN but NOT cuBLAS / the CUDA runtime, so on Windows GPU inference
+# fails with "cublas64_12.dll is not found or cannot be loaded" until these are
+# installed. The dictation worker pre-loads them automatically once present.
+# CPU-only users do NOT need these (~0.5 GB download).
+# nvidia-cublas-cu12
+# nvidia-cuda-runtime-cu12

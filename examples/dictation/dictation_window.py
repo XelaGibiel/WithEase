@@ -422,8 +422,10 @@ class DictationWindow(QWidget):
                  on_edit_ai_action: Callable[[int], None] | None = None,
                  on_geometry_changed: Callable[[list], None] | None = None,
                  on_history_toggle: Callable[[bool], None] | None = None,
+                 on_ai_toggle: Callable[[bool], None] | None = None,
                  ai_actions: list | None = None,
                  history_visible: bool = False,
+                 ai_visible: bool = True,
                  geometry: list | None = None,
                  history: list[str] | None = None,
                  t: Callable[[str], str] | None = None) -> None:
@@ -441,7 +443,9 @@ class DictationWindow(QWidget):
         self._ai_actions = list(ai_actions or [])   # [(name, prompt), …]
         self._on_geometry_changed = on_geometry_changed or (lambda _g: None)
         self._on_history_toggle = on_history_toggle or (lambda _v: None)
+        self._on_ai_toggle = on_ai_toggle or (lambda _v: None)
         self._history_shown = bool(history_visible)
+        self._ai_shown = bool(ai_visible)
         self._restore_geometry = geometry
         self._pending_low_words: list[str] = []   # flagged-but-still-here words
         self._tr = t or (lambda s: s)
@@ -472,9 +476,25 @@ class DictationWindow(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
+        # Top bar: KI-Aktionen collapse (left) · status (centred) · Verlauf
+        # collapse (right).  Both side panels fold away the same way.
+        top = QHBoxLayout()
+        self._ai_toggle = QPushButton()
+        self._ai_toggle.setToolTip("KI-Aktionen ein-/ausklappen")
+        self._ai_toggle.clicked.connect(self._toggle_ai)
+        top.addWidget(self._ai_toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        top.addStretch(1)
         self._status = QLabel()
+        self._status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._status.setStyleSheet("font-weight: bold; font-size: larger;")
-        layout.addWidget(self._status)
+        top.addWidget(self._status, 0, Qt.AlignmentFlag.AlignCenter)
+        top.addStretch(1)
+        self._history_btn = QPushButton()
+        self._history_btn.setToolTip("Verlauf ein-/ausklappen (merkt sich den "
+                                     "Zustand). Standardmäßig eingeklappt.")
+        self._history_btn.clicked.connect(self._toggle_history)
+        top.addWidget(self._history_btn, 0, Qt.AlignmentFlag.AlignRight)
+        layout.addLayout(top)
 
         # --- middle: editor (left) + history (right) in a stable splitter ---
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -523,6 +543,7 @@ class DictationWindow(QWidget):
         mid.addWidget(split, 1)
         layout.addLayout(mid, 1)
         self._rebuild_ai_bar()
+        self._update_history_btn()
 
         # Which app "einfügen" will paste into.
         self._target_label = QLabel("")
@@ -553,13 +574,6 @@ class DictationWindow(QWidget):
         help_btn = QPushButton("❓ Befehle")
         help_btn.clicked.connect(self._show_cheatsheet)
         tools.addWidget(help_btn)
-        self._history_btn = QPushButton()
-        self._history_btn.setToolTip("Verlauf ein-/ausklappen (merkt sich den "
-                                     "Zustand). Standardmäßig eingeklappt, damit "
-                                     "man nicht versehentlich einen Eintrag lädt.")
-        self._history_btn.clicked.connect(self._toggle_history)
-        tools.addWidget(self._history_btn)
-        self._update_history_btn()
         tools.addStretch()
         self._counter = QLabel("")               # live char/word count
         tools.addWidget(self._counter)
@@ -666,25 +680,37 @@ class DictationWindow(QWidget):
             if w is not None:
                 w.deleteLater()
         self._ai_buttons = []
-        if not self._ai_actions:
-            self._ai_widget.setVisible(False)
-            return
-        self._ai_widget.setVisible(True)
-        header = QLabel("KI-Aktionen")
-        header.setStyleSheet("font-weight: bold;")
-        self._ai_bar.addWidget(header)
-        for idx, (name, prompt) in enumerate(self._ai_actions):
-            btn = QPushButton(name or "…")
-            btn.setToolTip((prompt[:300] + "\n\n") + "Rechtsklick: bearbeiten")
-            btn.clicked.connect(
-                lambda _=False, p=prompt: self._on_ai_action(p))
-            btn.setContextMenuPolicy(
-                Qt.ContextMenuPolicy.CustomContextMenu)
-            btn.customContextMenuRequested.connect(
-                lambda pos, i=idx, b=btn: self._ai_button_menu(i, b, pos))
-            self._ai_bar.addWidget(btn)
-            self._ai_buttons.append(btn)
-        self._ai_bar.addStretch()
+        if self._ai_actions:
+            header = QLabel("KI-Aktionen")
+            header.setStyleSheet("font-weight: bold;")
+            self._ai_bar.addWidget(header)
+            for idx, (name, prompt) in enumerate(self._ai_actions):
+                btn = QPushButton(name or "…")
+                btn.setToolTip((prompt[:300] + "\n\n") + "Rechtsklick: bearbeiten")
+                btn.clicked.connect(
+                    lambda _=False, p=prompt: self._on_ai_action(p))
+                btn.setContextMenuPolicy(
+                    Qt.ContextMenuPolicy.CustomContextMenu)
+                btn.customContextMenuRequested.connect(
+                    lambda pos, i=idx, b=btn: self._ai_button_menu(i, b, pos))
+                self._ai_bar.addWidget(btn)
+                self._ai_buttons.append(btn)
+            self._ai_bar.addStretch()
+        self._update_ai_panel()
+
+    def _toggle_ai(self) -> None:
+        self._ai_shown = not self._ai_shown
+        self._update_ai_panel()
+        self._on_ai_toggle(self._ai_shown)
+
+    def _update_ai_panel(self) -> None:
+        """Show the KI-Aktionen column only when it holds actions AND the user
+        hasn't folded it away; the top-left toggle appears only when there is
+        something to fold."""
+        has = bool(self._ai_actions)
+        self._ai_toggle.setVisible(has)
+        self._ai_widget.setVisible(has and self._ai_shown)
+        self._ai_toggle.setText("⚡ KI ▾" if self._ai_shown else "⚡ KI ▸")
 
     def _ai_button_menu(self, index: int, button, pos) -> None:
         from PySide6.QtWidgets import QMenu

@@ -16,7 +16,92 @@ Anything the ML libraries print goes to stderr; stdout carries only JSON.
 from __future__ import annotations
 
 import json
+import os
 import sys
+
+
+def _ctranslate2_dir() -> str | None:
+    """Locate CTranslate2's package folder without importing it."""
+    import importlib.util
+    try:
+        spec = importlib.util.find_spec("ctranslate2")
+    except Exception:
+        return None
+    for loc in getattr(spec, "submodule_search_locations", None) or []:
+        return loc
+    return None
+
+
+def _find_nvidia_bin_dirs() -> list[str]:
+    """All ``nvidia/*/bin`` directories under any known packages root.
+
+    Robust on purpose: ``importlib.util.find_spec('nvidia.*')`` turned out to be
+    environment-sensitive (it silently found nothing under some launchers), so
+    we also scan every sys.path / site-packages root directly.
+    """
+    import glob
+    import site
+    roots: list[str] = list(sys.path)
+    for getter in (getattr(site, "getsitepackages", None),
+                   getattr(site, "getusersitepackages", None)):
+        try:
+            got = getter() if getter else None
+        except Exception:
+            got = None
+        if isinstance(got, str):
+            roots.append(got)
+        elif got:
+            roots.extend(got)
+    dirs: list[str] = []
+    seen: set[str] = set()
+    for r in roots:
+        if not r or not os.path.isdir(r):
+            continue
+        for d in glob.glob(os.path.join(r, "nvidia", "*", "bin")):
+            key = os.path.normcase(d)
+            if key not in seen:
+                seen.add(key)
+                dirs.append(d)
+    return dirs
+
+
+def _ensure_cuda_libs() -> None:
+    """Make CTranslate2 find CUDA cuBLAS on Windows – permanently.
+
+    CTranslate2 bundles cuDNN but NOT cuBLAS / the CUDA runtime, so GPU
+    inference fails with "cublas64_12.dll is not found or cannot be loaded"
+    until those are available. When they come from the ``nvidia-*-cu12`` pip
+    wheels they live in ``site-packages/nvidia/*/bin`` — which CTranslate2 does
+    not search, and pointing the DLL search path at them proved unreliable
+    across launch environments. The robust fix: copy the DLLs into CTranslate2's
+    own package folder, which its ``__init__`` always loads (exactly how its
+    bundled cuDNN works). Idempotent – only copies what is missing.
+    """
+    if sys.platform != "win32":
+        return
+    ctdir = _ctranslate2_dir()
+    if not ctdir or not os.path.isdir(ctdir):
+        return
+    wanted = ("cudart64_12.dll", "cublasLt64_12.dll", "cublas64_12.dll")
+    if all(os.path.isfile(os.path.join(ctdir, n)) for n in wanted):
+        return  # already set up – fast path on every start
+    import shutil
+    src_dirs = _find_nvidia_bin_dirs()
+    for name in wanted:
+        dst = os.path.join(ctdir, name)
+        if os.path.isfile(dst):
+            continue
+        for d in src_dirs:
+            src = os.path.join(d, name)
+            if os.path.isfile(src):
+                try:
+                    shutil.copy2(src, dst)
+                except OSError:
+                    pass
+                break
+
+
+_ensure_cuda_libs()
 
 
 def _emit(obj: dict) -> None:
@@ -41,9 +126,11 @@ def _transcribe(model, wav_path: str, req: dict) -> tuple[str, list]:
     prompt = req.get("initial_prompt") or None
     hotwords = req.get("hotwords") or None
     live = bool(req.get("live"))
-    # A temperature *list* re-enables faster-whisper's fallback re-decode, which
-    # drops repetitive/low-confidence hallucinations.
-    temperature = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0] if live else 0.0
+    # A temperature *list* enables faster-whisper's fallback re-decode, which
+    # drops repetitive / low-confidence hallucinations (e.g. from background
+    # noise on a far-field mic). hallucination_silence_threshold skips silent
+    # gaps where Whisper otherwise invents text (needs word_timestamps=True).
+    temperature = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
     segments, _info = model.transcribe(
         wav_path,
         language=language,
@@ -56,6 +143,7 @@ def _transcribe(model, wav_path: str, req: dict) -> tuple[str, list]:
         no_speech_threshold=0.6,
         log_prob_threshold=-1.0,
         compression_ratio_threshold=2.4,
+        hallucination_silence_threshold=2.0,
         word_timestamps=True,
     )
     parts, low = [], []
