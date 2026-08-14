@@ -343,6 +343,37 @@ class MouseSettingsWidget(QWidget):
         self._arrow_size_label = QLabel(tr("module.mouse.highlight.arrow_size"))
         highlight_form.addRow(self._arrow_size_label, self._arrow_size)
 
+        # Permanent, lightly translucent circle around the cursor (always on)
+        self._circle_cb = QCheckBox(tr("module.mouse.highlight.circle"))
+        self._circle_cb.setChecked(
+            bool(self._settings.get("highlight_permanent_circle", False)))
+        self._circle_cb.toggled.connect(self._on_circle_toggled)
+        highlight_form.addRow("", self._circle_cb)
+
+        self._circle_radius = QSlider(Qt.Orientation.Horizontal)
+        self._circle_radius.setRange(20, 120)
+        self._circle_radius.setValue(
+            int(self._settings.get("highlight_circle_radius", 40)))
+        self._circle_radius.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._circle_radius.setTickInterval(20)
+        self._circle_radius.valueChanged.connect(
+            lambda v: self._save("highlight_circle_radius", v))
+        self._circle_radius_label = QLabel(
+            tr("module.mouse.highlight.circle_radius"))
+        highlight_form.addRow(self._circle_radius_label, self._circle_radius)
+
+        self._circle_opacity = QSlider(Qt.Orientation.Horizontal)
+        self._circle_opacity.setRange(5, 90)
+        self._circle_opacity.setValue(
+            int(self._settings.get("highlight_circle_opacity", 25)))
+        self._circle_opacity.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._circle_opacity.setTickInterval(10)
+        self._circle_opacity.valueChanged.connect(
+            lambda v: self._save("highlight_circle_opacity", v))
+        self._circle_opacity_label = QLabel(
+            tr("module.mouse.highlight.circle_opacity"))
+        highlight_form.addRow(self._circle_opacity_label, self._circle_opacity)
+
         # Preview + reset buttons
         btn_row = QVBoxLayout()
         self._highlight_preview_btn = QPushButton(
@@ -370,6 +401,7 @@ class MouseSettingsWidget(QWidget):
         self._on_arrow_toggled(self._highlight_arrow_cb.isChecked())
         self._on_persistent_arrow_toggled(
             self._arrow_persistent_cb.isChecked())
+        self._on_circle_toggled(self._circle_cb.isChecked())
 
         # ── Keyboard as mouse buttons ────────────────────────────────
         self._kbclick_sec = CollapsibleSection(
@@ -514,6 +546,12 @@ class MouseSettingsWidget(QWidget):
         self._highlight_form.setRowVisible(self._arrow_corner, enabled)
         self._highlight_form.setRowVisible(self._arrow_size, enabled)
 
+    def _on_circle_toggled(self, enabled: bool) -> None:
+        self._save("highlight_permanent_circle", enabled)
+        # Radius + opacity only make sense when the permanent circle is on.
+        self._highlight_form.setRowVisible(self._circle_radius, enabled)
+        self._highlight_form.setRowVisible(self._circle_opacity, enabled)
+
     def _preview_highlight(self) -> None:
         from withease.core.event_bus import bus
         bus.publish("mouse.highlight",
@@ -539,6 +577,9 @@ class MouseSettingsWidget(QWidget):
         self._highlight_arrow_cb.setChecked(False)        # fires toggled → saves
         self._arrow_corner.setCurrentIndex(3)             # bottom-right (default)
         self._arrow_size.setValue(48)                     # default size
+        self._circle_cb.setChecked(False)                 # fires toggled → saves
+        self._circle_radius.setValue(40)                  # default radius
+        self._circle_opacity.setValue(25)                 # default opacity
 
     def _on_module_toggled(self, enabled: bool) -> None:
         if enabled:

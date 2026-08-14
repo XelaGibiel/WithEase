@@ -111,6 +111,7 @@ class WithEaseApp:
         from withease.gui.widgets.macro_indicator import MacroModeIndicator
         from withease.gui.widgets.cursor_highlight_overlay import (
             CursorHighlightOverlay,
+            CursorSpotlightOverlay,
             DirectionArrowOverlay,
         )
         self._click_lock_indicator = ClickLockIndicator()
@@ -120,6 +121,7 @@ class WithEaseApp:
         self._macro_indicator = MacroModeIndicator()
         self._cursor_highlight = CursorHighlightOverlay()
         self._direction_arrow = DirectionArrowOverlay()
+        self._cursor_spotlight = CursorSpotlightOverlay()
         from withease.gui.widgets.actions_overlay import ActionsOverlay
         self._actions_overlay = ActionsOverlay(self)
         from withease.gui.widgets.macro_commands_overlay import (

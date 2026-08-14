@@ -381,3 +381,108 @@ class DirectionArrowOverlay(QWidget):
         painter.setBrush(QColor(r, g, b, 235))
         painter.drawPolygon(QPolygonF([tip, base_left, notch, base_right]))
         painter.end()
+
+
+class _SpotlightBridge(QObject):
+    config = Signal(bool, object, int, int)   # enabled, color, radius, opacity
+
+
+class CursorSpotlightOverlay(QWidget):
+    """A permanent, lightly translucent filled circle that follows the cursor.
+
+    Unlike the pulsing highlight (which appears briefly on a hotkey), this stays
+    visible the whole time it is enabled, so the pointer is always easy to spot
+    – a soft coloured disc under it.  Full-screen, always-on-top, click-through.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(parent=None)
+        self._enabled = False
+        self._color = _DEFAULT_COLOR
+        self._radius = 40
+        self._opacity = 25          # percent of full colour opacity
+        self._center = (0, 0)
+
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
+        # Follow the cursor smoothly (~60 fps) so the disc stays under it.
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._on_tick)
+
+        self._bridge = _SpotlightBridge()
+        self._bridge.config.connect(self._apply_config)
+        bus.subscribe("mouse.cursor_spotlight", self._on_config)
+
+    def _on_config(self, enabled: bool = False, color: object = None,
+                   radius: int = 40, opacity: int = 25, **_: object) -> None:
+        self._bridge.config.emit(bool(enabled), color, int(radius), int(opacity))
+
+    def _apply_config(self, enabled: bool, color: object, radius: int,
+                      opacity: int) -> None:
+        self._enabled = enabled
+        if isinstance(color, (tuple, list)) and len(color) == 3:
+            self._color = tuple(int(c) for c in color)
+        else:
+            self._color = _DEFAULT_COLOR
+        self._radius = radius if radius and radius > 0 else 40
+        self._opacity = max(5, min(90, opacity)) if opacity else 25
+
+        if not enabled:
+            self._timer.stop()
+            self.hide()
+            return
+
+        pos = QCursor.pos()
+        self._center = (pos.x(), pos.y())
+        screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
+        if screen is not None:
+            self.setGeometry(screen.geometry())
+        if not self.isVisible():
+            self.show()
+        _apply_click_through(self)
+        self.raise_()
+        if not self._timer.isActive():
+            self._timer.start()
+        self.update()
+
+    def _on_tick(self) -> None:
+        pos = QCursor.pos()
+        if (pos.x(), pos.y()) == self._center:
+            return
+        self._center = (pos.x(), pos.y())
+        if not self.geometry().contains(pos):
+            screen = QApplication.screenAt(pos)
+            if screen is not None:
+                self.setGeometry(screen.geometry())
+                _apply_click_through(self)
+        self.update()
+
+    def paintEvent(self, _event: object) -> None:  # type: ignore[override]
+        if not self._enabled:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cx = self._center[0] - self.x()
+        cy = self._center[1] - self.y()
+        r, g, b = self._color
+        d, x0, y0 = self._radius * 2, cx - self._radius, cy - self._radius
+        # Soft filled disc.
+        fill = int(255 * self._opacity / 100)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(r, g, b, fill))
+        painter.drawEllipse(x0, y0, d, d)
+        # A slightly stronger outline so the edge stays defined at low opacity.
+        pen = QPen(QColor(r, g, b, min(255, fill + 70)))
+        pen.setWidth(2)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(x0, y0, d, d)
+        painter.end()

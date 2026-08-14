@@ -140,6 +140,7 @@ class MouseModule(BaseModule):
 
         self._start_centering_loop()
         self._apply_direction_arrow()
+        self._apply_cursor_spotlight()
         bus.publish("module.started", module_id=self.MODULE_ID)
 
     def stop(self) -> None:
@@ -169,6 +170,7 @@ class MouseModule(BaseModule):
 
         # Hide the permanent direction arrow (self.enabled is already False).
         self._apply_direction_arrow()
+        self._apply_cursor_spotlight()
 
         bus.publish("module.stopped", module_id=self.MODULE_ID)
 
@@ -208,6 +210,7 @@ class MouseModule(BaseModule):
             )
         self._publish_indicator_config()
         self._apply_direction_arrow()
+        self._apply_cursor_spotlight()
         bus.publish("module.settings_changed", module_id=self.MODULE_ID)
 
     def _publish_indicator_config(self) -> None:
@@ -233,6 +236,19 @@ class MouseModule(BaseModule):
             corner=self._settings.get("highlight_arrow_corner", "bottom-right"),
             size=int(self._settings.get("highlight_arrow_size", 48)),
             color=self._settings.get("highlight_color", [255, 140, 0]),
+        )
+
+    def _apply_cursor_spotlight(self) -> None:
+        """Show/hide the permanent, lightly translucent circle around the cursor.
+        Active only while the module is enabled and the option is switched on."""
+        enabled = self.enabled and bool(
+            self._settings.get("highlight_permanent_circle", False))
+        bus.publish(
+            "mouse.cursor_spotlight",
+            enabled=enabled,
+            color=self._settings.get("highlight_color", [255, 140, 0]),
+            radius=int(self._settings.get("highlight_circle_radius", 40)),
+            opacity=int(self._settings.get("highlight_circle_opacity", 25)),
         )
 
     def load_settings(self, settings: dict[str, Any]) -> None:
