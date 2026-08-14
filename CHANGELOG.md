@@ -3,6 +3,23 @@
 All notable changes to WithEase are documented in this file. The format is based
 on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] - 2026-08-14
+
+### Mouse
+- **Highlight cursor** can now show a permanent, softly translucent **circle**
+  that follows the pointer, so the cursor stays easy to spot the whole time
+  (adjustable size and opacity) — separate from the existing hotkey pulse.
+
+### Dictation add-on (module 1.3.0)
+- **Local recognition now works in the packaged app (.exe) too.** One click sets
+  up a small, dedicated speech-recognition runtime next to the app (downloads a
+  slim Python plus faster-whisper, and the NVIDIA CUDA components on GPU
+  machines). The source-code version is no longer required for local dictation.
+- New option **"Pause media while dictating"** (under *Speech recognition*, right
+  below the microphone): playing music or video is paused when recording starts
+  and resumes automatically once dictation is finished — including after the
+  recognition has finished processing the audio.
+
 ## [0.4.0] - 2026-08-07
 
 ### Dictation add-on (module 1.1.0)
