@@ -187,7 +187,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local_model": "Whisper-Modell",
         "local.hint": "Beim ersten Diktat wird das Modell heruntergeladen (tiny ≈ 75 MB … large-v3 ≈ 1,5 GB). Größer = genauer, aber langsamer.",
         "local.not_installed": "Die lokale Erkennung ist auf diesem PC noch nicht installiert. Du kannst sie mit einem Klick automatisch installieren lassen – es sind keine Vorkenntnisse nötig.",
-        "local.frozen_note": "Die lokale Erkennung ist in der App-Version (.exe) nicht verfügbar – dafür nutze bitte das Cloud-Backend oben. Wer die lokale Erkennung möchte, verwendet die Quellcode-Version von WithEase.",
+        "local.frozen_note": "Die lokale Erkennung kann auf diesem PC eingerichtet werden. Beim ersten Mal lädt WithEase dafür eine kleine, eigene Spracherkennungs-Umgebung herunter (Internetverbindung nötig, einige Minuten). Ein Klick genügt – keine Vorkenntnisse erforderlich. Alles bleibt auf diesem PC.",
+        "local.setup.uv": "Installationswerkzeug wird geladen …",
+        "local.setup.python": "Spracherkennungs-Umgebung wird eingerichtet … Das kann einige Minuten dauern. Du kannst das Fenster geöffnet lassen.",
+        "local.setup.packages": "Spracherkennung wird installiert … Das kann einige Minuten dauern. Du kannst das Fenster geöffnet lassen.",
         "local.install": "Automatisch installieren",
         "local.install.gpu": "GPU-Beschleunigung einrichten",
         "local.ready": "✓ Lokale Erkennung ist installiert und einsatzbereit.",
@@ -256,6 +259,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "keep_clipboard": "Erkannten Text zusätzlich in der Zwischenablage behalten",
         "max_seconds": "Max. Aufnahmedauer",
         "max_seconds.off": "Endlos (kein Limit)",
+        "pause_media": "Medien während des Diktats pausieren",
+        "pause_media.hint": "Sobald du den Diktierknopf drückst und die Aufnahme läuft, wird die Medienwiedergabe (Musik, Video) pausiert. Sie wird automatisch fortgesetzt, wenn das Diktat fertig ist – auch erst, nachdem die Erkennung die Aufnahme berechnet hat.",
         "preload": "Spracherkennung beim Start vorladen",
         "preload.hint": "Lädt das Whisper-Modell schon beim Start, damit das erste Diktat sofort schnell ist. Erscheint nur, wenn „Mit Windows starten“ (Allgemein) aktiv ist.",
         "training": "Trainingsdaten sammeln (für spätere Stimm-Anpassung)",
@@ -328,7 +333,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "local_model": "Whisper model",
         "local.hint": "The model is downloaded on first use (tiny ≈ 75 MB … large-v3 ≈ 1.5 GB). Bigger = more accurate but slower.",
         "local.not_installed": "Local recognition is not installed on this PC yet. You can have it installed automatically with one click – no technical knowledge needed.",
-        "local.frozen_note": "Local recognition is not available in the packaged app (.exe) – please use the cloud backend above instead. If you want local recognition, use the source-code version of WithEase.",
+        "local.frozen_note": "Local recognition can be set up on this PC. The first time, WithEase downloads a small dedicated speech-recognition environment for it (internet connection required, a few minutes). One click is enough – no technical knowledge needed. Everything stays on this PC.",
+        "local.setup.uv": "Downloading the setup tool …",
+        "local.setup.python": "Setting up the speech-recognition environment … This may take a few minutes. You can keep this window open.",
+        "local.setup.packages": "Installing speech recognition … This may take a few minutes. You can keep this window open.",
         "local.install": "Install automatically",
         "local.install.gpu": "Set up GPU acceleration",
         "local.ready": "✓ Local recognition is installed and ready to use.",
@@ -397,6 +405,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "keep_clipboard": "Also keep the recognised text in the clipboard",
         "max_seconds": "Max. recording length",
         "max_seconds.off": "Endless (no limit)",
+        "pause_media": "Pause media while dictating",
+        "pause_media.hint": "As soon as you press the dictation key and recording starts, media playback (music, video) is paused. It resumes automatically once dictation is finished – only after recognition has finished processing the audio.",
         "preload": "Preload speech recognition at start",
         "preload.hint": "Loads the Whisper model at start so the first dictation is fast right away. Only shown when 'Start with Windows' (General) is on.",
         "training": "Collect training data (for later voice adaptation)",
@@ -688,6 +698,17 @@ def local_backend_available() -> bool:
     return importlib.util.find_spec("faster_whisper") is not None
 
 
+def local_recognition_ready() -> bool:
+    """Frozen-aware: can local recognition actually run on this PC right now?
+
+    Source build: identical to :func:`local_backend_available` (faster-whisper
+    importable in this interpreter).  Packaged .exe: whether the dedicated local
+    runtime has been set up (see ``local_runtime``) – the frozen interpreter can
+    never import faster-whisper itself, so it delegates to that runtime."""
+    import local_runtime
+    return local_runtime.runtime_ready()
+
+
 def _has_nvidia_gpu() -> bool:
     """True if an NVIDIA GPU with a working driver is present.
 
@@ -700,6 +721,28 @@ def _has_nvidia_gpu() -> bool:
             return True
     import shutil
     return shutil.which("nvidia-smi") is not None
+
+
+def _send_media_play_pause() -> None:
+    """Tap the system Play/Pause media key (Windows only).
+
+    This is the same ``keybd_event`` mechanism the app already uses for key
+    injection.  The key is a *toggle* handled by whatever media session is
+    active, so we send it once to pause playback while dictating and once more
+    to resume it afterwards – tracked by ``_media_paused`` so we only ever
+    resume what we paused."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        vk = 0xB3            # VK_MEDIA_PLAY_PAUSE
+        extended = 0x0001    # KEYEVENTF_EXTENDEDKEY (media keys are extended)
+        keyup = 0x0002       # KEYEVENTF_KEYUP
+        user32 = ctypes.windll.user32
+        user32.keybd_event(vk, 0, extended, 0)
+        user32.keybd_event(vk, 0, extended | keyup, 0)
+    except Exception:        # never let a missing/blocked key break dictation
+        _log.debug("could not send media play/pause key", exc_info=True)
 
 
 class WhisperProc:
@@ -719,12 +762,22 @@ class WhisperProc:
 
     def start(self, model: str, threads: int) -> bool:
         import subprocess
+
+        import local_runtime
         worker = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "whisper_worker.py")
         self._start_args = (model, threads)
+        # In the packaged .exe the frozen interpreter has no pip and cannot run
+        # a .py worker, so we use the dedicated local runtime instead.  It is
+        # None until the user sets it up ("Automatisch installieren").
+        py = local_runtime.worker_python()
+        if not py:
+            _log.error("no local Python runtime available for the whisper worker")
+            self._proc = None
+            return False
         try:
             self._proc = subprocess.Popen(
-                [sys.executable, worker, model, str(threads), "auto"],
+                [py, worker, model, str(threads), "auto"],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, text=True, bufsize=1,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -963,6 +1016,7 @@ class _TestBridge(QObject):
 
 class _InstallBridge(QObject):
     finished = Signal(bool, str)   # ok, error text
+    progress = Signal(str)         # setup stage id (frozen local-runtime setup)
 
 
 class _AiModelsBridge(QObject):
@@ -979,6 +1033,7 @@ class DictationSettingsWidget(QWidget):
         self._test_bridge.finished.connect(self._on_test_finished)
         self._install_bridge = _InstallBridge()
         self._install_bridge.finished.connect(self._on_install_finished)
+        self._install_bridge.progress.connect(self._on_install_progress)
         self._deps_bridge = _InstallBridge()
         self._deps_bridge.finished.connect(self._on_deps_install_finished)
         self._ai_models_bridge = _AiModelsBridge()
@@ -1058,7 +1113,7 @@ class DictationSettingsWidget(QWidget):
         self._backend = QComboBox()
         self._backend.addItem(_t("backend.cloud"), "cloud")
         local_label = _t("backend.local")
-        if not local_backend_available():
+        if not local_recognition_ready():
             local_label += f" ({_t('backend.local.missing')})"
         self._backend.addItem(local_label, "local")
         saved_backend = self._settings.get("backend", "cloud")
@@ -1089,6 +1144,20 @@ class DictationSettingsWidget(QWidget):
         self._device.currentIndexChanged.connect(
             lambda i: self._save("input_device", self._device.itemData(i)))
         rec.addRow(_t("device"), self._device)
+
+        # Pause playing media (music/video) while the mic is live, resume when
+        # the take is fully done – sits right under the microphone it relates to.
+        self._pause_media_cb = QCheckBox(_t("pause_media"))
+        self._pause_media_cb.setChecked(
+            bool(self._settings.get("pause_media", False)))
+        self._pause_media_cb.setToolTip(_t("pause_media.hint"))
+        self._pause_media_cb.toggled.connect(
+            lambda v: self._save("pause_media", v))
+        rec.addRow("", self._pause_media_cb)
+        _pause_media_hint = QLabel(_t("pause_media.hint"))
+        _pause_media_hint.setWordWrap(True)
+        _pause_media_hint.setStyleSheet(_hint_style())
+        rec.addRow("", _pause_media_hint)
 
         # Cloud fields
         self._provider = QComboBox()
@@ -1158,10 +1227,14 @@ class DictationSettingsWidget(QWidget):
         install_btns = QHBoxLayout()
         self._install_btn = QPushButton(_t("local.install"))
         self._install_btn.clicked.connect(self._on_install_local)
-        self._install_btn.setVisible(not self._frozen)   # pip N/A in the .exe
+        # Always available: the source build installs via pip, the packaged .exe
+        # sets up a dedicated local runtime (see local_runtime / _on_install_local).
         install_btns.addWidget(self._install_btn)
         howto_btn = QPushButton(_t("local.howto"))
         howto_btn.clicked.connect(self._on_show_howto)
+        # The manual how-to is command-line pip, which does not apply in the
+        # packaged .exe – there the automatic button is the only path.
+        howto_btn.setVisible(not self._frozen)
         install_btns.addWidget(howto_btn)
         install_btns.addStretch()
         install_layout.addLayout(install_btns)
@@ -1521,15 +1594,17 @@ class DictationSettingsWidget(QWidget):
 
     def _update_install_note(self) -> None:
         """Note + button label reflecting what setup is still useful."""
-        if self._frozen:
-            self._install_note.setStyleSheet(_warn_style())
-            self._install_note.setText(_t("local.frozen_note"))
-            return
         gpu = _has_nvidia_gpu()
-        if local_backend_available():
+        if local_recognition_ready():
             self._install_note.setStyleSheet(_hint_style())
             self._install_note.setText(
                 _t("local.ready_gpu") if gpu else _t("local.ready"))
+            self._install_btn.setText(
+                _t("local.install.gpu") if gpu else _t("local.install"))
+        elif self._frozen:
+            # In the .exe the first setup downloads a small dedicated runtime.
+            self._install_note.setStyleSheet(_hint_style())
+            self._install_note.setText(_t("local.frozen_note"))
             self._install_btn.setText(
                 _t("local.install.gpu") if gpu else _t("local.install"))
         else:
@@ -1544,6 +1619,23 @@ class DictationSettingsWidget(QWidget):
 
         import subprocess
         import sys
+
+        gpu = _has_nvidia_gpu()
+
+        # Packaged .exe: the frozen interpreter has no pip, so set up a dedicated
+        # local runtime (downloads uv + a small CPython + faster-whisper).
+        if self._frozen:
+            def run_frozen() -> None:
+                try:
+                    import local_runtime
+                    local_runtime.provision(
+                        self._install_bridge.progress.emit, with_gpu=gpu)
+                    self._install_bridge.finished.emit(True, "")
+                except Exception as exc:
+                    self._install_bridge.finished.emit(False, str(exc)[:400])
+            threading.Thread(target=run_frozen, daemon=True,
+                             name="dictation-localrt").start()
+            return
 
         def run() -> None:
             try:
@@ -1575,9 +1667,18 @@ class DictationSettingsWidget(QWidget):
         threading.Thread(target=run, daemon=True,
                          name="dictation-install").start()
 
+    def _on_install_progress(self, stage: str) -> None:
+        """Show which setup step is running (frozen local-runtime bootstrap)."""
+        key = {"uv": "local.setup.uv",
+               "python": "local.setup.python",
+               "packages": "local.setup.packages"}.get(stage)
+        if key:
+            self._install_status.setStyleSheet(_hint_style())
+            self._install_status.setText(_t(key))
+
     def _on_install_finished(self, ok: bool, err: str) -> None:
         self._install_btn.setEnabled(True)
-        if ok and local_backend_available():
+        if ok and local_recognition_ready():
             self._install_status.setText("")
             self._backend.setItemText(1, _t("backend.local"))
             self._update_install_note()          # box stays visible
@@ -1773,6 +1874,7 @@ class DictationModule(BaseModule):
         self._active_trigger = ""       # which key started it (for hold mode)
         self._state = "idle"            # idle | recording | transcribing
         self._state_lock = threading.Lock()
+        self._media_paused = False      # we paused media playback for this take
         self._audio_chunks: list[bytes] = []
         self._stream: Any = None
         self._record_started = 0.0
@@ -2187,12 +2289,35 @@ class DictationModule(BaseModule):
         return ""
 
     def _set_state(self, state: str, detail: str = "") -> None:
+        prev = self._state
         self._state = state
+        # Optionally pause media while the mic is live and resume it once we are
+        # fully done.  Media stays paused through "transcribing" (the AI is still
+        # working on the audio) and only resumes on the return to "idle".
+        if state == "recording" and prev == "idle":
+            self._pause_media_if_enabled()
+        elif state == "idle" and prev != "idle":
+            self._resume_media_if_paused()
         if state in ("recording", "transcribing") and not detail:
             detail = self._mode_label()
         bus.publish("dictation.state", state=state, detail=detail)
         if self._window is not None:
             self._window.set_state(state, detail)
+
+    def _pause_media_if_enabled(self) -> None:
+        """Pause system media playback when the option is on (once per take)."""
+        if self._media_paused or not self._settings.get("pause_media", False):
+            return
+        _send_media_play_pause()
+        self._media_paused = True
+
+    def _resume_media_if_paused(self) -> None:
+        """Resume media we paused – driven by the flag, not the current setting,
+        so turning the option off mid-take still restores playback."""
+        if not self._media_paused:
+            return
+        self._media_paused = False
+        _send_media_play_pause()
 
     def _error(self, detail: str) -> None:
         _log.error("dictation error: %s", detail)
