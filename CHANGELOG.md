@@ -10,11 +10,14 @@ on [Keep a Changelog](https://keepachangelog.com/).
   that follows the pointer, so the cursor stays easy to spot the whole time
   (adjustable size and opacity) — separate from the existing hotkey pulse.
 
-### Dictation add-on (module 1.3.0)
+### Dictation add-on (module 1.3.1)
 - **Local recognition now works in the packaged app (.exe) too.** One click sets
   up a small, dedicated speech-recognition runtime next to the app (downloads a
   slim Python plus faster-whisper, and the NVIDIA CUDA components on GPU
   machines). The source-code version is no longer required for local dictation.
+  Both the live and the normal (press-speak-release) paths now run through that
+  runtime when frozen, and the worker gets a sanitised environment so it never
+  loads the app's bundled DLLs.
 - New option **"Pause media while dictating"** (under *Speech recognition*, right
   below the microphone): playing music or video is paused when recording starts
   and resumes automatically once dictation is finished — including after the

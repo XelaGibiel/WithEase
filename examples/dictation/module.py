@@ -754,6 +754,7 @@ class WhisperProc:
         self._proc: Any = None
         self._lock = threading.Lock()      # one request at a time
         self._start_args: tuple | None = None
+        self._running_model: str | None = None   # model the live worker loaded
 
     def configure(self, model: str, threads: int) -> None:
         """Remember how to (re)start the worker without starting it now, so a
@@ -780,6 +781,7 @@ class WhisperProc:
                 [py, worker, model, str(threads), "auto"],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                env=local_runtime.clean_child_env(),
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception:
             _log.exception("could not start whisper worker")
@@ -790,6 +792,7 @@ class WhisperProc:
             _log.error("whisper worker not ready: %s", msg.get("error"))
             self.stop()
             return False
+        self._running_model = model
         return True
 
     def alive(self) -> bool:
@@ -809,20 +812,34 @@ class WhisperProc:
             except Exception:
                 continue
 
-    def transcribe(self, wav_bytes: bytes, *, language: str | None = None,
-                   hotwords: str | None = None) -> tuple[str, list]:
+    def transcribe(self, wav_bytes: bytes, *, model: str | None = None,
+                   threads: int | None = None, language: str | None = None,
+                   hotwords: str | None = None,
+                   initial_prompt: str | None = None,
+                   live: bool = True) -> tuple[str, list]:
         import tempfile
         with self._lock:
-            if not self.alive():
-                if not (self._start_args and self.start(*self._start_args)):
+            # Which model should be loaded?  Falls back to whatever configure()
+            # / a previous start remembered (the live path relies on that).
+            want_model = model if model is not None else (
+                self._start_args[0] if self._start_args else None)
+            want_threads = threads if threads is not None else (
+                self._start_args[1] if self._start_args else 4)
+            # (Re)start when the worker is down or is running a different model –
+            # the batch path may want a larger model than the live polish.
+            if not self.alive() or (
+                    want_model is not None and self._running_model != want_model):
+                if self.alive():
+                    self.stop()
+                if want_model is None or not self.start(want_model, want_threads):
                     return "", []
             f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
             f.write(wav_bytes)
             f.close()
             try:
                 req = {"wav": f.name, "language": language,
-                       "initial_prompt": None, "hotwords": hotwords,
-                       "live": True}
+                       "initial_prompt": initial_prompt, "hotwords": hotwords,
+                       "live": live}
                 self._proc.stdin.write(json.dumps(req) + "\n")
                 self._proc.stdin.flush()
                 msg = self._read_json()    # blocks until the worker responds
@@ -838,6 +855,7 @@ class WhisperProc:
 
     def stop(self) -> None:
         proc, self._proc = self._proc, None
+        self._running_model = None
         if proc is None:
             return
         try:
@@ -3355,7 +3373,38 @@ class DictationModule(BaseModule):
         except Exception:
             _log.exception("whisper worker start failed")
 
+    def _local_in_process(self) -> bool:
+        """True when faster-whisper can be imported in THIS process (source
+        build).  In the packaged .exe it cannot – there we transcribe through the
+        out-of-process local runtime instead (see _transcribe_local_via_worker)."""
+        import importlib.util
+        return importlib.util.find_spec("faster_whisper") is not None
+
+    def _transcribe_local_via_worker(self, wav_bytes: bytes, *,
+                                     live: bool = False) -> str:
+        """Local transcription for the packaged .exe: run faster-whisper in the
+        dedicated local runtime (localrt) via the isolated worker process,
+        because the frozen interpreter has no faster-whisper of its own."""
+        import local_runtime
+        if not local_runtime.runtime_ready():
+            raise RuntimeError(_t("err.no_local"))
+        model = (self._live_model_name() if live
+                 else self._settings.get("local_model", "base"))
+        threads = max(1, (os.cpu_count() or 4) // 2)
+        language = self._local_language()
+        prompt = (None if live
+                  else (self._initial_prompt() if language == "de" else None))
+        hotwords = self._hotwords() or None
+        text, low = self._whisper_proc.transcribe(
+            wav_bytes, model=model, threads=threads, language=language,
+            hotwords=hotwords, initial_prompt=prompt, live=live)
+        self._last_low_words = low
+        return self._postprocess_asr(text)
+
     def _transcribe_local(self, wav_bytes: bytes, *, live: bool = False) -> str:
+        # Packaged .exe (no in-process faster-whisper): use the local runtime.
+        if not self._local_in_process():
+            return self._transcribe_local_via_worker(wav_bytes, live=live)
         self._ensure_model_loaded(self._live_model_name() if live else None)
 
         language = self._local_language()

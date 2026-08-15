@@ -1,6 +1,6 @@
 {
   "name": "Diktieren",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "author": "WithEase",
   "description": "Sprache zu Text per Whisper – Cloud (OpenRouter/OpenAI/Groq) oder lokal auf diesem PC.",
   "entry": "module.py",

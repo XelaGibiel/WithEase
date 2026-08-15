@@ -130,7 +130,10 @@ def _transcribe(model, wav_path: str, req: dict) -> tuple[str, list]:
     # drops repetitive / low-confidence hallucinations (e.g. from background
     # noise on a far-field mic). hallucination_silence_threshold skips silent
     # gaps where Whisper otherwise invents text (needs word_timestamps=True).
-    temperature = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    # The live polish uses the list; the batch path (live=False) uses a scalar
+    # 0.0 to match the in-process batch behaviour (repetitions are cleaned up
+    # afterwards by the post-processing step instead).
+    temperature = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0] if live else 0.0
     segments, _info = model.transcribe(
         wav_path,
         language=language,

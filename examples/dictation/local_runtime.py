@@ -89,6 +89,32 @@ def worker_python() -> str | None:
     return runtime_python()
 
 
+def clean_child_env() -> dict:
+    """Environment for child processes (the Whisper worker, uv) that must NOT
+    inherit the PyInstaller bundle.
+
+    A frozen app prepends its own directory – which contains its *own* bundled
+    ``python3xx.dll`` and support DLLs – to ``PATH`` and can export
+    ``PYTHONHOME`` / ``PYTHONPATH``.  If the dedicated runtime's ``python.exe``
+    inherited those, the OS loader could pick up the app's bundled DLLs or the
+    wrong standard library instead of the runtime's own, and the worker would
+    fail to start.  Strip them so the child is fully self-contained.  In the
+    source build nothing is stripped (the environment is already correct)."""
+    env = dict(os.environ)
+    if not is_frozen():
+        return env
+    for var in ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONEXECUTABLE",
+                "__PYVENV_LAUNCHER__", "PYTHONNOUSERSITE"):
+        env.pop(var, None)
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass and env.get("PATH"):
+        mein = os.path.normcase(os.path.abspath(meipass))
+        keep = [p for p in env["PATH"].split(os.pathsep)
+                if p and os.path.normcase(os.path.abspath(p)) != mein]
+        env["PATH"] = os.pathsep.join(keep)
+    return env
+
+
 def runtime_ready() -> bool:
     """True when local recognition can actually run right now."""
     if not is_frozen():
@@ -148,7 +174,8 @@ def ensure_uv(progress: ProgressCb | None = None) -> str:
 def _run(cmd: list[str], *, timeout: int) -> None:
     """Run a bootstrap command, raising a trimmed error on failure."""
     result = subprocess.run(cmd, capture_output=True, text=True,
-                            timeout=timeout, creationflags=_NO_WINDOW)
+                            timeout=timeout, creationflags=_NO_WINDOW,
+                            env=clean_child_env())
     if result.returncode != 0:
         tail = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(tail[-400:] or f"command failed: {cmd[0]}")
