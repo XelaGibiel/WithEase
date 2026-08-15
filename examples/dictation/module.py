@@ -278,6 +278,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "chip.dictation": "Diktat",
         "chip.command": "Befehl",
         "chip.error": "Diktat-Fehler",
+        "chip.reselect": "Ziel-App-Modus",
+        "chip.reselect.hint": "Zur gewünschten App wechseln, dann Leertaste · Esc bricht ab",
         "err.no_audio_lib": "Audio-Bibliothek (sounddevice) fehlt",
         "err.mic": "Mikrofon-Fehler: {err}",
         "err.no_url": "Keine Server-URL konfiguriert",
@@ -424,6 +426,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "chip.dictation": "Dictation",
         "chip.command": "Command",
         "chip.error": "Dictation error",
+        "chip.reselect": "Target-app mode",
+        "chip.reselect.hint": "Switch to the app you want, then press Space · Esc cancels",
         "err.no_audio_lib": "Audio library (sounddevice) missing",
         "err.mic": "Microphone error: {err}",
         "err.no_url": "No server URL configured",
@@ -1057,11 +1061,14 @@ _CHIP_COLORS = {
     "recording": "#C62828",     # red
     "transcribing": "#1565C0",  # blue
     "error": "#7B3F00",         # dark orange/brown
+    "reselect": "#2E7D32",      # green – picking a target app
 }
 _CHIP_FG = "#FFFFFF"
 _CHIP_RADIUS = 6
 _CHIP_MARGIN = 12
 _CHIP_DEFAULT_H = 28
+_CHIP_SUB_GAP = 6               # gap between the chip and its hint line
+_CHIP_SUB_H = 20               # height of the hint line under the chip
 _CHIP_ERROR_MS = 3500
 _CHIP_PULSE_MS = 40
 _CHIP_PULSE_PERIOD_MS = 1100
@@ -1116,7 +1123,7 @@ class DictationIndicator(QWidget):
             self._start_pulse()
         else:
             self._stop_pulse()
-        if state in ("recording", "transcribing"):
+        if state in ("recording", "transcribing", "reselect"):
             self._update_geometry()
             self.show()
             self.update()
@@ -1161,18 +1168,46 @@ class DictationIndicator(QWidget):
         if self._state == "error":
             detail = f" – {self._detail}" if self._detail else ""
             return f"⚠ {_t('chip.error')}{detail}"
+        if self._state == "reselect":
+            return f"🎯 {_t('chip.reselect')}"
         return ""
 
-    def _chip_w(self) -> int:
+    def _subtitle(self) -> str:
+        """A second, smaller line shown *under* the chip (e.g. how to pick)."""
+        if self._state == "reselect":
+            return _t("chip.reselect.hint")
+        return ""
+
+    def _text_w(self, text: str, px: int, bold: bool = True) -> int:
         from PySide6.QtGui import QFontMetrics
         font = self.font()
-        font.setPixelSize(max(10, int(self._chip_h * 0.5)))
-        font.setBold(True)
-        return QFontMetrics(font).horizontalAdvance(self._label()) + 28
+        font.setPixelSize(px)
+        font.setBold(bold)
+        return QFontMetrics(font).horizontalAdvance(text)
+
+    def _label_px(self) -> int:
+        return max(10, int(self._chip_h * 0.5))
+
+    def _sub_px(self) -> int:
+        return max(9, int(self._chip_h * 0.46))
+
+    def _chip_w(self) -> int:
+        return self._text_w(self._label(), self._label_px()) + 28
+
+    def _content_w(self) -> int:
+        w = self._chip_w()
+        sub = self._subtitle()
+        if sub:
+            w = max(w, self._text_w(sub, self._sub_px(), bold=False) + 24)
+        return w
 
     def _update_geometry(self) -> None:
-        self.setFixedSize(self._chip_w() + 2 * _CHIP_MARGIN,
-                          self._chip_h + 2 * _CHIP_MARGIN)
+        content_w = self._content_w()
+        total_h = self._chip_h
+        if self._subtitle():
+            total_h += _CHIP_SUB_GAP + _CHIP_SUB_H
+        self.setFixedSize(content_w + 2 * _CHIP_MARGIN,
+                          total_h + 2 * _CHIP_MARGIN)
         screen = QApplication.primaryScreen()
         if not screen:
             return
@@ -1188,19 +1223,39 @@ class DictationIndicator(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setOpacity(self._pulse_opacity)
 
+        content_w = self._content_w()
+        chip_w = self._chip_w()
+        chip_x = _CHIP_MARGIN + (content_w - chip_w) // 2
+
         path = QPainterPath()
-        path.addRoundedRect(_CHIP_MARGIN, _CHIP_MARGIN, self._chip_w(),
+        path.addRoundedRect(chip_x, _CHIP_MARGIN, chip_w,
                             self._chip_h, _CHIP_RADIUS, _CHIP_RADIUS)
         p.fillPath(path, QColor(_CHIP_COLORS.get(self._state, "#444444")))
 
         p.setPen(QColor(_CHIP_FG))
         font = p.font()
-        font.setPixelSize(max(10, int(self._chip_h * 0.5)))
+        font.setPixelSize(self._label_px())
         font.setBold(True)
         p.setFont(font)
-        p.drawText(QRect(_CHIP_MARGIN, _CHIP_MARGIN, self._chip_w(),
-                         self._chip_h),
+        p.drawText(QRect(chip_x, _CHIP_MARGIN, chip_w, self._chip_h),
                    Qt.AlignmentFlag.AlignCenter, self._label())
+
+        sub = self._subtitle()
+        if sub:
+            # Its own dark, semi-transparent pill so the hint is readable over
+            # any desktop background (the widget itself is transparent).
+            sub_y = _CHIP_MARGIN + self._chip_h + _CHIP_SUB_GAP
+            sub_path = QPainterPath()
+            sub_path.addRoundedRect(_CHIP_MARGIN, sub_y, content_w, _CHIP_SUB_H,
+                                    _CHIP_RADIUS, _CHIP_RADIUS)
+            p.fillPath(sub_path, QColor(0, 0, 0, 190))
+            p.setPen(QColor(_CHIP_FG))
+            sfont = p.font()
+            sfont.setPixelSize(self._sub_px())
+            sfont.setBold(False)
+            p.setFont(sfont)
+            p.drawText(QRect(_CHIP_MARGIN, sub_y, content_w, _CHIP_SUB_H),
+                       Qt.AlignmentFlag.AlignCenter, sub)
         p.end()
 
 
@@ -2106,8 +2161,7 @@ class DictationModule(BaseModule):
         self._window_hwnd: int = 0       # our window's native handle (to exclude)
         self._target_hwnd: int | None = None   # app to paste into on "einfügen"
         self._reselecting = False        # waiting for the user to pick a target
-        self._reselect_start_fg = 0      # foreground at the start of re-selection
-        self._reselect_timer: Any = None  # QTimer polling for the chosen app
+        self._reselect_timer: Any = None  # QTimer restoring the UI after a pick
         self._error_memory: Any = None   # ErrorMemory (lazy, from settings)
 
         # Re-theme the dictation window when the app switches light<->dark while
@@ -2308,6 +2362,12 @@ class DictationModule(BaseModule):
         Skip our *own* dictation window – otherwise, once it has focus, pressing
         the key again would capture the window itself and "einfügen" would paste
         into the wrong place.  In that case we keep the last real target."""
+        # While the correction sub-window is open, a spoken correction fills its
+        # field – we are NOT choosing a paste target, so keep the current one
+        # (otherwise the correction window itself would become the target and the
+        # user would have to reselect their app afterwards).
+        if self._window is not None and self._window.is_correcting():
+            return
         try:
             import ctypes
             hwnd = ctypes.windll.user32.GetForegroundWindow()
@@ -2333,52 +2393,52 @@ class DictationModule(BaseModule):
             return ""
 
     def reselect_target(self) -> None:
-        """Wait (no time limit) until the user brings another app to the front,
-        then remember it as the paste target.  Escape cancels."""
+        """Enter target-app selection: hide our window, show a hint chip, and
+        wait for the user to switch to the wanted app and press Space (the hook
+        confirms; Escape cancels).  Called on the GUI thread (button/command)."""
         if self._reselecting:
             return
         self._reselecting = True
-        try:
-            import ctypes
-            self._reselect_start_fg = ctypes.windll.user32.GetForegroundWindow()
-        except Exception:
-            self._reselect_start_fg = 0
+        # Get our own window out of the way so it can't be picked as the target
+        # and doesn't cover the app the user wants to switch to.
         if self._window is not None:
-            self._window.set_reselecting(True)      # highlight the button
+            self._window.set_reselecting(True)
+            self._window.request_hide()
+        # A standalone chip explains the mode + that Space selects (the window is
+        # hidden, so this is the only visible cue).
+        bus.publish("dictation.state", state="reselect")
         from PySide6.QtCore import QTimer
         if self._reselect_timer is None:
             self._reselect_timer = QTimer()
-            self._reselect_timer.setInterval(250)
+            self._reselect_timer.setInterval(150)
             self._reselect_timer.timeout.connect(self._reselect_poll)
         self._reselect_timer.start()
 
-    def _reselect_poll(self) -> None:
-        # Cancelled (e.g. via Escape from the hook thread): stop + restore.
-        if not self._reselecting:
-            if self._reselect_timer is not None:
-                self._reselect_timer.stop()
-            if self._window is not None:
-                self._window.set_reselecting(False)
-                self._window.set_target(self._target_name())
-            return
+    def confirm_reselect_target(self) -> None:
+        """Called from the hook when the user presses Space: remember whatever
+        app is in front now as the paste target.  The poll then restores the UI."""
         try:
             import ctypes
             cur = ctypes.windll.user32.GetForegroundWindow()
         except Exception:
-            return
-        # Capture the first *different*, non-own window the user switches to.
-        if cur and cur != self._window_hwnd and cur != self._reselect_start_fg:
+            cur = 0
+        if cur and cur != self._window_hwnd:
             self._target_hwnd = cur
-            self._reselecting = False
-            if self._reselect_timer is not None:
-                self._reselect_timer.stop()
-            if self._window is not None:
-                self._window.set_reselecting(False)
-                self._window.set_target(self._target_name())
-                # The user picked the target app (it's now in front) – but their
-                # next step is dictating, so bring the dictation window back to
-                # the foreground instead of leaving focus on the target app.
-                self._window.request_open()
+        self._reselecting = False
+
+    def _reselect_poll(self) -> None:
+        # Runs on the GUI thread; the hook flips ``_reselecting`` to False on
+        # Space (confirm, target already captured) or Escape (cancel).
+        if self._reselecting:
+            return
+        if self._reselect_timer is not None:
+            self._reselect_timer.stop()
+        bus.publish("dictation.state", state="idle")     # hide the chip
+        if self._window is not None:
+            self._window.set_reselecting(False)
+            self._window.set_target(self._target_name())
+            # The user's next step is dictating, so bring our window back.
+            self._window.request_open()
 
     def _save_geometry(self, geom: list) -> None:
         self._settings["win_geo"] = list(geom)
@@ -2435,9 +2495,21 @@ class DictationModule(BaseModule):
         hold_mode = self._settings.get("mode", "toggle") == "hold"
 
         if is_press:
-            if vk == 0x1B and self._reselecting:
-                self._reselecting = False   # poll (GUI thread) stops + restores
-                return True
+            if self._reselecting:
+                if vk == 0x1B:              # Escape cancels (keep current target)
+                    self._reselecting = False   # poll (GUI thread) restores UI
+                    return True
+                if vk == 0x20:              # Space picks the app in front now
+                    self.confirm_reselect_target()   # poll (GUI thread) restores
+                    return True
+                # Swallow our own trigger keys so no recording starts while the
+                # user is picking a target app; let everything else pass through.
+                picking = current_combo_str(vk)
+                if picking == self._trigger or (
+                        self._command_trigger
+                        and picking == self._command_trigger):
+                    return True
+                return False
             if vk == 0x1B and self._live_active:
                 threading.Thread(target=self.stop_live, daemon=True).start()
                 return True

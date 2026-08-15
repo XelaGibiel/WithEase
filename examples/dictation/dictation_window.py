@@ -401,6 +401,7 @@ class DictationWindow(QWidget):
     _transcript_sig = Signal(str, str, list)   # (text, mode, low-conf words)
     _state_sig = Signal(str, str)              # (state, mode-label)
     _open_sig = Signal()
+    _hide_sig = Signal()                       # hide the window (thread-safe)
     _target_sig = Signal(str)                  # target app name (thread-safe)
     _partial_sig = Signal(str)                 # live provisional text
     _final_sig = Signal(str)                   # live finalised segment
@@ -629,6 +630,7 @@ class DictationWindow(QWidget):
         self._transcript_sig.connect(self._on_transcript)
         self._state_sig.connect(self._apply_state)
         self._open_sig.connect(self.open_for_dictation)
+        self._hide_sig.connect(self.hide)
         self._target_sig.connect(self._apply_target)
         self._ai_actions_sig.connect(self._apply_ai_actions)
         self._ai_busy_sig.connect(self._apply_ai_busy)
@@ -912,6 +914,18 @@ class DictationWindow(QWidget):
     def request_open(self) -> None:
         """Show the window (safe to call from a worker thread)."""
         self._open_sig.emit()
+
+    def request_hide(self) -> None:
+        """Hide the window (safe to call from a worker thread).  Used while the
+        user picks a new target app, so the dictation window is out of the way
+        and can't be captured as the target."""
+        self._hide_sig.emit()
+
+    def is_correcting(self) -> bool:
+        """True while the correction sub-window is open, so the module keeps the
+        existing paste target instead of capturing the correction window."""
+        dlg = self._correction_dialog
+        return dlg is not None and dlg.isVisible()
 
     def text(self) -> str:
         return self._edit.toPlainText()
@@ -1202,7 +1216,7 @@ class DictationWindow(QWidget):
     def set_reselecting(self, on: bool) -> None:
         """Highlight the target-app button while the user is picking an app."""
         if on:
-            self._reselect_btn.setText("🎯 … Ziel-App anklicken (Esc)")
+            self._reselect_btn.setText("🎯 … zur App wechseln + Leertaste (Esc)")
             self._reselect_btn.setStyleSheet(
                 "QPushButton { background: #e0812b; color: white;"
                 " font-weight: bold; }")

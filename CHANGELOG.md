@@ -3,6 +3,22 @@
 All notable changes to WithEase are documented in this file. The format is based
 on [Keep a Changelog](https://keepachangelog.com/).
 
+## Dictation module 1.4.0 - 2026-08-15
+
+Delivered via the in-app Module Library (no app update needed).
+
+### Target-app selection
+- Picking a new target app is now deliberate: the button (or the "Ziel-App
+  wählen" command) **hides the dictation window**, shows a **chip** that you are
+  in target-app mode, and you **switch to the app you want and press Space** to
+  select it (Esc cancels) — with the Space hint shown right under the chip.
+  Previously it silently grabbed the first window you switched to.
+
+### Fixed
+- Correcting a word via the correction window no longer hijacks the paste
+  target: while that window is open the remembered target app is kept, so you
+  don't have to reselect your app after every correction.
+
 ## [0.5.0] - 2026-08-14
 
 ### Mouse
