@@ -745,6 +745,101 @@ def _send_media_play_pause() -> None:
         _log.debug("could not send media play/pause key", exc_info=True)
 
 
+def _system_audio_playing() -> bool | None:
+    """Is the default output device *currently* playing audio?
+
+    ``True``/``False`` when it can be determined, ``None`` when it can't.  Used
+    to make the media-pause feature safe: the Play/Pause key is a toggle, so if
+    nothing is actually playing (e.g. Spotify open but paused) sending it would
+    *start* playback.  We therefore only send it when audio is really coming out.
+
+    Implemented dependency-free via the WASAPI peak meter
+    (``IAudioMeterInformation`` on the default multimedia render endpoint), so it
+    works in the packaged .exe without any extra package.  Fails open (returns
+    ``None``) on anything unexpected so the feature never breaks."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import POINTER, byref, c_float, c_void_p
+    try:
+        ole32 = ctypes.windll.ole32
+    except Exception:
+        return None
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", ctypes.c_uint32), ("Data2", ctypes.c_uint16),
+                    ("Data3", ctypes.c_uint16), ("Data4", ctypes.c_ubyte * 8)]
+
+    def guid(text: str) -> "GUID":
+        g = GUID()
+        ole32.CLSIDFromString(ctypes.c_wchar_p(text), byref(g))
+        return g
+
+    def vcall(pobj, index, argtypes, *args):
+        vtable = ctypes.cast(pobj, POINTER(c_void_p))[0]
+        func = ctypes.cast(vtable, POINTER(c_void_p))[index]
+        proto = ctypes.WINFUNCTYPE(ctypes.c_long, c_void_p, *argtypes)
+        return proto(func)(pobj, *args)
+
+    def release(pobj):
+        try:
+            vtable = ctypes.cast(pobj, POINTER(c_void_p))[0]
+            func = ctypes.cast(vtable, POINTER(c_void_p))[2]
+            ctypes.WINFUNCTYPE(ctypes.c_ulong, c_void_p)(func)(pobj)
+        except Exception:
+            pass
+
+    clsid_enum = guid("{BCDE0395-E52F-467C-8E3D-C4579291692E}")  # MMDeviceEnumerator
+    iid_enum = guid("{A95664D2-9614-4F35-A746-DE8DB63617E6}")    # IMMDeviceEnumerator
+    iid_meter = guid("{C02216F6-8C67-4B5B-9D00-D008E73E0064}")   # IAudioMeterInformation
+    CLSCTX_ALL = 23
+    eRender, eMultimedia = 0, 1
+
+    hr = ole32.CoInitializeEx(None, 0)     # MTA; S_OK=0 / S_FALSE=1 = we inited
+    inited = hr in (0, 1)
+    p_enum = c_void_p()
+    p_dev = c_void_p()
+    p_meter = c_void_p()
+    try:
+        if ole32.CoCreateInstance(byref(clsid_enum), None, CLSCTX_ALL,
+                                  byref(iid_enum), byref(p_enum)) != 0 \
+                or not p_enum:
+            return None
+        # IMMDeviceEnumerator::GetDefaultAudioEndpoint (vtable index 4)
+        if vcall(p_enum, 4, (ctypes.c_int, ctypes.c_int, POINTER(c_void_p)),
+                 eRender, eMultimedia, byref(p_dev)) != 0 or not p_dev:
+            return None
+        # IMMDevice::Activate (index 3) → IAudioMeterInformation
+        if vcall(p_dev, 3, (POINTER(GUID), ctypes.c_uint32, c_void_p,
+                            POINTER(c_void_p)),
+                 byref(iid_meter), CLSCTX_ALL, None, byref(p_meter)) != 0 \
+                or not p_meter:
+            return None
+        # IAudioMeterInformation::GetPeakValue (index 3) – sample briefly to ride
+        # over a momentary silent instant during playback.
+        best = 0.0
+        for _ in range(3):
+            peak = c_float()
+            if vcall(p_meter, 3, (POINTER(c_float),), byref(peak)) == 0:
+                best = max(best, peak.value)
+            if best > 0.0005:
+                break
+            time.sleep(0.015)
+        return best > 0.0005
+    except Exception:
+        _log.debug("system audio check failed", exc_info=True)
+        return None
+    finally:
+        for p in (p_meter, p_dev, p_enum):
+            if p:
+                release(p)
+        if inited:
+            try:
+                ole32.CoUninitialize()
+            except Exception:
+                pass
+
+
 class WhisperProc:
     """Runs the faster-whisper worker in a *separate process* and talks to it
     over line-based JSON.  Keeping Whisper's native libraries out of the main
@@ -2323,8 +2418,15 @@ class DictationModule(BaseModule):
             self._window.set_state(state, detail)
 
     def _pause_media_if_enabled(self) -> None:
-        """Pause system media playback when the option is on (once per take)."""
+        """Pause system media playback when the option is on (once per take).
+
+        Only acts when audio is actually playing: the Play/Pause key is a toggle,
+        so sending it while nothing plays (e.g. a paused Spotify) would *start*
+        playback.  When we can't tell (returns None) we fall back to sending it,
+        so the feature still works on setups where the check is unavailable."""
         if self._media_paused or not self._settings.get("pause_media", False):
+            return
+        if _system_audio_playing() is False:   # definitely nothing playing
             return
         _send_media_play_pause()
         self._media_paused = True
