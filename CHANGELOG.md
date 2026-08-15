@@ -10,7 +10,7 @@ on [Keep a Changelog](https://keepachangelog.com/).
   that follows the pointer, so the cursor stays easy to spot the whole time
   (adjustable size and opacity) — separate from the existing hotkey pulse.
 
-### Dictation add-on (module 1.3.2)
+### Dictation add-on (module 1.3.3)
 - **Local recognition now works in the packaged app (.exe) too.** One click sets
   up a small, dedicated speech-recognition runtime next to the app (downloads a
   slim Python plus faster-whisper, and the NVIDIA CUDA components on GPU
@@ -19,11 +19,13 @@ on [Keep a Changelog](https://keepachangelog.com/).
   runtime when frozen, and the worker gets a sanitised environment so it never
   loads the app's bundled DLLs.
 - New option **"Pause media while dictating"** (under *Speech recognition*, right
-  below the microphone): playing music or video is paused when recording starts
-  and resumes automatically once dictation is finished — including after the
-  recognition has finished processing the audio. It only acts when audio is
-  actually playing (checked via the WASAPI peak meter), so an open-but-paused
-  player is never accidentally started.
+  below the microphone): every media player that is currently playing (Spotify,
+  YouTube, …) is paused when recording starts and resumed automatically once
+  dictation is finished — including after the recognition has finished
+  processing the audio. Uses the Windows media session API (SMTC), so multiple
+  players are all paused and exactly those are resumed; a paused player is never
+  accidentally started. Falls back to the media Play/Pause key (guarded by a
+  WASAPI "is audio playing" check) where SMTC is unavailable.
 
 ## [0.4.0] - 2026-08-07
 

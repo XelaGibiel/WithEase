@@ -840,6 +840,91 @@ def _system_audio_playing() -> bool | None:
                 pass
 
 
+# --- Media control via SMTC (System Media Transport Controls) --------------
+# The media Play/Pause key only reaches ONE session (the system's "current"
+# one), so with several players open (Spotify + YouTube) it can't pause them
+# all.  Windows' SMTC API can enumerate every media session, pause exactly the
+# ones that are playing, and later resume exactly those.  We reach it through a
+# short PowerShell/WinRT snippet – dependency-free and working in the .exe.
+
+def _powershell_exe() -> str:
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    return os.path.join(root, "System32", "WindowsPowerShell", "v1.0",
+                        "powershell.exe")
+
+
+_SMTC_HEADER = r"""$ErrorActionPreference='Stop'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$g=([System.WindowsRuntimeSystemExtensions].GetMethods()|?{$_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'})[0]
+function Await($o,$t){$m=$g.MakeGenericMethod($t);$k=$m.Invoke($null,@($o));$k.Wait(-1)|Out-Null;$k.Result}
+[Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager,Windows.Media.Control,ContentType=WindowsRuntime]|Out-Null
+$mgr=Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
+"""
+
+# Pause every session whose PlaybackStatus is Playing (enum value 4) and print
+# the app id of each one paused (one per line).
+_SMTC_PAUSE = _SMTC_HEADER + r"""foreach($s in $mgr.GetSessions()){
+  if([int]$s.GetPlaybackInfo().PlaybackStatus -eq 4){
+    try{ Await ($s.TryPauseAsync()) ([bool])|Out-Null; Write-Output $s.SourceAppUserModelId }catch{}
+  }
+}
+"""
+
+# Resume exactly the app ids passed in via the environment (newline-separated).
+_SMTC_PLAY = _SMTC_HEADER + r"""$want=$env:WITHEASE_RESUME_IDS -split "`n" | ?{ $_ -ne '' }
+foreach($s in $mgr.GetSessions()){
+  if($want -contains $s.SourceAppUserModelId){
+    try{ Await ($s.TryPlayAsync()) ([bool])|Out-Null }catch{}
+  }
+}
+"""
+
+
+def _run_powershell(script: str, extra_env: dict | None = None,
+                    timeout: int = 20) -> str | None:
+    """Run a PowerShell snippet hidden; return stdout, or None on any failure."""
+    if sys.platform != "win32":
+        return None
+    import subprocess
+    try:
+        import local_runtime
+        env = local_runtime.clean_child_env()   # never inherit bundled DLLs
+    except Exception:
+        env = dict(os.environ)
+    if extra_env:
+        env.update(extra_env)
+    try:
+        result = subprocess.run(
+            [_powershell_exe(), "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-Command", script],
+            capture_output=True, text=True, timeout=timeout, env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        _log.debug("powershell invocation failed", exc_info=True)
+        return None
+    if result.returncode != 0:
+        _log.debug("powershell rc=%s: %s", result.returncode,
+                   (result.stderr or "")[-200:])
+        return None
+    return result.stdout
+
+
+def _smtc_pause_playing() -> list[str] | None:
+    """Pause every currently-playing media session.  Returns the list of app ids
+    paused (possibly empty) or ``None`` if SMTC was unavailable (→ fall back)."""
+    out = _run_powershell(_SMTC_PAUSE)
+    if out is None:
+        return None
+    return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+
+def _smtc_play_apps(apps: list[str]) -> None:
+    """Resume exactly the given media sessions."""
+    if not apps:
+        return
+    _run_powershell(_SMTC_PLAY, extra_env={"WITHEASE_RESUME_IDS": "\n".join(apps)})
+
+
 class WhisperProc:
     """Runs the faster-whisper worker in a *separate process* and talks to it
     over line-based JSON.  Keeping Whisper's native libraries out of the main
@@ -1988,6 +2073,10 @@ class DictationModule(BaseModule):
         self._state = "idle"            # idle | recording | transcribing
         self._state_lock = threading.Lock()
         self._media_paused = False      # we paused media playback for this take
+        self._media_lock = threading.Lock()
+        self._media_paused_apps: list[str] = []   # SMTC app ids we paused
+        self._media_key_active = False            # fallback media-key was sent
+        self._media_pause_thread: threading.Thread | None = None
         self._audio_chunks: list[bytes] = []
         self._stream: Any = None
         self._record_started = 0.0
@@ -2418,26 +2507,64 @@ class DictationModule(BaseModule):
             self._window.set_state(state, detail)
 
     def _pause_media_if_enabled(self) -> None:
-        """Pause system media playback when the option is on (once per take).
+        """Pause every *currently playing* media session while dictating.
 
-        Only acts when audio is actually playing: the Play/Pause key is a toggle,
-        so sending it while nothing plays (e.g. a paused Spotify) would *start*
-        playback.  When we can't tell (returns None) we fall back to sending it,
-        so the feature still works on setups where the check is unavailable."""
+        Uses SMTC so several players (Spotify + YouTube …) are all paused, and
+        remembers exactly which ones so only those are resumed.  Runs in a
+        background thread so it never delays the start of recording.  If SMTC is
+        unavailable it falls back to the media Play/Pause key, and only when
+        audio is actually playing (so a paused player is never toggled on)."""
         if self._media_paused or not self._settings.get("pause_media", False):
             return
-        if _system_audio_playing() is False:   # definitely nothing playing
-            return
-        _send_media_play_pause()
         self._media_paused = True
+        with self._media_lock:
+            self._media_paused_apps = []
+            self._media_key_active = False
+
+        def work() -> None:
+            apps = _smtc_pause_playing()
+            if apps is None:                       # SMTC unavailable → fallback
+                if _system_audio_playing() is not False:
+                    _send_media_play_pause()
+                    with self._media_lock:
+                        self._media_key_active = True
+            else:
+                with self._media_lock:
+                    self._media_paused_apps = apps
+
+        t = threading.Thread(target=work, daemon=True,
+                             name="dictation-media-pause")
+        with self._media_lock:
+            self._media_pause_thread = t
+        t.start()
 
     def _resume_media_if_paused(self) -> None:
-        """Resume media we paused – driven by the flag, not the current setting,
-        so turning the option off mid-take still restores playback."""
+        """Resume exactly the players we paused (or undo the fallback key).
+
+        Driven by our own state, not the current setting, so turning the option
+        off mid-take still restores playback.  Waits for the pause to finish
+        first, so a very short dictation can't resume before we know what to."""
         if not self._media_paused:
             return
         self._media_paused = False
-        _send_media_play_pause()
+        with self._media_lock:
+            pause_thread = self._media_pause_thread
+
+        def work() -> None:
+            if pause_thread is not None:
+                pause_thread.join(timeout=8)
+            with self._media_lock:
+                apps = list(self._media_paused_apps)
+                self._media_paused_apps = []
+                key = self._media_key_active
+                self._media_key_active = False
+            if apps:
+                _smtc_play_apps(apps)
+            if key:
+                _send_media_play_pause()
+
+        threading.Thread(target=work, daemon=True,
+                         name="dictation-media-resume").start()
 
     def _error(self, detail: str) -> None:
         _log.error("dictation error: %s", detail)
