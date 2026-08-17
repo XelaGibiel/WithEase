@@ -3,6 +3,21 @@
 All notable changes to WithEase are documented in this file. The format is based
 on [Keep a Changelog](https://keepachangelog.com/).
 
+## Dictation module 1.5.0 - 2026-08-16
+
+Delivered via the in-app Module Library (no app update needed).
+
+### Hallucination filter
+- New **"Hallucination filter"** setting (Off / Normal / Strong) under the
+  advanced dictation options, for the text Whisper sometimes invents on the
+  silence at the end of a clip. The confidence/non-speech segment drop that
+  removes it now runs on the **normal** (press-speak-release) path too — it
+  previously ran only during live streaming, which is why end-of-clip
+  hallucinations still slipped through. **Normal** (default) is conservative
+  and only drops near-certain junk; **Strong** filters more aggressively and
+  also scrutinises the very last segment; **Off** disables the check. Applies to
+  local recognition in both the source app and the packaged .exe.
+
 ## Dictation module 1.4.0 - 2026-08-15
 
 Delivered via the in-app Module Library (no app update needed).

@@ -121,11 +121,30 @@ def _pick_device(device: str) -> tuple[str, str]:
     return "cpu", "int8"
 
 
+def _seg_is_hallucination(no_speech_prob: float, avg_logprob: float,
+                          is_last: bool, params: dict) -> bool:
+    """Mirror of the module's segment-drop rule (kept in sync), so the batch
+    path in the .exe filters trailing hallucinations just like the source app."""
+    if not params.get("drop"):
+        return False
+    ns, lp = params.get("ns", 0.6), params.get("lp", -1.0)
+    if params.get("combine") == "or":
+        hit = no_speech_prob > ns or avg_logprob < lp
+    else:
+        hit = no_speech_prob > ns and avg_logprob < lp
+    if not hit and is_last and no_speech_prob > params.get("trail_ns", 2.0):
+        hit = True
+    return hit
+
+
 def _transcribe(model, wav_path: str, req: dict) -> tuple[str, list]:
     language = req.get("language") or None
     prompt = req.get("initial_prompt") or None
     hotwords = req.get("hotwords") or None
     live = bool(req.get("live"))
+    # Batch path passes an explicit hallucination-filter config; live keeps the
+    # worker's own defaults.
+    hall = req.get("hall") if isinstance(req.get("hall"), dict) else None
     # A temperature *list* enables faster-whisper's fallback re-decode, which
     # drops repetitive / low-confidence hallucinations (e.g. from background
     # noise on a far-field mic). hallucination_silence_threshold skips silent
@@ -134,6 +153,9 @@ def _transcribe(model, wav_path: str, req: dict) -> tuple[str, list]:
     # 0.0 to match the in-process batch behaviour (repetitions are cleaned up
     # afterwards by the post-processing step instead).
     temperature = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0] if live else 0.0
+    # Live keeps the worker's default silence guard; batch takes it from the
+    # passed config (None disables it when the filter is set to "off").
+    hall_sil = 2.0 if live else (hall.get("hall_sil") if hall else 2.0)
     segments, _info = model.transcribe(
         wav_path,
         language=language,
@@ -146,14 +168,20 @@ def _transcribe(model, wav_path: str, req: dict) -> tuple[str, list]:
         no_speech_threshold=0.6,
         log_prob_threshold=-1.0,
         compression_ratio_threshold=2.4,
-        hallucination_silence_threshold=2.0,
+        hallucination_silence_threshold=hall_sil,
         word_timestamps=True,
     )
+    seg_list = list(segments)       # iterating drives the actual inference
     parts, low = [], []
-    for seg in segments:            # iterating drives the actual inference
-        if live and getattr(seg, "no_speech_prob", 0.0) > 0.6 \
-                and getattr(seg, "avg_logprob", 0.0) < -1.0:
-            continue                # Whisper itself flags this as a hallucination
+    for idx, seg in enumerate(seg_list):
+        ns = getattr(seg, "no_speech_prob", 0.0)
+        lp = getattr(seg, "avg_logprob", 0.0)
+        is_last = idx == len(seg_list) - 1
+        if live:
+            if ns > 0.6 and lp < -1.0:
+                continue            # Whisper itself flags this as a hallucination
+        elif hall is not None and _seg_is_hallucination(ns, lp, is_last, hall):
+            continue
         parts.append(seg.text.strip())
         for w in (getattr(seg, "words", None) or []):
             if getattr(w, "probability", 1.0) < 0.55:

@@ -259,6 +259,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "keep_clipboard": "Erkannten Text zusätzlich in der Zwischenablage behalten",
         "max_seconds": "Max. Aufnahmedauer",
         "max_seconds.off": "Endlos (kein Limit)",
+        "hallucination": "Halluzinationen filtern",
+        "hallucination.hint": "Whisper erfindet am Ende einer Aufnahme manchmal Text, der gar nicht gesprochen wurde. „Normal“ entfernt solche eindeutig erfundenen Stellen. „Stark“ filtert aggressiver (auch den letzten Satz) – falls am Ende noch etwas übrig bleibt; kann in seltenen Fällen ein leise gesprochenes Wort verschlucken. „Aus“ schaltet die Prüfung ab.",
+        "hallucination.off": "Aus",
+        "hallucination.normal": "Normal (empfohlen)",
+        "hallucination.strong": "Stark",
         "pause_media": "Medien während des Diktats pausieren",
         "pause_media.hint": "Sobald du den Diktierknopf drückst und die Aufnahme läuft, wird die Medienwiedergabe (Musik, Video) pausiert. Sie wird automatisch fortgesetzt, wenn das Diktat fertig ist – auch erst, nachdem die Erkennung die Aufnahme berechnet hat.",
         "preload": "Spracherkennung beim Start vorladen",
@@ -407,6 +412,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "keep_clipboard": "Also keep the recognised text in the clipboard",
         "max_seconds": "Max. recording length",
         "max_seconds.off": "Endless (no limit)",
+        "hallucination": "Hallucination filter",
+        "hallucination.hint": "Whisper sometimes invents text on the silence at the end of a recording. \"Normal\" removes such clearly invented bits. \"Strong\" filters more aggressively (including the last sentence) – if something still slips through; in rare cases it may swallow a very quietly spoken word. \"Off\" disables the check.",
+        "hallucination.off": "Off",
+        "hallucination.normal": "Normal (recommended)",
+        "hallucination.strong": "Strong",
         "pause_media": "Pause media while dictating",
         "pause_media.hint": "As soon as you press the dictation key and recording starts, media playback (music, video) is paused. It resumes automatically once dictation is finished – only after recognition has finished processing the audio.",
         "preload": "Preload speech recognition at start",
@@ -929,6 +939,43 @@ def _smtc_play_apps(apps: list[str]) -> None:
     _run_powershell(_SMTC_PLAY, extra_env={"WITHEASE_RESUME_IDS": "\n".join(apps)})
 
 
+def _hallucination_params(level: str) -> dict:
+    """Segment-filter + decode settings for the end-of-dictation hallucination
+    filter.  ``level`` is 'off' | 'normal' | 'strong'.
+
+    Whisper tends to invent text on the trailing silence of a clip.  The most
+    reliable cure is to drop segments it itself flags as most-likely non-speech
+    (high ``no_speech_prob``) and/or low-confidence (very negative
+    ``avg_logprob``), plus its own ``hallucination_silence_threshold`` at decode
+    time.  'normal' is deliberately conservative (both conditions must hold, so
+    only near-certain junk is dropped); 'strong' is more aggressive and also
+    scrutinises the very last segment (the classic trailing hallucination)."""
+    if level == "off":
+        return {"drop": False, "hall_sil": None}
+    if level == "strong":
+        return {"drop": True, "ns": 0.5, "lp": -0.9, "combine": "or",
+                "trail_ns": 0.4, "hall_sil": 1.0}
+    return {"drop": True, "ns": 0.6, "lp": -1.0, "combine": "and",
+            "trail_ns": 2.0, "hall_sil": 2.0}   # normal (default)
+
+
+def _seg_is_hallucination(no_speech_prob: float, avg_logprob: float,
+                          is_last: bool, params: dict) -> bool:
+    """Whether one Whisper segment should be dropped as a likely hallucination,
+    per the ``_hallucination_params`` settings.  Self-contained so the worker
+    process can use the same rule."""
+    if not params.get("drop"):
+        return False
+    ns, lp = params.get("ns", 0.6), params.get("lp", -1.0)
+    if params.get("combine") == "or":
+        hit = no_speech_prob > ns or avg_logprob < lp
+    else:
+        hit = no_speech_prob > ns and avg_logprob < lp
+    if not hit and is_last and no_speech_prob > params.get("trail_ns", 2.0):
+        hit = True     # the trailing segment on silence – the usual offender
+    return hit
+
+
 class WhisperProc:
     """Runs the faster-whisper worker in a *separate process* and talks to it
     over line-based JSON.  Keeping Whisper's native libraries out of the main
@@ -1000,7 +1047,7 @@ class WhisperProc:
                    threads: int | None = None, language: str | None = None,
                    hotwords: str | None = None,
                    initial_prompt: str | None = None,
-                   live: bool = True) -> tuple[str, list]:
+                   live: bool = True, hall: dict | None = None) -> tuple[str, list]:
         import tempfile
         with self._lock:
             # Which model should be loaded?  Falls back to whatever configure()
@@ -1023,7 +1070,7 @@ class WhisperProc:
             try:
                 req = {"wav": f.name, "language": language,
                        "initial_prompt": initial_prompt, "hotwords": hotwords,
-                       "live": live}
+                       "live": live, "hall": hall}
                 self._proc.stdin.write(json.dumps(req) + "\n")
                 self._proc.stdin.flush()
                 msg = self._read_json()    # blocks until the worker responds
@@ -1652,6 +1699,21 @@ class DictationSettingsWidget(QWidget):
         self._max_seconds.valueChanged.connect(
             lambda v: self._save("max_seconds", v))
         adv.addRow(_t("max_seconds"), self._max_seconds)
+
+        self._hall_filter = QComboBox()
+        for level in ("off", "normal", "strong"):
+            self._hall_filter.addItem(_t(f"hallucination.{level}"), level)
+        saved_hall = self._settings.get("hallucination_filter", "normal")
+        hi = self._hall_filter.findData(saved_hall)
+        self._hall_filter.setCurrentIndex(hi if hi >= 0 else 1)
+        self._hall_filter.currentIndexChanged.connect(
+            lambda i: self._save("hallucination_filter",
+                                 self._hall_filter.itemData(i)))
+        adv.addRow(_t("hallucination"), self._hall_filter)
+        _hall_hint = QLabel(_t("hallucination.hint"))
+        _hall_hint.setWordWrap(True)
+        _hall_hint.setStyleSheet(_hint_style())
+        adv.addRow("", _hall_hint)
 
         self._preload_cb = QCheckBox(_t("preload"))
         self._preload_cb.setChecked(
@@ -3696,9 +3758,11 @@ class DictationModule(BaseModule):
         prompt = (None if live
                   else (self._initial_prompt() if language == "de" else None))
         hotwords = self._hotwords() or None
+        hall = _hallucination_params(
+            self._settings.get("hallucination_filter", "normal"))
         text, low = self._whisper_proc.transcribe(
             wav_bytes, model=model, threads=threads, language=language,
-            hotwords=hotwords, initial_prompt=prompt, live=live)
+            hotwords=hotwords, initial_prompt=prompt, live=live, hall=hall)
         self._last_low_words = low
         return self._postprocess_asr(text)
 
@@ -3722,6 +3786,11 @@ class DictationModule(BaseModule):
         # Native ASR must never run concurrently (see _asr_lock): a second
         # decode – or a live Vosk chunk – running at the same time crashes the
         # whole process.  Serialise every Whisper decode here.
+        params = _hallucination_params(
+            self._settings.get("hallucination_filter", "normal"))
+        # hallucination_silence_threshold skips silent gaps where Whisper invents
+        # text; only used for the batch path (the live polish keeps its own).
+        hall_sil = None if live else params.get("hall_sil")
         with self._asr_lock:
             segments, _info = self._local_model.transcribe(
                 io.BytesIO(wav_bytes),
@@ -3736,14 +3805,21 @@ class DictationModule(BaseModule):
                 no_speech_threshold=0.6,
                 log_prob_threshold=-1.0,
                 compression_ratio_threshold=2.4,
+                hallucination_silence_threshold=hall_sil,
                 word_timestamps=True,   # per-word probs → confidence heatmap
             )
+            seg_list = list(segments)   # iterating drives the actual inference
             parts, low = [], []
-            for seg in segments:        # iterating drives the actual inference
-                # On the live path, drop segments Whisper itself flags as most
-                # likely non-speech + low-confidence – the usual hallucinations.
-                if live and getattr(seg, "no_speech_prob", 0.0) > 0.6 \
-                        and getattr(seg, "avg_logprob", 0.0) < -1.0:
+            for idx, seg in enumerate(seg_list):
+                ns = getattr(seg, "no_speech_prob", 0.0)
+                lp = getattr(seg, "avg_logprob", 0.0)
+                is_last = idx == len(seg_list) - 1
+                # Live keeps its own conservative filter; batch uses the
+                # user-set hallucination filter (also on the trailing segment).
+                if live:
+                    if ns > 0.6 and lp < -1.0:
+                        continue
+                elif _seg_is_hallucination(ns, lp, is_last, params):
                     continue
                 parts.append(seg.text.strip())
                 for w in (getattr(seg, "words", None) or []):
