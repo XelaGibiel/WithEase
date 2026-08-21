@@ -15,7 +15,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install ruff
+      # Pinned so a newer ruff picking up new lint rules can't turn CI red out
+      # of nowhere; keep in sync with the dev environment.
+      - run: pip install ruff==0.15.20
       - run: ruff check src/
 
   test:
