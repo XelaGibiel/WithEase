@@ -887,7 +887,7 @@ class _ResizeStrip(QWidget):
         self.setToolTip("Ziehen, um die Liste zu vergrößern")
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        from PySide6.QtGui import QPainter, QColor
+        from PySide6.QtGui import QPainter
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         col = self.palette().color(self.foregroundRole())
