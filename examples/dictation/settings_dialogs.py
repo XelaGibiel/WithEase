@@ -517,6 +517,11 @@ class AiActionsDialog(QDialog):
         body = QHBoxLayout()
         left = QVBoxLayout()
         self._list = QListWidget()
+        # Match the dictation-history list style (rounded card, alternating
+        # rows, divider between entries, accent selection instead of the raw
+        # orange highlight) via the shared #dictHistory QSS in theme.py.
+        self._list.setObjectName("dictHistory")
+        self._list.setAlternatingRowColors(True)
         self._list.currentRowChanged.connect(self._select)
         left.addWidget(self._list, 1)
         lbtn = QHBoxLayout()

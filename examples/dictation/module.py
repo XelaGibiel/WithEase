@@ -91,6 +91,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QToolButton,
     QVBoxLayout,
@@ -148,7 +149,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "group.output": "Textausgabe",
         "group.vocab_ai": "Wörterbuch & KI",
         "group.vocab": "Wörterbuch",
-        "group.ai": "KI (zum Ausklappen anhaken)",
+        "group.ai": "▸ KI",
+        "group.ai.open": "▾ KI",
         "group.advanced": "▸ Erweitert",
         "group.advanced.open": "▾ Erweitert",
         "action": "Diktat starten/stoppen",
@@ -208,6 +210,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "deps.install.failed": "Die Installation hat leider nicht geklappt: {err}\nBitte versuche es erneut oder nutze die Anleitung.",
         "deps.howto.text": "So installierst du die fehlenden Komponenten von Hand:\n\n1. Öffne die Eingabeaufforderung (Windows-Taste drücken, „cmd“ eintippen, Enter).\n2. Tippe ein:  pip install {pkgs}\n3. Drücke Enter und warte, bis die Installation fertig ist.\n4. Starte WithEase neu.\n\nTipp: Der Knopf „Automatisch installieren“ erledigt genau diese Schritte für dich.",
         "language": "Sprache",
+        "chip_size": "Chip-Größe",
+        "chip_size.hint": "Größe des Status-Chips oben am Bildschirm "
+                          "(Aufnahme-Anzeige und Ziel-App-Hinweis).",
+        "chip.small": "Klein",
+        "chip.medium": "Standard",
+        "chip.large": "Groß",
+        "chip.xlarge": "Sehr groß",
         "lang.auto": "Automatisch erkennen",
         "glossary": "Eigene Wörter",
         "glossary.hint": "Namen/Fachbegriffe, die Whisper besser erkennen soll (z. B. „Leibig“, „WithEase“, „Diktierfenster“).",
@@ -300,7 +309,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "group.output": "Text output",
         "group.vocab_ai": "Dictionary & AI",
         "group.vocab": "Dictionary",
-        "group.ai": "AI (tick to expand)",
+        "group.ai": "▸ AI",
+        "group.ai.open": "▾ AI",
         "group.advanced": "▸ Advanced",
         "group.advanced.open": "▾ Advanced",
         "deps_missing": "⚠ This add-on is missing components. To enable it, run in the program folder:  pip install sounddevice requests  (for local recognition also: faster-whisper)",
@@ -361,6 +371,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "deps.install.failed": "The installation did not work: {err}\nPlease try again or use the instructions.",
         "deps.howto.text": "How to install the missing components manually:\n\n1. Open the command prompt (press the Windows key, type \"cmd\", press Enter).\n2. Type:  pip install {pkgs}\n3. Press Enter and wait until the installation finishes.\n4. Restart WithEase.\n\nTip: the \"Install automatically\" button does exactly these steps for you.",
         "language": "Language",
+        "chip_size": "Chip size",
+        "chip_size.hint": "Size of the status chip at the top of the screen "
+                          "(recording indicator and target-app hint).",
+        "chip.small": "Small",
+        "chip.medium": "Standard",
+        "chip.large": "Large",
+        "chip.xlarge": "Very large",
         "lang.auto": "Detect automatically",
         "glossary": "Custom words",
         "glossary.hint": "Names/terms Whisper should recognise better (e.g. \"Leibig\", \"WithEase\").",
@@ -480,6 +497,26 @@ def _hint_style() -> str:
     return "color: palette(windowText); font-size: smaller;"
 
 
+class _HintLabel(QLabel):
+    """A word-wrapped hint that fills from the field column to the right edge
+    and whose height tracks the *actual* wrapped text.
+
+    A plain QLabel reports its height for a narrow „preferred" width, so a form
+    over-allocates it and leaves a big empty gap below the text (the uneven
+    spacing).  Pinning the height to heightForWidth(currentWidth) removes it."""
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self.setWordWrap(True)
+        self.setStyleSheet(_hint_style())
+        self.setSizePolicy(QSizePolicy.Policy.MinimumExpanding,
+                           QSizePolicy.Policy.Minimum)
+
+    def resizeEvent(self, event: object) -> None:  # type: ignore[override]
+        super().resizeEvent(event)      # type: ignore[arg-type]
+        self.setFixedHeight(self.heightForWidth(self.width()))
+
+
 def _warn_style() -> str:
     return "color: #D9534F; font-size: smaller;"   # readable on light + dark
 
@@ -490,7 +527,13 @@ def _title_style() -> str:
 
 class _Collapsible(QWidget):
     """A titled section that shows/hides its content on click – used to tuck
-    rarely-needed expert options away so the page stays calm by default."""
+    rarely-needed expert options away so the page stays calm by default.
+
+    The header is a chevron button (▸ closed / ▾ open), not a checkbox, so it
+    never reads as a feature toggle and the "expand" hint disappears once it is
+    open."""
+
+    toggled = Signal(bool)
 
     def __init__(self, title_closed: str, title_open: str,
                  parent: QWidget | None = None) -> None:
@@ -516,6 +559,12 @@ class _Collapsible(QWidget):
     def _on_toggled(self, on: bool) -> None:
         self._btn.setText(self._title_open if on else self._title_closed)
         self._content.setVisible(on)
+        self.toggled.emit(on)
+
+    def set_open(self, on: bool) -> None:
+        """Open/close the section programmatically (e.g. to restore a saved
+        state).  Emits ``toggled`` like a user click."""
+        self._btn.setChecked(on)
 
     def content(self) -> QWidget:
         return self._content
@@ -951,12 +1000,15 @@ def _hallucination_params(level: str) -> dict:
     only near-certain junk is dropped); 'strong' is more aggressive and also
     scrutinises the very last segment (the classic trailing hallucination)."""
     if level == "off":
-        return {"drop": False, "hall_sil": None}
+        return {"drop": False, "hall_sil": None,
+                "word_prob": None, "word_gap": None}
     if level == "strong":
         return {"drop": True, "ns": 0.5, "lp": -0.9, "combine": "or",
-                "trail_ns": 0.4, "hall_sil": 1.0}
-    return {"drop": True, "ns": 0.6, "lp": -1.0, "combine": "and",
-            "trail_ns": 2.0, "hall_sil": 2.0}   # normal (default)
+                "trail_ns": 0.4, "hall_sil": 1.0,
+                "word_prob": 0.5, "word_gap": 0.7}
+    return {"drop": True, "ns": 0.6, "lp": -1.0, "combine": "and",   # normal
+            "trail_ns": 2.0, "hall_sil": 2.0,
+            "word_prob": 0.35, "word_gap": 1.5}
 
 
 def _seg_is_hallucination(no_speech_prob: float, avg_logprob: float,
@@ -974,6 +1026,32 @@ def _seg_is_hallucination(no_speech_prob: float, avg_logprob: float,
     if not hit and is_last and no_speech_prob > params.get("trail_ns", 2.0):
         hit = True     # the trailing segment on silence – the usual offender
     return hit
+
+
+def _trailing_trim_count(words: list, params: dict) -> int:
+    """How many words to drop from the END of the last segment.
+
+    End-of-clip hallucinations show up as trailing words that are either very
+    low-confidence *or* separated from real speech by a silence gap (Whisper
+    jumped over the trailing silence and invented text).  Scan from the end and
+    count such words, stopping at the first solid, contiguous word.  Returns 0
+    when nothing should be trimmed.  Self-contained so the worker can reuse it."""
+    wp = params.get("word_prob")
+    wg = params.get("word_gap")
+    if not words or (wp is None and wg is None):
+        return 0
+    n = 0
+    for i in range(len(words) - 1, -1, -1):
+        w = words[i]
+        prob = getattr(w, "probability", 1.0)
+        start = getattr(w, "start", 0.0) or 0.0
+        prev_end = (getattr(words[i - 1], "end", start) or start) if i > 0 else start
+        gap = start - prev_end
+        if (wp is not None and prob < wp) or (wg is not None and gap > wg):
+            n += 1
+        else:
+            break
+    return n
 
 
 class WhisperProc:
@@ -1182,6 +1260,19 @@ class DictationIndicator(QWidget):
         else:  # idle
             self.hide()
 
+    def set_chip_scale(self, scale: float) -> None:
+        """Scale the chip relative to its default height (label/hint sizes and
+        widths all derive from ``_chip_h``, so this resizes the whole chip)."""
+        try:
+            scale = float(scale)
+        except (TypeError, ValueError):
+            scale = 1.0
+        scale = max(0.6, min(2.0, scale))
+        self._chip_h = max(16, round(_CHIP_DEFAULT_H * scale))
+        if self._state != "idle":
+            self._update_geometry()
+            self.update()
+
     def _clear_error(self) -> None:
         if self._state == "error":
             self._state = "idle"
@@ -1348,6 +1439,7 @@ class DictationSettingsWidget(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self._scroll = scroll          # so expanding a section can scroll to it
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -1369,13 +1461,23 @@ class DictationSettingsWidget(QWidget):
         layout.addWidget(self._deps_box)
         self._deps_box.setVisible(not audio_available())
 
+        # Every settings card/section is collected here so the whole block can
+        # be greyed out while the module is off (like the Mouse/Keyboard pages).
+        self._sections: list[QWidget] = []
+
         def _group(title: str) -> QFormLayout:
-            box = QGroupBox(title)
-            f = QFormLayout(box)
-            f.setSpacing(8)
+            # Use the app's card helper: it gives a BOLD title label inside the
+            # card (Qt ignores font-weight on a QGroupBox::title, so the group
+            # headings looked non-bold).  Consistent with the General page.
+            from withease.gui.ui_utils import card as _card
+            card_w, body = _card(title)
+            f = QFormLayout()
+            f.setSpacing(10)
             f.setFieldGrowthPolicy(
                 QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-            layout.addWidget(box)
+            body.addLayout(f)
+            layout.addWidget(card_w)
+            self._sections.append(card_w)
             return f
 
         # -- (1) Grundeinstellungen ------------------------------------
@@ -1405,6 +1507,20 @@ class DictationSettingsWidget(QWidget):
         self._lang.currentIndexChanged.connect(
             lambda i: self._save("language", self._lang.itemData(i)))
         basics.addRow(_t("language"), self._lang)
+
+        # Size of the status chip (recording indicator + target-app hint) shown
+        # at the top of the screen – some users want it bigger/more visible.
+        self._chip_size = QComboBox()
+        self._chip_size.addItem(_t("chip.small"), 0.8)
+        self._chip_size.addItem(_t("chip.medium"), 1.0)
+        self._chip_size.addItem(_t("chip.large"), 1.3)
+        self._chip_size.addItem(_t("chip.xlarge"), 1.6)
+        saved_scale = float(self._settings.get("chip_scale", 1.0))
+        cidx = self._chip_size.findData(saved_scale)
+        self._chip_size.setCurrentIndex(cidx if cidx >= 0 else 1)
+        self._chip_size.setToolTip(_t("chip_size.hint"))
+        self._chip_size.currentIndexChanged.connect(self._on_chip_scale_changed)
+        basics.addRow(_t("chip_size"), self._chip_size)
 
         # -- (2) Spracherkennung ---------------------------------------
         rec = _group(_t("group.recognition"))
@@ -1454,9 +1570,7 @@ class DictationSettingsWidget(QWidget):
         self._pause_media_cb.toggled.connect(
             lambda v: self._save("pause_media", v))
         rec.addRow("", self._pause_media_cb)
-        _pause_media_hint = QLabel(_t("pause_media.hint"))
-        _pause_media_hint.setWordWrap(True)
-        _pause_media_hint.setStyleSheet(_hint_style())
+        _pause_media_hint = _HintLabel(_t("pause_media.hint"))
         rec.addRow("", _pause_media_hint)
 
         # Cloud fields
@@ -1484,9 +1598,7 @@ class DictationSettingsWidget(QWidget):
         self._api_key.editingFinished.connect(self._on_api_key_changed)
         rec.addRow(_t("api_key"), self._api_key)
 
-        self._key_hint = QLabel(_t("api_key.hint"))
-        self._key_hint.setStyleSheet(_hint_style())
-        self._key_hint.setWordWrap(True)
+        self._key_hint = _HintLabel(_t("api_key.hint"))
         rec.addRow("", self._key_hint)
 
         self._model = QComboBox()
@@ -1510,9 +1622,7 @@ class DictationSettingsWidget(QWidget):
             lambda i: self._save("local_model", self._local_model.itemData(i)))
         rec.addRow(_t("local_model"), self._local_model)
 
-        self._local_hint = QLabel(_t("local.hint"))
-        self._local_hint.setStyleSheet(_hint_style())
-        self._local_hint.setWordWrap(True)
+        self._local_hint = _HintLabel(_t("local.hint"))
         rec.addRow("", self._local_hint)
 
         import sys as _sys
@@ -1577,47 +1687,57 @@ class DictationSettingsWidget(QWidget):
         out.addRow("", self._keep_clipboard)
 
         # -- (4) Woerterbuch -------------------------------------------
+        # One full-width row (the card is already titled "Wörterbuch", so no
+        # extra label column – that duplicated the heading and, being top-
+        # aligned against the tall buttons, sat above the word-count line).
+        # Everything is vertically centred so the count and buttons align.
+        # Two columns like every other row: the word count on the left, the
+        # two buttons left-aligned in the field column – one consistent picture.
         vocab = _group(_t("group.vocab"))
-        dict_row = QHBoxLayout()
         self._dict_summary = QLabel(self._dict_summary_text())
         self._dict_summary.setStyleSheet(_hint_style())
         self._dict_summary.setToolTip(_t("vocab.hint"))
-        dict_row.addWidget(self._dict_summary, 1)
+        self._dict_summary.setAlignment(Qt.AlignmentFlag.AlignLeft
+                                        | Qt.AlignmentFlag.AlignVCenter)
+        dict_row = QHBoxLayout()
         dict_learn = QPushButton(_t("glossary.learn"))
         dict_learn.clicked.connect(self._open_learn_text)
         dict_row.addWidget(dict_learn)
         dict_edit = QPushButton(_t("edit"))
         dict_edit.clicked.connect(self._open_dictionary)
         dict_row.addWidget(dict_edit)
-        vocab.addRow(_t("vocab"), dict_row)
+        dict_row.addStretch(1)
+        # Match the label height to the buttons so the count sits on their line.
+        self._dict_summary.setMinimumHeight(dict_learn.sizeHint().height())
+        vocab.addRow(self._dict_summary, dict_row)
 
-        # -- (5) KI (checkable – folded away while unused) -------------
-        ki_box = QGroupBox(_t("group.ai"))
-        ki_box.setCheckable(True)
-        ki_box.setChecked(bool(self._settings.get("ai_group_open", False)))
-        ki_outer = QVBoxLayout(ki_box)
-        ki_outer.setContentsMargins(8, 4, 8, 8)
-        ki_content = QWidget()
-        ai = QFormLayout(ki_content)
+        # -- (5) KI (folded away while unused) -------------------------
+        # A chevron section (▸/▾) like "Erweitert" below – not a checkable box,
+        # so it never looks like an on/off toggle and shows no stale "expand"
+        # hint once it is open.
+        ki_section = _Collapsible(_t("group.ai"), _t("group.ai.open"))
+        ai = QFormLayout(ki_section.content())
         ai.setSpacing(8)
         ai.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._form_ai = ai
-        ki_outer.addWidget(ki_content)
-        ki_content.setVisible(ki_box.isChecked())
-        ki_box.toggled.connect(ki_content.setVisible)
-        ki_box.toggled.connect(lambda v: self._save("ai_group_open", bool(v)))
-        layout.addWidget(ki_box)
+        # Always start collapsed (default), so the page stays calm – the KI
+        # options are opened on demand and not remembered as open.
+        ki_section.toggled.connect(
+            lambda on, s=ki_section: self._reveal_section(s, on))
+        layout.addWidget(ki_section)
+        self._sections.append(ki_section)
 
+        # Button on the "KI-Aktionen" row; its long description sits on its own
+        # full-width row below so it wraps freely instead of being clipped.
         aiact_row = QHBoxLayout()
-        _aiact_hint = QLabel(_t("ai.actions.hint"))
-        _aiact_hint.setWordWrap(True)
-        _aiact_hint.setStyleSheet(_hint_style())
-        aiact_row.addWidget(_aiact_hint, 1)
         aiact_btn = QPushButton(_t("edit"))
         aiact_btn.clicked.connect(self._open_ai_actions)
-        aiact_row.addWidget(aiact_btn)
+        aiact_row.addWidget(aiact_btn)      # left-aligned in the field column
+        aiact_row.addStretch(1)
         ai.addRow(_t("ai.actions"), aiact_row)
+        _aiact_hint = _HintLabel(_t("ai.actions.hint"))
+        ai.addRow("", _aiact_hint)
 
         self._ai_enable = QCheckBox(_t("ai.enable"))
         self._ai_enable.setChecked(bool(self._settings.get("ai_cleanup", False)))
@@ -1625,9 +1745,7 @@ class DictationSettingsWidget(QWidget):
         self._ai_enable.toggled.connect(lambda v: self._save("ai_cleanup", v))
         self._ai_enable.toggled.connect(lambda _v: self._update_ai_rows())
         ai.addRow(_t("ai"), self._ai_enable)
-        _ai_hint = QLabel(_t("ai.hint"))
-        _ai_hint.setWordWrap(True)
-        _ai_hint.setStyleSheet(_hint_style())
+        _ai_hint = _HintLabel(_t("ai.hint"))
         ai.addRow("", _ai_hint)
 
         self._ai_backend = QComboBox()
@@ -1677,7 +1795,10 @@ class DictationSettingsWidget(QWidget):
         adv.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._form_adv = adv
+        adv_section.toggled.connect(
+            lambda on, s=adv_section: self._reveal_section(s, on))
         layout.addWidget(adv_section)
+        self._sections.append(adv_section)
 
         self._command_hotkey = HotkeyEdit(
             self._settings.get("command_hotkey", ""),
@@ -1686,9 +1807,7 @@ class DictationSettingsWidget(QWidget):
             lambda k: self._save("command_hotkey", k))
         self._command_hotkey.setToolTip(_t("hotkey.command.hint"))
         adv.addRow(_t("hotkey.command"), self._command_hotkey)
-        _cmd_hint = QLabel(_t("hotkey.command.hint"))
-        _cmd_hint.setWordWrap(True)
-        _cmd_hint.setStyleSheet(_hint_style())
+        _cmd_hint = _HintLabel(_t("hotkey.command.hint"))
         adv.addRow("", _cmd_hint)
 
         self._max_seconds = QSpinBox()
@@ -1710,9 +1829,7 @@ class DictationSettingsWidget(QWidget):
             lambda i: self._save("hallucination_filter",
                                  self._hall_filter.itemData(i)))
         adv.addRow(_t("hallucination"), self._hall_filter)
-        _hall_hint = QLabel(_t("hallucination.hint"))
-        _hall_hint.setWordWrap(True)
-        _hall_hint.setStyleSheet(_hint_style())
+        _hall_hint = _HintLabel(_t("hallucination.hint"))
         adv.addRow("", _hall_hint)
 
         self._preload_cb = QCheckBox(_t("preload"))
@@ -1751,6 +1868,29 @@ class DictationSettingsWidget(QWidget):
     def _save(self, key: str, value: Any) -> None:
         self._settings[key] = value
         self._module.on_settings_changed()
+
+    def _on_chip_scale_changed(self, index: int) -> None:
+        scale = float(self._chip_size.itemData(index))
+        self._save("chip_scale", scale)
+        ind = getattr(self._module, "_indicator", None)
+        if ind is not None:                      # live-preview the new size
+            ind.set_chip_scale(scale)
+
+    def _reveal_section(self, section: QWidget, opened: bool) -> None:
+        """When a collapsible section (KI/Erweitert) is opened, scroll it into
+        view so its freshly revealed content is visible.  Deferred so the layout
+        has already grown before we scroll."""
+        if not opened:
+            return
+
+        def do_scroll() -> None:
+            import shiboken6
+            if (not shiboken6.isValid(section)
+                    or not shiboken6.isValid(self._scroll)):
+                return
+            self._scroll.ensureWidgetVisible(section, 0, 0)
+
+        QTimer.singleShot(0, do_scroll)
 
     def _update_preload_row(self) -> None:
         """The preload option is only offered when the app autostarts (the
@@ -2159,12 +2299,11 @@ class DictationSettingsWidget(QWidget):
         self._update_enabled_state(enabled)
 
     def _update_enabled_state(self, enabled: bool) -> None:
-        for w in (self._hotkey, self._mode, self._backend, self._provider,
-                  self._base_url, self._api_key, self._model,
-                  self._local_model, self._lang, self._insert,
-                  self._keep_clipboard, self._max_seconds, self._device,
-                  self._test_btn):
-            w.setEnabled(enabled)
+        # Grey out every settings card/section while the module is off (so all
+        # labels, hints and inputs dim together, like the Mouse/Keyboard pages);
+        # the enable-checkbox and module description above stay active.
+        for sec in getattr(self, "_sections", ()):
+            sec.setEnabled(enabled)
 
 
 # ---------------------------------------------------------------------------
@@ -2307,6 +2446,8 @@ class DictationModule(BaseModule):
         # overlay window.  It subscribes to dictation.state on creation.
         if self._indicator is None:
             self._indicator = DictationIndicator()
+            self._indicator.set_chip_scale(
+                float(self._settings.get("chip_scale", 1.0)))
 
     # ------------------------------------------------------------------
     # Dictation window (output mode = "window")
@@ -3809,19 +3950,36 @@ class DictationModule(BaseModule):
                 word_timestamps=True,   # per-word probs → confidence heatmap
             )
             seg_list = list(segments)   # iterating drives the actual inference
-            parts, low = [], []
+            # Segment-level filter: live keeps its own conservative rule; batch
+            # uses the user-set hallucination filter (also on the last segment).
+            kept = []
             for idx, seg in enumerate(seg_list):
                 ns = getattr(seg, "no_speech_prob", 0.0)
                 lp = getattr(seg, "avg_logprob", 0.0)
                 is_last = idx == len(seg_list) - 1
-                # Live keeps its own conservative filter; batch uses the
-                # user-set hallucination filter (also on the trailing segment).
                 if live:
                     if ns > 0.6 and lp < -1.0:
                         continue
                 elif _seg_is_hallucination(ns, lp, is_last, params):
                     continue
-                parts.append(seg.text.strip())
+                kept.append(seg)
+            # Word-level trailing trim (batch only): cut invented words tacked
+            # onto the end of the last real segment.
+            trimmed_last: str | None = None
+            if not live and kept:
+                words = getattr(kept[-1], "words", None) or []
+                n = _trailing_trim_count(words, params)
+                if words and n >= len(words):
+                    kept = kept[:-1]
+                elif n:
+                    trimmed_last = "".join(
+                        getattr(w, "word", "") for w in words[:len(words) - n]
+                    ).strip()
+            parts, low = [], []
+            for i, seg in enumerate(kept):
+                last = i == len(kept) - 1
+                parts.append(trimmed_last if (last and trimmed_last is not None)
+                             else seg.text.strip())
                 for w in (getattr(seg, "words", None) or []):
                     if getattr(w, "probability", 1.0) < 0.55:
                         token = (w.word or "").strip().strip(" .,;:!?…\"'„“”")

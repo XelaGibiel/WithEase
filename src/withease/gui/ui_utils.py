@@ -7,10 +7,52 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
     QComboBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
     QPushButton,
     QSizePolicy,
+    QVBoxLayout,
     QWidget,
 )
+
+
+def card(title: str = "", icon: str = "",
+         danger: bool = False) -> tuple[QFrame, QVBoxLayout]:
+    """A styled content card (see theme.app_stylesheet, ``QFrame#card``).
+
+    Returns ``(card_widget, body_layout)`` – add the card to the page and put
+    the card's content into ``body_layout``.  An optional title row (small icon
+    + bold heading) is added automatically when ``title`` is given.  With
+    ``danger=True`` the title/icon are shown in the danger colour (a highlight
+    that is not permanently alarming).  Styling is fully central in theme.py;
+    this only builds the structure.
+    """
+    frame = QFrame()
+    frame.setObjectName("card")
+    outer = QVBoxLayout(frame)
+    outer.setContentsMargins(0, 0, 0, 0)   # padding comes from the QSS
+    outer.setSpacing(12)
+
+    if title:
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title_obj = "cardTitleDanger" if danger else "cardTitle"
+        if icon:
+            icon_lbl = QLabel(icon)
+            icon_lbl.setObjectName(title_obj)
+            header.addWidget(icon_lbl)
+        title_lbl = QLabel(title)
+        title_lbl.setObjectName(title_obj)
+        header.addWidget(title_lbl)
+        header.addStretch()
+        outer.addLayout(header)
+
+    body = QVBoxLayout()
+    body.setContentsMargins(0, 0, 0, 0)
+    body.setSpacing(10)
+    outer.addLayout(body)
+    return frame, body
 
 
 def em(units: float) -> int:

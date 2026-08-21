@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QKeyEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -37,6 +37,12 @@ if TYPE_CHECKING:
     from withease.modules.macros import Macro, MacrosModule
 
 _TYPES = ["text", "keys", "app", "mouse"]
+
+
+def _tr_exists(key: str) -> bool:
+    """True if the i18n key is defined (falls back gracefully if not)."""
+    val = tr(key)
+    return val != key
 
 
 
@@ -116,13 +122,13 @@ class _KeyRecorder(QWidget):
 
         from withease.gui.ui_utils import em
         self._btn = QPushButton(tr("module.macros.dialog.key.record"))
-        self._btn.setFixedHeight(max(32, em(2)))
-        self._btn.setMinimumWidth(160)
+        self._btn.setMinimumWidth(em(10))
         self._btn.clicked.connect(self._start)
         layout.addWidget(self._btn)
 
-        self._clear_btn = QPushButton("×")
-        self._clear_btn.setFixedSize(max(32, em(2)), max(32, em(2)))
+        self._clear_btn = QPushButton("✕")
+        self._clear_btn.setProperty("iconBtn", True)   # tight padding so ✕ fits
+        self._clear_btn.setFixedWidth(max(34, em(2.0)))
         self._clear_btn.setToolTip(tr("module.macros.dialog.key.clear"))
         self._clear_btn.clicked.connect(self._clear)
         self._clear_btn.setVisible(False)
@@ -139,18 +145,10 @@ class _KeyRecorder(QWidget):
             display = _format_key(key)
             self._btn.setText(display)
             self._btn.setStyleSheet("font-weight: bold;")
-            # Bold text is wider than the size hint computed with the normal
-            # font – grow the button so long combos are never cut off.
-            from PySide6.QtGui import QFont, QFontMetrics
-            bold = QFont(self._btn.font())
-            bold.setBold(True)
-            needed = QFontMetrics(bold).horizontalAdvance(display) + 32
-            self._btn.setMinimumWidth(max(160, needed))
             self._clear_btn.setVisible(True)
         else:
             self._btn.setText(tr("module.macros.dialog.key.record"))
             self._btn.setStyleSheet("")
-            self._btn.setMinimumWidth(160)
             self._clear_btn.setVisible(False)
         self.key_changed.emit(key)
 
@@ -160,7 +158,7 @@ class _KeyRecorder(QWidget):
     def _start(self) -> None:
         self._recording = True
         self._btn.setText(tr("module.macros.dialog.key.press"))
-        self._btn.setStyleSheet("color: palette(highlight);")
+        self._btn.setStyleSheet(f"color: {theme.accent()};")   # blue in light
         self._clear_btn.setVisible(False)
         self.setFocus()
         self.grabKeyboard()
@@ -640,6 +638,7 @@ class _MacroDialog(QDialog):
 
         self._dup_warning = QLabel()
         self._dup_warning.setStyleSheet(theme.warn_style())
+        self._dup_warning.setWordWrap(True)
         self._dup_warning.hide()
         form.addRow("", self._dup_warning)
 
@@ -861,10 +860,80 @@ class _MacroDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+# Resize handle for the macro-list table
+# ---------------------------------------------------------------------------
+
+class _ResizeStrip(QWidget):
+    """Drag handle below the macro table.
+
+    Shows a row of dots (⠿-style grip) so it is immediately obvious that the
+    area can be resized.  Dragging it down/up sets the table's fixed height."""
+
+    _MIN_H = 80
+    _DOT_R = 2      # dot radius px
+    _DOT_COLS = 6   # dots per row
+    _DOT_ROWS = 2   # rows of dots
+    _DOT_GAP = 5    # gap between dot centres
+
+    def __init__(self, target: QTableWidget,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._target = target
+        self._drag_start: QPoint | None = None
+        self._start_h: int = 0
+        total_h = self._DOT_ROWS * self._DOT_R * 2 + (self._DOT_ROWS - 1) * self._DOT_GAP
+        self.setFixedHeight(total_h + 10)   # 10 px vertical padding
+        self.setCursor(Qt.CursorShape.SizeVerCursor)
+        self.setToolTip("Ziehen, um die Liste zu vergrößern")
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        from PySide6.QtGui import QPainter, QColor
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        col = self.palette().color(self.foregroundRole())
+        col.setAlphaF(0.35)
+        painter.setBrush(col)
+        painter.setPen(Qt.PenStyle.NoPen)
+        r = self._DOT_R
+        cols, rows, gap = self._DOT_COLS, self._DOT_ROWS, self._DOT_GAP
+        grid_w = cols * r * 2 + (cols - 1) * (gap - r * 2)
+        grid_h = rows * r * 2 + (rows - 1) * (gap - r * 2)
+        ox = (self.width() - grid_w) // 2
+        oy = (self.height() - grid_h) // 2
+        for row in range(rows):
+            for col in range(cols):
+                x = ox + col * gap
+                y = oy + row * gap
+                painter.drawEllipse(x - r, y - r, r * 2, r * 2)
+        painter.end()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = event.globalPosition().toPoint()
+            self._start_h = self._target.height()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._drag_start is not None:
+            delta = event.globalPosition().toPoint().y() - self._drag_start.y()
+            new_h = max(self._MIN_H, self._start_h + delta)
+            self._target.setFixedHeight(new_h)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self._drag_start = None
+        super().mouseReleaseEvent(event)
+
+
+# ---------------------------------------------------------------------------
 # Settings page
 # ---------------------------------------------------------------------------
 
 class MacrosSettingsWidget(QWidget):
+    # Emitted (from any thread) when a macro runs, so the "Häufigkeit" column
+    # updates live while the page is open – marshalled onto the GUI thread.
+    _executed_sig = Signal()
+
     def __init__(self, module: "MacrosModule", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._module = module
@@ -872,6 +941,25 @@ class MacrosSettingsWidget(QWidget):
         from withease.gui.settings.module_sync import sync_module_checkbox
         sync_module_checkbox(self, module, self._enabled_cb,
                              self._update_enabled_state)
+        # Keep the frequency column current: a macro fires on the hook thread,
+        # so bounce through a signal to refresh on the GUI thread.
+        self._executed_sig.connect(self._refresh_uses)
+        bus.subscribe("macros.executed", self._on_macro_executed)
+        self.destroyed.connect(
+            lambda: bus.unsubscribe("macros.executed", self._on_macro_executed))
+
+    def _on_macro_executed(self, **_: object) -> None:
+        self._executed_sig.emit()
+
+    def _refresh_uses(self) -> None:
+        """Update just the 'Häufigkeit' cells in place (keeps the selection)."""
+        import shiboken6
+        if not shiboken6.isValid(self._table):
+            return
+        for row, m in enumerate(self._module._macros):
+            item = self._table.item(row, 4)
+            if item is not None:
+                item.setText(str(int(getattr(m, "uses", 0))))
 
     def _build_ui(self) -> None:
         scroll = QScrollArea()
@@ -895,9 +983,13 @@ class MacrosSettingsWidget(QWidget):
         sep.setFrameShadow(QFrame.Shadow.Sunken)
         layout.addWidget(sep)
 
+        from withease.gui.ui_utils import card as _card
+        # All options in one white card, with a bold heading like the General page.
+        settings_card, settings_body = _card(tr("module.macros.card.settings"))
+
         # ── Trigger key ────────────────────────────────────────────
         trigger_form = QFormLayout()
-        trigger_form.setSpacing(8)
+        trigger_form.setSpacing(10)
 
         self._trigger_edit = _KeyRecorder()
         self._trigger_edit.blockSignals(True)
@@ -921,11 +1013,11 @@ class MacrosSettingsWidget(QWidget):
         size_row.addStretch()
         trigger_form.addRow(tr("module.macros.chip_size"), size_row)
 
-        layout.addLayout(trigger_form)
+        settings_body.addLayout(trigger_form)
 
         # ── Command overlay (the in-macro-mode command list) ───────
         ov_form = QFormLayout()
-        ov_form.setSpacing(8)
+        ov_form.setSpacing(10)
         cfg = self._module.cmd_overlay_config()
 
         self._ov_enabled = QCheckBox(tr("module.macros.overlay.enabled"))
@@ -959,12 +1051,14 @@ class MacrosSettingsWidget(QWidget):
                 "position", self._ov_pos.itemData(i)))
         ov_form.addRow(tr("module.macros.overlay.position"), self._ov_pos)
 
-        layout.addLayout(ov_form)
+        settings_body.addLayout(ov_form)
+        layout.addWidget(settings_card)
 
-        # ── Macro list ─────────────────────────────────────────────
+        # ── Macro list (its own card) ──────────────────────────────
+        list_card, list_body = _card()
         list_label = QLabel(tr("module.macros.list"))
-        list_label.setStyleSheet("font-weight: bold;")
-        layout.addWidget(list_label)
+        list_label.setObjectName("cardTitle")
+        list_body.addWidget(list_label)
 
         self._table = QTableWidget(0, 6)
         self._table.setHorizontalHeaderLabels([
@@ -977,9 +1071,13 @@ class MacrosSettingsWidget(QWidget):
         ])
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        # Single row only: Edit/Delete/reorder all act on one macro, and it
+        # avoids a second highlighted row rendering in a different (native)
+        # colour than the stylesheet selection.
+        self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
-        self._table.setMinimumHeight(120)
+        self._table.setMinimumHeight(80)
         self._table.verticalHeader().setVisible(False)
         self._table.doubleClicked.connect(lambda _: self._on_edit())
         self._table.setShowGrid(False)
@@ -991,54 +1089,56 @@ class MacrosSettingsWidget(QWidget):
         if self._table_style is not None:
             self._table.setStyle(self._table_style)
         theme.style_item_view(self._table, "QTableWidget")
-        layout.addWidget(self._table)
+        # Centre the short "Taste" and "Häufigkeit" columns (set per item in
+        # _refresh_table); the header follows below.
+        self._table.setFixedHeight(220)
+        list_body.addWidget(self._table)
+        self._resize_strip = _ResizeStrip(self._table)
+        list_body.addWidget(self._resize_strip)
 
         # ── Buttons ────────────────────────────────────────────────
-        from withease.gui.ui_utils import em
-        btn_row = QHBoxLayout()
+        # A wrapping flow layout: at a narrow window the buttons wrap onto the
+        # next line instead of a QHBoxLayout squeezing them (which shrank the
+        # ▲▼ buttons to a sliver and pushed the card border off-screen).  No
+        # fixed heights either – those clipped the bottom of the button border.
+        from withease.gui.widgets.flow_layout import FlowLayout
+        btn_row = FlowLayout(h_spacing=8, v_spacing=8)
         self._add_btn = QPushButton(tr("module.macros.add"))
-        self._add_btn.setFixedHeight(max(28, em(1.7)))
         self._add_btn.clicked.connect(self._on_add)
         btn_row.addWidget(self._add_btn)
 
         self._edit_btn = QPushButton(tr("module.macros.edit"))
-        self._edit_btn.setFixedHeight(max(28, em(1.7)))
         self._edit_btn.clicked.connect(self._on_edit)
         btn_row.addWidget(self._edit_btn)
 
         self._del_btn = QPushButton(tr("module.macros.delete"))
-        self._del_btn.setFixedHeight(max(28, em(1.7)))
         self._del_btn.clicked.connect(self._on_delete)
         btn_row.addWidget(self._del_btn)
 
         # Reorder – this is the order the overlay's "manual" sort follows.
+        # Normal (not iconBtn) buttons so they match the text buttons' height
+        # and never collapse: the iconBtn QSS forces min-width:0, which let the
+        # flow layout paint them as a sliver.
         self._up_btn = QPushButton("▲")
-        self._up_btn.setFixedHeight(max(28, em(1.7)))
-        self._up_btn.setFixedWidth(max(32, em(2)))
         self._up_btn.setToolTip(tr("module.macros.move_up"))
         self._up_btn.clicked.connect(lambda: self._move_macro(-1))
         btn_row.addWidget(self._up_btn)
 
         self._down_btn = QPushButton("▼")
-        self._down_btn.setFixedHeight(max(28, em(1.7)))
-        self._down_btn.setFixedWidth(max(32, em(2)))
         self._down_btn.setToolTip(tr("module.macros.move_down"))
         self._down_btn.clicked.connect(lambda: self._move_macro(1))
         btn_row.addWidget(self._down_btn)
 
-        btn_row.addStretch()
-
         self._import_btn = QPushButton(tr("module.macros.import"))
-        self._import_btn.setFixedHeight(max(28, em(1.7)))
         self._import_btn.clicked.connect(self._on_import)
         btn_row.addWidget(self._import_btn)
 
         self._export_btn = QPushButton(tr("module.macros.export"))
-        self._export_btn.setFixedHeight(max(28, em(1.7)))
         self._export_btn.clicked.connect(self._on_export)
         btn_row.addWidget(self._export_btn)
 
-        layout.addLayout(btn_row)
+        list_body.addLayout(btn_row)
+        layout.addWidget(list_card)
 
         layout.addStretch()
         scroll.setWidget(content)
@@ -1079,14 +1179,17 @@ class MacrosSettingsWidget(QWidget):
             self._del_btn.setEnabled(False)
         else:
             self._table.setRowCount(len(macros))
+            centered = (Qt.AlignmentFlag.AlignCenter
+                        | Qt.AlignmentFlag.AlignVCenter)
             for row, m in enumerate(macros):
                 self._table.setItem(row, 0, QTableWidgetItem(m.label))
-                self._table.setItem(row, 1, QTableWidgetItem(_format_key(m.trigger_key)))
+                key_item = QTableWidgetItem(_format_key(m.trigger_key))
+                key_item.setTextAlignment(centered)          # "Taste" centred
+                self._table.setItem(row, 1, key_item)
                 self._table.setItem(row, 2, QTableWidgetItem(tr(f"module.macros.type.{m.type}")))
                 self._table.setItem(row, 3, QTableWidgetItem(m.category))
                 uses_item = QTableWidgetItem(str(int(getattr(m, "uses", 0))))
-                uses_item.setTextAlignment(
-                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                uses_item.setTextAlignment(centered)         # "Häufigkeit" centred
                 self._table.setItem(row, 4, uses_item)
                 self._table.setItem(row, 5, QTableWidgetItem(_macro_content_preview(m)))
             self._edit_btn.setEnabled(True)
@@ -1195,20 +1298,99 @@ class MacrosSettingsWidget(QWidget):
         import uuid
 
         from withease.modules.macros import macro_from_dict
+
+        # Index existing macros for fast deduplication and key-conflict detection.
+        existing = self._module._macros
+        by_id: dict[str, int] = {m.id: i for i, m in enumerate(existing) if m.id}
+        by_label: dict[tuple, int] = {
+            (m.label, m.type): i for i, m in enumerate(existing)}
+        # Keys already claimed by macros that will NOT be replaced (i.e. macros
+        # whose identity doesn't match the incoming entry).  Built incrementally
+        # so that two imported macros with the same key also conflict with each
+        # other.
+        taken_keys: dict[str, str] = {
+            m.trigger_key: m.label
+            for m in existing if m.trigger_key
+        }
+
         added = 0
+        updated = 0
+        key_conflicts: list[str] = []   # human-readable lines for the warning
+
         for entry in raw:
             if not isinstance(entry, dict):
                 continue
             macro = macro_from_dict(entry)
-            macro.id = str(uuid.uuid4())   # fresh id so imports never clash
-            macro.uses = 0
-            self._module._macros.append(macro)
-            added += 1
-        if added:
+            orig_id = str(entry.get("id", "")).strip()
+
+            # Determine whether this is an update of an existing macro.
+            replacing_idx: int | None = None
+            if orig_id and orig_id in by_id:
+                replacing_idx = by_id[orig_id]
+            elif (macro.label, macro.type) in by_label:
+                replacing_idx = by_label[(macro.label, macro.type)]
+
+            # Remove the key that the macro-being-replaced currently holds from
+            # the "taken" set so it doesn't conflict with itself.
+            if replacing_idx is not None:
+                old_key = existing[replacing_idx].trigger_key
+                if old_key and taken_keys.get(old_key) == existing[replacing_idx].label:
+                    del taken_keys[old_key]
+
+            # Check whether the incoming key is already taken by a *different* macro.
+            incoming_key = macro.trigger_key
+            if incoming_key and incoming_key in taken_keys:
+                conflict_owner = taken_keys[incoming_key]
+                key_conflicts.append(
+                    f'  • {_format_key(incoming_key)}'
+                    f'  ({macro.label}  →  belegt durch „{conflict_owner}“)')
+                macro.trigger_key = ""   # import without key
+
+            # Register this macro's (possibly cleared) key as taken.
+            if macro.trigger_key:
+                taken_keys[macro.trigger_key] = macro.label
+
+            if replacing_idx is not None:
+                # Update in place, preserve usage counter and id.
+                macro.id = existing[replacing_idx].id if not (orig_id and orig_id in by_id) else orig_id
+                if orig_id and orig_id in by_id:
+                    macro.id = orig_id
+                else:
+                    macro.id = existing[replacing_idx].id
+                macro.uses = existing[replacing_idx].uses
+                existing[replacing_idx] = macro
+                by_label[(macro.label, macro.type)] = replacing_idx
+                if orig_id:
+                    by_id[orig_id] = replacing_idx
+                updated += 1
+            else:
+                macro.id = str(uuid.uuid4())
+                macro.uses = 0
+                existing.append(macro)
+                new_idx = len(existing) - 1
+                by_id[macro.id] = new_idx
+                by_label[(macro.label, macro.type)] = new_idx
+                added += 1
+
+        if added or updated:
             self._module.on_settings_changed()
             self._refresh_table()
-        QMessageBox.information(self, tr("module.macros.import.title"),
-                               tr("module.macros.import.done", n=str(added)))
+
+        parts = []
+        if added:
+            parts.append(f"{added} hinzugefügt")
+        if updated:
+            parts.append(f"{updated} aktualisiert")
+        if not parts:
+            parts.append("Keine neuen Makros")
+        summary = ", ".join(parts) + "."
+        if key_conflicts:
+            summary += (
+                "\n\nFolgende Tasten waren bereits vergeben – "
+                "die betroffenen Makros wurden ohne Taste importiert:\n"
+                + "\n".join(key_conflicts)
+            )
+        QMessageBox.information(self, tr("module.macros.import.title"), summary)
 
     def _move_macro(self, delta: int) -> None:
         """Move the selected macro up/down – this defines the 'manual' order."""

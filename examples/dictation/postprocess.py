@@ -180,17 +180,18 @@ def fix_question_marks(text: str) -> str:
     „!" or an existing „?"."""
     if not text or not text.strip():
         return text
-    parts = re.split(r"(?<=[.!?…])\s+", text.strip())
-    out = []
-    for part in parts:
-        s = part.strip()
-        if not s:
+    # Split into sentences but KEEP the separators (capturing group), so any
+    # line/paragraph breaks – e.g. in an AI-formatted e-mail – survive instead
+    # of being flattened to single spaces.  Odd indices are the whitespace.
+    tokens = re.split(r"((?<=[.!?…])\s+)", text)
+    for i, tok in enumerate(tokens):
+        if i % 2 == 1 or not tok.strip():        # separator → keep verbatim
             continue
-        first = re.split(r"[\s,]", s, 1)[0].lower().strip(".,!?…")
-        if s.endswith(".") and not s.endswith("..") and first in _Q_OPENERS:
-            s = s[:-1] + "?"
-        out.append(s)
-    return " ".join(out)
+        core = tok.rstrip()
+        first = re.split(r"[\s,]", core.strip(), 1)[0].lower().strip(".,!?…")
+        if core.endswith(".") and not core.endswith("..") and first in _Q_OPENERS:
+            tokens[i] = core[:-1] + "?" + tok[len(core):]   # keep trailing ws
+    return "".join(tokens)
 
 
 # Words German only ever capitalises at the very start of a sentence – never as

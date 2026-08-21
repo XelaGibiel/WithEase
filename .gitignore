@@ -43,3 +43,6 @@ check.ps1
 
 # PyInstaller (auto-generiert; Build via BUILD_EXE.bat)
 *.spec
+
+# Personal macro export (test artifact)
+withease-makros.json

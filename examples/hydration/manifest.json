@@ -1,6 +1,6 @@
 {
   "name": "Trinkpause",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "WithEase",
   "description": "Erinnert in einstellbaren Abständen an Trinkpausen – dezent, als Regen oder als steigender Flüssigkeitsstand.",
   "entry": "module.py",

@@ -27,7 +27,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
-    QFrame,
     QLabel,
     QPushButton,
     QSpinBox,
@@ -60,6 +59,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Fenster in der Bildschirmmitte oder ein bildschirmfüllender "
             "Regen bzw. ein steigender Flüssigkeitsstand, der die Arbeit "
             "spürbar unterbricht – so, wie du es brauchst."),
+        "group.settings": "Einstellungen",
         "interval": "Erinnern alle",
         "style": "Darstellung",
         "style.popup": "Dezentes Fenster (Mitte)",
@@ -87,6 +87,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "your setting, either a discreet window appears in the centre of "
             "the screen or a full-screen rain / rising liquid level noticeably "
             "interrupts your work – whatever you need."),
+        "group.settings": "Settings",
         "interval": "Remind every",
         "style": "Presentation",
         "style.popup": "Discreet window (centre)",
@@ -190,19 +191,16 @@ class HydrationReminder(QWidget):
 
         self._icon = QLabel("\U0001F4A7")   # 💧
         self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_font = QFont()
-        icon_font.setPixelSize(48)
-        self._icon.setFont(icon_font)
         lay.addWidget(self._icon)
 
         self._title = QLabel()
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_font = QFont()
-        title_font.setPixelSize(22)
-        title_font.setBold(True)
-        self._title.setFont(title_font)
         self._title.setWordWrap(True)
         lay.addWidget(self._title)
+
+        # Icon and title scale with the app-wide font size (set in Settings) so
+        # the reminder honours the chosen size like every other window.
+        self._scale_fonts()
 
         self._text = QLabel()
         self._text.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -226,6 +224,22 @@ class HydrationReminder(QWidget):
             " #hydrationCard QPushButton:disabled {"
             " background-color: #37556B; color: #9FB6C6; }")
 
+    def _scale_fonts(self) -> None:
+        """Size the emoji and title relative to the app-wide font, so the
+        reminder grows/shrinks with the size chosen in Settings.  The body text
+        and button already inherit the app font directly."""
+        app = QApplication.instance()
+        base_pt = app.font().pointSize() if app else 0
+        if base_pt <= 0:
+            base_pt = 10
+        icon_font = QFont()
+        icon_font.setPointSize(base_pt + 26)     # large 💧, scales with app font
+        self._icon.setFont(icon_font)
+        title_font = QFont()
+        title_font.setPointSize(base_pt + 7)     # prominent heading
+        title_font.setBold(True)
+        self._title.setFont(title_font)
+
     # -- Show / dismiss -----------------------------------------------------
 
     def show_reminder(self, style: str, dismiss: str,
@@ -233,6 +247,7 @@ class HydrationReminder(QWidget):
         self._style = style if style in STYLES else "popup"
         self._dismiss_mode = dismiss if dismiss in DISMISS_MODES else "delay"
 
+        self._scale_fonts()      # pick up a font-size change made in Settings
         self._title.setText(_t("reminder.title"))
         self._text.setText(_t("reminder.text"))
 
@@ -459,7 +474,9 @@ class HydrationSettings(QWidget):
 
         self._enabled_cb = QCheckBox(_t("enabled"))
         self._enabled_cb.setChecked(self._module.enabled)
-        self._enabled_cb.setStyleSheet("font-weight: bold; font-size: 13px;")
+        # "larger" is relative, so the title follows the app font-size setting
+        # (a fixed 13px did not scale like the other modules).
+        self._enabled_cb.setStyleSheet("font-weight: bold; font-size: larger;")
         self._enabled_cb.toggled.connect(self._on_module_toggled)
         layout.addWidget(self._enabled_cb)
 
@@ -467,13 +484,16 @@ class HydrationSettings(QWidget):
         desc.setWordWrap(True)
         layout.addWidget(desc)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setFrameShadow(QFrame.Shadow.Sunken)
-        layout.addWidget(sep)
+        # All settings live on one card (bold title), consistent with the other
+        # module pages.  The whole card greys out while the module is off.
+        from withease.gui.ui_utils import card as _card
+        self._card, body = _card(_t("group.settings"))
+        layout.addWidget(self._card)
 
         form = QFormLayout()
         form.setSpacing(8)
+        form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._form = form
 
         self._interval = QSpinBox()
@@ -513,11 +533,11 @@ class HydrationSettings(QWidget):
             lambda v: self._save("delay_seconds", v))
         form.addRow(_t("delay"), self._delay)
 
-        layout.addLayout(form)
+        body.addLayout(form)
 
         self._preview_btn = QPushButton(_t("preview"))
         self._preview_btn.clicked.connect(self._on_preview)
-        layout.addWidget(self._preview_btn)
+        body.addWidget(self._preview_btn, 0, Qt.AlignmentFlag.AlignLeft)
 
         layout.addStretch()
         self._update_delay_row()
@@ -550,9 +570,9 @@ class HydrationSettings(QWidget):
         self._update_enabled_state(enabled)
 
     def _update_enabled_state(self, enabled: bool) -> None:
-        for w in (self._interval, self._style, self._dismiss, self._delay,
-                  self._preview_btn):
-            w.setEnabled(enabled)
+        # Grey out the whole settings card while the module is off, so labels,
+        # hints and inputs dim together (like the Mouse/Keyboard pages).
+        self._card.setEnabled(enabled)
 
 
 # ---------------------------------------------------------------------------

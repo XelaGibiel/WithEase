@@ -67,7 +67,7 @@ class ExampleModule(BaseModule):
 
         enabled_cb = QCheckBox("Beispielmodul aktivieren")
         enabled_cb.setChecked(self.enabled)
-        enabled_cb.setStyleSheet("font-weight: bold; font-size: 13px;")
+        enabled_cb.setStyleSheet("font-weight: bold; font-size: larger;")
         enabled_cb.toggled.connect(
             lambda v: self.enable() if v else self.disable())
         layout.addWidget(enabled_cb)

@@ -154,26 +154,50 @@ class MainWindow(QMainWindow):
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
         self._sidebar = sidebar
-        sidebar.setFixedWidth(max(190, em(11)))
+        sidebar.setFixedWidth(max(224, em(13)))
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(8, 16, 8, 8)
+        sidebar_layout.setContentsMargins(12, 18, 12, 12)
         sidebar_layout.setSpacing(4)
 
+        # Logo row: existing WithEase app icon + wordmark (both unchanged).
+        logo_row = QHBoxLayout()
+        logo_row.setContentsMargins(4, 0, 4, 0)
+        logo_row.setSpacing(8)
+        logo_icon = QLabel()
+        _logo_pm = self._logo_pixmap(em(1.7))
+        if _logo_pm is not None:
+            logo_icon.setPixmap(_logo_pm)
+        logo_row.addWidget(logo_icon)
         logo = QLabel("WithEase")
         logo.setObjectName("logo")
-        sidebar_layout.addWidget(logo)
+        logo_row.addWidget(logo)
+        logo_row.addStretch()
+        sidebar_layout.addLayout(logo_row)
         sidebar_layout.addSpacing(12)
 
         self._nav = QListWidget()
         self._nav.setObjectName("nav")
         self._nav.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        # The list is sized to its content (no scrollbars, no oversized frame).
-        self._nav.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Sized to its content when it fits; a vertical scrollbar appears only
+        # when the sidebar is too short (small window + large font) so the
+        # bottom entries always stay reachable.
+        self._nav.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        theme.style_item_view(self._nav, "QListWidget#nav")
-        sidebar_layout.addWidget(self._nav)
-
-        sidebar_layout.addStretch()
+        from PySide6.QtWidgets import QSizePolicy
+        # Fill the space between the logo and the emergency button: extra space
+        # below the entries is just sidebar background (the list has no border),
+        # and when the sidebar is too short the list shrinks and scrolls instead
+        # of clipping the bottom entries or the emergency button.
+        self._nav.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                QSizePolicy.Policy.Expanding)
+        # Nav styling lives centrally in theme.app_stylesheet() (QListWidget#nav)
+        # so it refreshes on every theme change; just keep it on the app font.
+        from PySide6.QtWidgets import QApplication
+        _app = QApplication.instance()
+        if _app is not None:
+            self._nav.setFont(_app.font())     # follow the font-size setting
+        sidebar_layout.addWidget(self._nav, 1)
 
         self._emergency_btn = QPushButton()
         self._emergency_btn.setObjectName("emergencyButton")
@@ -192,8 +216,10 @@ class MainWindow(QMainWindow):
         root.addWidget(self._stack, 1)
 
         # ---- Footer: active profile (left), version/update (right) ----
-        footer = QHBoxLayout()
-        footer.setContentsMargins(12, 4, 12, 4)
+        footer_frame = QWidget()
+        footer_frame.setObjectName("footer")
+        footer = QHBoxLayout(footer_frame)
+        footer.setContentsMargins(16, 8, 16, 8)
 
         self._footer_profile = QLabel()
         self._footer_profile.setStyleSheet(theme.hint_style())
@@ -208,7 +234,7 @@ class MainWindow(QMainWindow):
         self._version_btn.setEnabled(False)
         self._version_btn.clicked.connect(self._on_version_clicked)
         footer.addWidget(self._version_btn)
-        outer.addLayout(footer)
+        outer.addWidget(footer_frame)
 
         self._latest_release = None
         self._start_update_check()
@@ -381,7 +407,6 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(12)
-        layout.addWidget(self._page_title("WithEase"))
 
         # Keep the text column at a comfortable reading width instead of
         # stretching across the whole (wide) window.
@@ -396,40 +421,23 @@ class MainWindow(QMainWindow):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             return b
 
-        # --- Header: logo on the left, description + meta on the right ------
-        # Everything is top-aligned so the logo never gets big empty gaps above
-        # and below it when the text next to it is taller (e.g. larger fonts).
-        header = QHBoxLayout()
-        header.setSpacing(18)
-        pixmap = self._logo_pixmap(96)
-        if pixmap is not None:
-            pic = QLabel()
-            pic.setPixmap(pixmap)
-            pic.setFixedSize(96, 96)
-            # Clamp the pixmap to the 96×96 box: under display scaling the
-            # rendered pixmap can be larger and would otherwise bleed out of the
-            # label and overlap the text below it.
-            pic.setScaledContents(True)
-            header.addWidget(pic, 0, Qt.AlignmentFlag.AlignTop)
+        # --- Title + description as full-width rows --------------------------
+        # No logo here on purpose: the WithEase logo is already shown prominently
+        # in the sidebar, and a logo beside/above word-wrapping text repeatedly
+        # overlapped it (Qt under-reserves the row height for a fixed-size image
+        # next to a wrapping label).  Plain full-width rows can never overlap –
+        # at any window width or font size.
+        layout.addWidget(self._page_title("WithEase"))
 
-        # Text in its own container, top-aligned next to the logo.  (A bare
-        # nested stretch here would make the whole header expand vertically and
-        # reopen a gap below the logo, so we align the fixed-height container
-        # instead and let the page's final stretch absorb all spare space.)
-        text_container = QWidget()
-        header_text = QVBoxLayout(text_container)
-        header_text.setContentsMargins(0, 0, 0, 0)
-        header_text.setSpacing(4)
         desc = QLabel(tr("about.description"))
         desc.setWordWrap(True)
-        desc.setMaximumWidth(_MAXW - 120)
-        header_text.addWidget(desc)
+        desc.setMaximumWidth(_MAXW)
+        layout.addWidget(desc)
+
         meta = QLabel(
             f"{tr('about.version')} {__version__}   ·   {tr('about.license')}")
         meta.setStyleSheet(theme.hint_style())
-        header_text.addWidget(meta)
-        header.addWidget(text_container, 1, Qt.AlignmentFlag.AlignTop)
-        layout.addLayout(header)
+        layout.addWidget(meta)
 
         vibe = QLabel(tr("about.vibe"))
         vibe.setWordWrap(True)
@@ -519,7 +527,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(links_row)
 
         layout.addStretch()
-        return widget
+        return self._scrollable(widget)
 
     @staticmethod
     def _hline() -> QFrame:
@@ -577,13 +585,28 @@ class MainWindow(QMainWindow):
         self._nav.addItem(item)
 
     def _fit_nav_height(self) -> None:
-        """Size the list exactly to its rows – no scrollbar, no excess frame."""
-        total = sum(self._nav.sizeHintForRow(i) for i in range(self._nav.count()))
-        self._nav.setFixedHeight(total + 2 * self._nav.frameWidth() + 4)
+        """The list expands to fill the sidebar (see _build_ui) and scrolls when
+        too short, so it only needs to be allowed to shrink for the scrollbar to
+        kick in – no fixed height."""
+        self._nav.setMinimumHeight(0)
 
     # ------------------------------------------------------------------
     # Pages
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _scrollable(inner: QWidget) -> QWidget:
+        """Wrap a page so its content is never clipped when the window is short:
+        a vertical scrollbar appears only when the content is taller than the
+        viewport (WCAG: no truncated text, works at any size / font size)."""
+        from PySide6.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(inner)
+        return scroll
 
     @staticmethod
     def _page_title(text: str) -> QLabel:
@@ -594,21 +617,35 @@ class MainWindow(QMainWindow):
         return label
 
     def _build_general_page(self) -> QWidget:
-        widget = QWidget()
-        outer = QVBoxLayout(widget)
-        outer.setContentsMargins(24, 24, 24, 24)
+        from PySide6.QtWidgets import QCheckBox, QScrollArea, QSpinBox
+        from withease.core import autostart
+        from withease.gui.ui_utils import card, em
+        from withease.gui.widgets.hotkey_edit import HotkeyEdit
 
-        title = self._page_title(tr("settings.general.title"))
-        outer.addWidget(title)
-        outer.addSpacing(16)
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(30, 28, 30, 28)
+        outer.setSpacing(18)
 
-        form = QFormLayout()
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        form.setSpacing(12)
+        outer.addWidget(self._page_title(tr("settings.general.title")))
+        outer.addSpacing(2)
 
-        # Language selector
+        def _form() -> QFormLayout:
+            f = QFormLayout()
+            f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+            f.setHorizontalSpacing(16)
+            f.setVerticalSpacing(12)
+            f.setLabelAlignment(Qt.AlignmentFlag.AlignLeft
+                                | Qt.AlignmentFlag.AlignVCenter)
+            return f
+
+        # ---- Card 1: Appearance -----------------------------------------
+        appearance, appearance_body = card(
+            tr("settings.general.card.appearance"), "🎨")
+        form = _form()
+
         self._lang_combo = QComboBox()
-        self._lang_combo.setMinimumWidth(160)
+        self._lang_combo.setMinimumWidth(em(10))
         current_lang = self._app._app_config.get("language", "de")
         for code, display_name in SUPPORTED_LANGUAGES.items():
             self._lang_combo.addItem(display_name, userData=code)
@@ -617,9 +654,8 @@ class MainWindow(QMainWindow):
         self._lang_combo.currentIndexChanged.connect(self._on_language_changed)
         form.addRow(tr("settings.general.language"), self._lang_combo)
 
-        # Theme selector
         self._theme_combo = QComboBox()
-        self._theme_combo.setMinimumWidth(160)
+        self._theme_combo.setMinimumWidth(em(10))
         current_theme = self._app._app_config.get("theme", "system")
         for key in ("system", "light", "dark"):
             self._theme_combo.addItem(tr(f"settings.general.theme.{key}"), key)
@@ -628,8 +664,8 @@ class MainWindow(QMainWindow):
         self._theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         form.addRow(tr("settings.general.theme"), self._theme_combo)
 
-        # Contrast level (accessibility)
         self._contrast_combo = QComboBox()
+        self._contrast_combo.setMinimumWidth(em(10))
         self._contrast_combo.addItem(tr("settings.general.contrast.normal"),
                                      "normal")
         self._contrast_combo.addItem(tr("settings.general.contrast.high"),
@@ -640,8 +676,6 @@ class MainWindow(QMainWindow):
             self._on_contrast_changed)
         form.addRow(tr("settings.general.contrast"), self._contrast_combo)
 
-        # Global font size (accessibility)
-        from PySide6.QtWidgets import QSpinBox
         # 8–16 pt, or "system default".  The minimum (7) is never a real
         # size – it shows the special text and is stored as 0 (= system).
         self._font_spin = QSpinBox()
@@ -662,21 +696,28 @@ class MainWindow(QMainWindow):
         self._font_apply_btn.setEnabled(False)     # nothing pending yet
         self._font_apply_btn.clicked.connect(self._on_font_size_apply)
         font_row = QHBoxLayout()
+        font_row.setSpacing(8)
         font_row.addWidget(self._font_spin)
         font_row.addWidget(self._font_apply_btn)
         font_row.addStretch()
         form.addRow(tr("settings.general.font_size"), font_row)
+        appearance_body.addLayout(form)
+        outer.addWidget(appearance)
 
-        # Autostart with Windows
-        from PySide6.QtWidgets import QCheckBox
-        from withease.core import autostart
-        self._autostart_cb = QCheckBox()
+        # ---- Card 2: System ---------------------------------------------
+        system, system_body = card(tr("settings.general.card.system"), "🖥")
+        sys_form = _form()
+        self._autostart_cb = QCheckBox(tr("settings.general.autostart"))
         self._autostart_cb.setChecked(autostart.is_enabled())
         self._autostart_cb.toggled.connect(self._on_autostart_toggled)
-        form.addRow(tr("settings.general.autostart"), self._autostart_cb)
+        sys_form.addRow("", self._autostart_cb)
+        system_body.addLayout(sys_form)
+        outer.addWidget(system)
 
-        # Emergency stop key
-        from withease.gui.widgets.hotkey_edit import HotkeyEdit
+        # ---- Card 3: Emergency stop -------------------------------------
+        emg_card, emg_body = card(
+            tr("settings.general.card.emergency"), "🛑", danger=True)
+        emg_form = _form()
         emergency = self._app._profile_data.get("emergency_key", "F12")
         if (emergency and "+" not in emergency
                 and not (emergency.startswith("Key.")
@@ -685,34 +726,34 @@ class MainWindow(QMainWindow):
         self._emergency_edit = HotkeyEdit(emergency,
                                           action_id="app.emergency_stop")
         self._emergency_edit.key_changed.connect(self._on_emergency_key_changed)
+        emg_form.addRow(tr("settings.general.emergency_key"),
+                        self._emergency_edit)
+        emg_body.addLayout(emg_form)
 
-        form.addRow(tr("settings.general.emergency_key"),
-                    self._emergency_edit)
-
-        outer.addLayout(form)
-
-        # Warning shown when no emergency key is set (only the tray/button
-        # remain to stop everything).
+        # Warning shown when no emergency key is set (only tray/button remain).
         self._emergency_warning = QLabel(
             tr("settings.general.emergency_key.empty_warning"))
         self._emergency_warning.setStyleSheet(theme.warn_style())
         self._emergency_warning.setWordWrap(True)
         self._emergency_warning.setVisible(not emergency)
-        outer.addWidget(self._emergency_warning)
+        emg_body.addWidget(self._emergency_warning)
 
-        # Description as its own full-width row: a word-wrapping label
-        # nested inside a form cell reports a wrong height and gets clipped
-        # (Qt heightForWidth limitation) – as a top-level row it always
-        # grows with its text, at any font size.
         emergency_desc = QLabel(tr("settings.general.emergency_key.description"))
         emergency_desc.setStyleSheet(theme.hint_style())
         emergency_desc.setWordWrap(True)
-        from withease.gui.ui_utils import em
-        emergency_desc.setMaximumWidth(em(36))
-        outer.addSpacing(4)
-        outer.addWidget(emergency_desc)
+        emg_body.addWidget(emergency_desc)
+        outer.addWidget(emg_card)
+
         outer.addStretch()
-        return widget
+
+        # Wrap in a scroll area so the cards never clip at large font sizes.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(page)
+        return scroll
 
     def _apply_appearance(self, key: str, value) -> None:
         """Persist one appearance setting and re-apply the whole theme
@@ -806,10 +847,14 @@ class MainWindow(QMainWindow):
         # Rebuild
         self.setWindowTitle(tr("settings.title"))
         # The nav/sidebar widgets survive the rebuild – refresh everything
-        # that depends on theme or font size (selection colours, widths).
-        theme.style_item_view(self._nav, "QListWidget#nav")
+        # that depends on theme or font size (nav QSS is central in
+        # app_stylesheet; just re-assert the font and the width).
+        from PySide6.QtWidgets import QApplication
+        _app = QApplication.instance()
+        if _app is not None:
+            self._nav.setFont(_app.font())
         from withease.gui.ui_utils import em
-        self._sidebar.setFixedWidth(max(190, em(11)))
+        self._sidebar.setFixedWidth(max(224, em(13)))
         self._populate_nav()
         from withease.gui.ui_utils import compact_fields
         compact_fields(self._stack)
@@ -872,7 +917,7 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
         self._refresh_profiles_list()
-        return widget
+        return self._scrollable(widget)
 
     # -- Profiles page handlers -----------------------------------------
 
@@ -1075,10 +1120,14 @@ class MainWindow(QMainWindow):
                 cell_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 cell_layout.addWidget(cb)
                 table.setCellWidget(row, 0, cell)
+                row_tip = tr("settings.actions.row_tooltip")
                 label_item = QTableWidgetItem(label)
                 label_item.setData(Qt.ItemDataRole.UserRole, fid)
+                label_item.setToolTip(row_tip)
                 table.setItem(row, 1, label_item)
-                table.setItem(row, 2, QTableWidgetItem(key))
+                key_item = QTableWidgetItem(key)
+                key_item.setToolTip(row_tip)
+                table.setItem(row, 2, key_item)
                 if keep_fid is not None and fid == keep_fid:
                     table.setCurrentCell(row, 1)
 
@@ -1141,9 +1190,9 @@ class MainWindow(QMainWindow):
         move_row.addWidget(move_hint)
         move_row.addStretch()
         for arrow, delta in (("▲", -1), ("▼", 1)):
-            from withease.gui.ui_utils import em
+            # Plain buttons at their natural size – same look as the Makros
+            # reorder arrows (no fixed width / iconBtn styling).
             btn = QPushButton(arrow)
-            btn.setFixedWidth(max(32, em(2)))
 
             def on_move(_checked: bool = False, d: int = delta) -> None:
                 fid = selected_fid()
@@ -1219,7 +1268,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(opts)
         layout.addStretch()
-        return widget
+        return self._scrollable(widget)
 
     # ------------------------------------------------------------------
     # Window state

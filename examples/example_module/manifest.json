@@ -1,6 +1,6 @@
 {
   "name": "Beispielmodul",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "WithEase",
   "description": "Minimales Beispiel für ein externes WithEase-Modul.",
   "entry": "module.py",

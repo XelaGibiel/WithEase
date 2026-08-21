@@ -137,6 +137,27 @@ def _seg_is_hallucination(no_speech_prob: float, avg_logprob: float,
     return hit
 
 
+def _trailing_trim_count(words: list, params: dict) -> int:
+    """Mirror of the module's trailing-word trim: how many trailing words of the
+    last segment to drop (low-confidence or after a silence gap)."""
+    wp = params.get("word_prob")
+    wg = params.get("word_gap")
+    if not words or (wp is None and wg is None):
+        return 0
+    n = 0
+    for i in range(len(words) - 1, -1, -1):
+        w = words[i]
+        prob = getattr(w, "probability", 1.0)
+        start = getattr(w, "start", 0.0) or 0.0
+        prev_end = (getattr(words[i - 1], "end", start) or start) if i > 0 else start
+        gap = start - prev_end
+        if (wp is not None and prob < wp) or (wg is not None and gap > wg):
+            n += 1
+        else:
+            break
+    return n
+
+
 def _transcribe(model, wav_path: str, req: dict) -> tuple[str, list]:
     language = req.get("language") or None
     prompt = req.get("initial_prompt") or None
@@ -172,7 +193,7 @@ def _transcribe(model, wav_path: str, req: dict) -> tuple[str, list]:
         word_timestamps=True,
     )
     seg_list = list(segments)       # iterating drives the actual inference
-    parts, low = [], []
+    kept = []
     for idx, seg in enumerate(seg_list):
         ns = getattr(seg, "no_speech_prob", 0.0)
         lp = getattr(seg, "avg_logprob", 0.0)
@@ -182,7 +203,22 @@ def _transcribe(model, wav_path: str, req: dict) -> tuple[str, list]:
                 continue            # Whisper itself flags this as a hallucination
         elif hall is not None and _seg_is_hallucination(ns, lp, is_last, hall):
             continue
-        parts.append(seg.text.strip())
+        kept.append(seg)
+    # Word-level trailing trim (batch only): cut invented words at the very end.
+    trimmed_last = None
+    if not live and hall is not None and kept:
+        words = getattr(kept[-1], "words", None) or []
+        n = _trailing_trim_count(words, hall)
+        if words and n >= len(words):
+            kept = kept[:-1]
+        elif n:
+            trimmed_last = "".join(
+                getattr(w, "word", "") for w in words[:len(words) - n]).strip()
+    parts, low = [], []
+    for i, seg in enumerate(kept):
+        last = i == len(kept) - 1
+        parts.append(trimmed_last if (last and trimmed_last is not None)
+                     else seg.text.strip())
         for w in (getattr(seg, "words", None) or []):
             if getattr(w, "probability", 1.0) < 0.55:
                 token = (w.word or "").strip().strip(" .,;:!?…\"'„“”")

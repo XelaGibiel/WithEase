@@ -514,8 +514,11 @@ class DictationWindow(QWidget):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(4)
         hist_label = QLabel("Verlauf (zum Laden anklicken)")
+        hist_label.setObjectName("dictHistoryHeader")   # styled via theme QSS
         right_layout.addWidget(hist_label)
         self._history = QListWidget()
+        self._history.setObjectName("dictHistory")   # separators via theme QSS
+        self._history.setAlternatingRowColors(True)  # clear entry distinction
         self._history.setWordWrap(True)
         self._history.itemClicked.connect(self._load_history)
         right_layout.addWidget(self._history, 1)
@@ -595,23 +598,30 @@ class DictationWindow(QWidget):
 
         # --- buttons (each with a keyboard shortcut) ---
         row = QHBoxLayout()
-        self._insert_btn = QPushButton("Einfügen && Schließen  (Strg+Enter)")
+        # Labels stay short so the buttons don't get clipped at large font
+        # sizes; the keyboard shortcut lives in the tooltip (hover to see it)
+        # while setShortcut keeps the key binding active.
+        self._insert_btn = QPushButton("Einfügen && Schließen")
         self._insert_btn.setShortcut("Ctrl+Return")
         self._insert_btn.setToolTip("Text in die App einfügen und schließen "
                                     "(Strg+Enter)")
         self._insert_btn.clicked.connect(self._do_insert)
         row.addWidget(self._insert_btn)
-        self._copy_btn = QPushButton("Kopieren  (Strg+Umschalt+C)")
+        self._copy_btn = QPushButton("Kopieren")
         self._copy_btn.setShortcut("Ctrl+Shift+C")
+        self._copy_btn.setToolTip("In die Zwischenablage kopieren "
+                                  "(Strg+Umschalt+C)")
         self._copy_btn.clicked.connect(self._do_copy)
         row.addWidget(self._copy_btn)
-        self._copy_close_btn = QPushButton(
-            "Kopieren && Schließen  (Strg+Umschalt+Enter)")
+        self._copy_close_btn = QPushButton("Kopieren && Schließen")
         self._copy_close_btn.setShortcut("Ctrl+Shift+Return")
+        self._copy_close_btn.setToolTip("Kopieren und Fenster schließen "
+                                        "(Strg+Umschalt+Enter)")
         self._copy_close_btn.clicked.connect(self._do_copy_and_close)
         row.addWidget(self._copy_close_btn)
-        self._close_btn = QPushButton("Schließen  (Strg+W)")
+        self._close_btn = QPushButton("Schließen")
         self._close_btn.setShortcut("Ctrl+W")
+        self._close_btn.setToolTip("Fenster schließen (Strg+W)")
         self._close_btn.clicked.connect(self._close_and_clear)
         row.addWidget(self._close_btn)
         row.addStretch()
@@ -1285,10 +1295,12 @@ class DictationWindow(QWidget):
         text = item.data(Qt.ItemDataRole.UserRole)
         if not text:
             return
-        # Keep whatever is currently in the buffer before replacing it (it is
-        # also archived to the history).  Use an undoable select-all + insert so
-        # Strg+Z brings the previous text back — setPlainText would wipe undo.
-        self._archive()
+        # Just load the clicked entry's text into the buffer – do NOT archive
+        # the current buffer here.  Archiving on every click re-added the (often
+        # previously-loaded) buffer to the top, which created duplicates and
+        # reordered the list.  The replace is undoable (select-all + insert), so
+        # Strg+Z still brings the previous text back; the buffer is archived
+        # normally on "Einfügen"/"Kopieren & Schließen".
         cur = self._edit.textCursor()
         cur.beginEditBlock()
         cur.select(QTextCursor.SelectionType.Document)

@@ -152,14 +152,12 @@ class StorePage(QWidget):
 
     def _build_card(self, module: "module_store.StoreModule") -> QWidget:
         card = QFrame()
-        card.setObjectName("storeCard")
-        card.setStyleSheet(
-            "#storeCard { border: 1px solid palette(mid); border-radius: 8px; }")
+        card.setObjectName("card")             # white card (central card style)
 
         # Icon on the left, the module's text block on the right, so the list is
-        # easier to scan at a glance.
+        # easier to scan at a glance.  Padding comes from the central card QSS.
         outer = QHBoxLayout(card)
-        outer.setContentsMargins(14, 12, 14, 12)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(14)
 
         icon = QLabel(module.icon or "🧩")

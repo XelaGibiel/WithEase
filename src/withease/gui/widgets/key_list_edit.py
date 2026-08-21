@@ -37,22 +37,6 @@ _PRESETS: list[tuple[str, str | None]] = [
 ]
 _PRESET_KEYS = {k for k, _ in _PRESETS}
 
-_CAP_STYLE = """
-QPushButton {
-    border: 0.5px solid palette(mid);
-    border-bottom: 2px solid palette(mid);
-    border-radius: 7px;
-    padding: 5px 12px;
-    background: palette(base);
-}
-QPushButton:hover { border-color: palette(highlight); }
-QPushButton:checked {
-    background: palette(highlight);
-    color: palette(highlighted-text);
-    border-color: palette(highlight);
-}
-"""
-
 
 class _KeyChip(QWidget):
     """A single removable key cap (used for custom, non-preset keys)."""
@@ -68,9 +52,8 @@ class _KeyChip(QWidget):
 
         from withease.gui.ui_utils import em
         btn = QPushButton("✕")
-        btn.setFixedSize(em(1.1), em(1.1))
-        btn.setFlat(True)
-        btn.setStyleSheet("color: palette(mid);")
+        btn.setFixedSize(em(1.4), em(1.4))
+        btn.setProperty("iconBtn", True)      # tight padding so ✕ fits
         btn.clicked.connect(lambda: self.removed.emit(self._key))
         layout.addWidget(btn)
 
@@ -105,7 +88,7 @@ class KeyListEdit(QWidget):
             btn = QPushButton(fixed or self._format_key(key))
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(_CAP_STYLE)
+            # Styling is central (theme.app_stylesheet): checked = accent.
             btn.toggled.connect(lambda on, k=key: self._on_preset_toggled(k, on))
             preset_grid.addWidget(btn, i // 4, i % 4)
             self._preset_btns[key] = btn
@@ -120,9 +103,10 @@ class KeyListEdit(QWidget):
         self._chip_layout.setColumnStretch(3, 1)
         outer.addWidget(self._chip_area)
 
-        from withease.gui.ui_utils import em
+        # No fixed height: let it size like the preset buttons.  A too-small
+        # fixed height clipped the bottom of the button's border (the box model
+        # needs room for the 1px border + 6px padding + min-height).
         self._add_btn = QPushButton(tr("keylist.add_other"))
-        self._add_btn.setFixedHeight(max(28, em(1.7)))
         self._add_btn.clicked.connect(self._start_recording)
         add_row = QHBoxLayout()
         add_row.setContentsMargins(0, 0, 0, 0)

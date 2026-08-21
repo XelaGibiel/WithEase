@@ -60,7 +60,8 @@ class HotkeyEdit(QWidget):
 
         from withease.gui.ui_utils import em
         self._clear_btn = QPushButton("✕")
-        self._clear_btn.setFixedWidth(max(28, em(1.7)))
+        self._clear_btn.setProperty("iconBtn", True)   # tight padding so ✕ fits
+        self._clear_btn.setFixedWidth(max(34, em(2.0)))
         self._clear_btn.setToolTip(tr("hotkey.clear"))
         self._clear_btn.clicked.connect(self._clear)
         layout.addWidget(self._clear_btn)

@@ -2,14 +2,15 @@
 
 **Modular accessibility assistant for people with motor impairments.**
 
-> **Built with vibe coding — and proud of it.**
-> I'll be upfront: WithEase was created with AI-assisted "vibe coding". I don't
-> think that's anything to be ashamed of nowadays. Quite the opposite — it's
-> what let me turn my own idea into a program that people can actually use, and
-> share it instead of keeping it to myself. Passing up that chance would have
-> been the worse choice. Feedback and contributions are very welcome.
+## Why WithEase?
 
-WithEase runs quietly in the system tray and helps users with limited motor control work more comfortably with mouse and keyboard. Every feature is a separate module that can be switched on or off individually – so the program never feels overloaded.
+**A journey toward independence.**
+
+As someone personally affected by motor impairments, I spent a long time navigating the digital world using a patchwork of different tools and complex workarounds. While these solutions helped, they were often fragmented and difficult to manage as a cohesive system. They created more "noise."
+
+I wanted something different: a unified, modular home for accessibility features—one place where everything works together seamlessly.
+
+To build this, I embraced the power of AI-assisted "Vibe Coding." For me, it wasn't just a way to write code; it was the catalyst that allowed me to turn my personal need into a usable reality for others. WithEase is the result of that journey—it's not just an application, but a step toward true digital independence for everyone who needs it.
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
@@ -68,12 +69,14 @@ WithEase runs quietly in the system tray and helps users with limited motor cont
 - In-app **module library**: browse and one-click install add-on modules
 - Own app logo shown in the taskbar, window and tray
 
-### Action Manager
-No hardcoded shortcuts. Instead:
-1. Define an **Action** (e.g. "Center mouse")
-2. Assign any **trigger** to it (keyboard key, mouse button, macro pad, foot switch, voice command, gamepad, eye tracker …)
+### ⚙️ Action Manager: Your Custom Control Center
 
-This makes WithEase input-device agnostic – new devices can be supported without touching the core logic.
+Instead of forcing users to navigate complex configurations or learn hidden paths, WithEase uses an Action-based logic. The system is designed to be device-agnostic; it doesn't care how you trigger a command, only that the action is performed.
+
+1. **The Actions:** A comprehensive list of what can be done (e.g., "Center Mouse", "Key Delay", "Launch App").
+2. **The Trigger:** Simply map any input to an Action. There is no learning curve; you just assign your preferred trigger—be it a standard key, a mouse button, a foot pedal, or a macro pad—to the specific action you want it to perform.
+
+By decoupling "what" from "how," WithEase allows users to integrate specialized hardware into their workflow instantly without ever needing to touch the core code.
 
 ---
 
