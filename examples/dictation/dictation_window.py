@@ -25,9 +25,11 @@ import re
 import sys
 from typing import Callable
 
-from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QRectF, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
+    QFont,
+    QFontMetrics,
     QPainter,
     QPen,
     QTextCharFormat,
@@ -83,28 +85,77 @@ def _diff_html(original: str, result: str) -> str:
 
 
 class _AiPreview(QDialog):
-    """Preview a KI-Aktion result with its changes highlighted, so the user can
-    compare it against the original and decide whether to keep it."""
+    """Preview a KI-Aktion result before keeping it.
+
+    Three views to switch between – the result with changes highlighted, the
+    untouched original, or both side by side – and the chosen view plus the
+    window size/position are remembered for next time (via QSettings)."""
+
+    _MODES = ("result", "original", "side")
 
     def __init__(self, original: str, result: str,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("KI-Vorschau")
-        self.resize(660, 480)
         self._original = original
         self._result = result
+        self._store = QSettings("WithEase", "AiPreview")
+
+        geo = self._store.value("geometry")
+        if geo is not None:
+            self.restoreGeometry(geo)          # remembered size/position
+        else:
+            self.resize(660, 480)
+
         layout = QVBoxLayout(self)
-        info = QLabel("Ergebnis der KI-Aktion – grün = geändert oder ergänzt.")
-        info.setWordWrap(True)
-        info.setStyleSheet("color: palette(windowText);")
-        layout.addWidget(info)
-        self._view = QTextBrowser()
+        self._info = QLabel()
+        self._info.setWordWrap(True)
+        self._info.setStyleSheet("color: palette(windowText);")
+        layout.addWidget(self._info)
+        self._view = QTextBrowser()          # single view: Ergebnis / Original
         layout.addWidget(self._view, 1)
-        self._show_diff()
+        # Side-by-side: a real splitter so the divider can be dragged; a wider,
+        # accented handle makes it clearly grabbable.
+        self._split = QSplitter(Qt.Orientation.Horizontal)
+        self._split.setHandleWidth(10)
+        self._split.setStyleSheet(
+            "QSplitter::handle:horizontal { width: 10px; margin: 2px 4px;"
+            " border-radius: 4px; background: palette(mid); }"
+            "QSplitter::handle:horizontal:hover { background: palette(dark); }")
+        self._left = QTextBrowser()
+        self._right = QTextBrowser()
+        self._split.addWidget(self._left)
+        self._split.addWidget(self._right)
+        self._split.setCollapsible(0, False)
+        self._split.setCollapsible(1, False)
+        layout.addWidget(self._split, 1)
+        self._split.hide()
+
         row = QHBoxLayout()
-        self._toggle = QCheckBox("Nur Original anzeigen")
-        self._toggle.toggled.connect(self._on_toggle)
-        row.addWidget(self._toggle)
+        # View switch: Ergebnis (diff) · Original · Nebeneinander (side by side).
+        self._mode_btns: dict[str, QPushButton] = {}
+        for mode, label in (("result", "Ergebnis"),
+                            ("original", "Original"),
+                            ("side", "Nebeneinander")):
+            b = QPushButton(label)
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            # Checked buttons render bold (theme QSS), which is wider than the
+            # size hint computed with the normal font – reserve the bold width
+            # so the label is never clipped when active.
+            _bold = QFont(b.font())
+            _bold.setBold(True)
+            b.setMinimumWidth(QFontMetrics(_bold).horizontalAdvance(label) + 34)
+            b.clicked.connect(lambda _c=False, m=mode: self._set_mode(m))
+            row.addWidget(b)
+            self._mode_btns[mode] = b
+        row.addSpacing(12)
+        self._highlight = bool(self._store.value("highlight", True, type=bool))
+        self._hl_cb = QCheckBox("Änderungen hervorheben")
+        self._hl_cb.setChecked(self._highlight)
+        self._hl_cb.setToolTip("Geänderte oder ergänzte Wörter grün markieren")
+        self._hl_cb.toggled.connect(self._on_highlight)
+        row.addWidget(self._hl_cb)
         row.addStretch()
         discard = QPushButton("Verwerfen")
         discard.clicked.connect(self.reject)
@@ -115,15 +166,65 @@ class _AiPreview(QDialog):
         row.addWidget(keep)
         layout.addLayout(row)
 
-    def _show_diff(self) -> None:
-        self._view.setHtml(_diff_html(self._original, self._result))
+        mode = self._store.value("mode", "result")
+        if mode not in self._MODES:
+            mode = "result"
+        self._set_mode(mode)                    # remembered view
 
-    def _on_toggle(self, on: bool) -> None:
-        if on:
-            import html as _html
-            self._view.setHtml(_html.escape(self._original).replace("\n", "<br>"))
+    def _set_mode(self, mode: str) -> None:
+        self._mode = mode
+        self._store.setValue("mode", mode)
+        for m, b in self._mode_btns.items():
+            b.setChecked(m == mode)
+        self._render()
+
+    def _on_highlight(self, on: bool) -> None:
+        self._highlight = bool(on)
+        self._store.setValue("highlight", self._highlight)
+        self._render()
+
+    def _result_html(self) -> str:
+        """The result – with green change-highlights when the option is on,
+        otherwise plain text."""
+        if self._highlight:
+            return _diff_html(self._original, self._result)
+        import html as _html
+        return _html.escape(self._result).replace("\n", "<br>")
+
+    def _render(self) -> None:
+        import html as _html
+        # The highlight option only affects the result views, not the original.
+        self._hl_cb.setEnabled(self._mode != "original")
+        if self._highlight and self._mode != "original":
+            self._info.setText(
+                "Ergebnis der KI-Aktion – grün = geändert oder ergänzt.")
         else:
-            self._show_diff()
+            self._info.setText("Ergebnis der KI-Aktion.")
+        side = (self._mode == "side")
+        self._split.setVisible(side)
+        self._view.setVisible(not side)
+        if side:
+            self._left.setHtml(
+                "<b>Original</b><br><br>"
+                + _html.escape(self._original).replace("\n", "<br>"))
+            self._right.setHtml(
+                "<b>Ergebnis</b><br><br>" + self._result_html())
+        elif self._mode == "original":
+            self._view.setHtml(
+                _html.escape(self._original).replace("\n", "<br>"))
+        else:
+            self._view.setHtml(self._result_html())
+
+    def _save_geometry(self) -> None:
+        self._store.setValue("geometry", self.saveGeometry())
+
+    def accept(self) -> None:          # type: ignore[override]
+        self._save_geometry()
+        super().accept()
+
+    def reject(self) -> None:          # type: ignore[override]
+        self._save_geometry()
+        super().reject()
 
 # Status colours (match the floating chip in module.py).
 _STATE = {
@@ -507,6 +608,14 @@ class DictationWindow(QWidget):
         self._edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._edit.setMinimumWidth(280)
         self._badges = _BadgeOverlay(self._edit)
+        # A pill shown centred over the editor while a KI-Aktion runs, so it is
+        # obvious that the text is still being worked on.
+        self._busy_chip = QLabel("✨  KI arbeitet …", self._edit.viewport())
+        self._busy_chip.setStyleSheet(
+            "QLabel { background: rgba(20,24,32,0.92); color: #FFFFFF;"
+            " border: 1px solid rgba(255,255,255,0.20); border-radius: 16px;"
+            " padding: 10px 24px; font-weight: bold; font-size: larger; }")
+        self._busy_chip.hide()
         split.addWidget(self._edit)
 
         right = QWidget()
@@ -735,16 +844,30 @@ class DictationWindow(QWidget):
         self._ai_actions = list(actions or [])
         self._rebuild_ai_bar()
 
+    def _position_busy_chip(self) -> None:
+        self._busy_chip.adjustSize()
+        r = self._edit.viewport().rect()
+        self._busy_chip.move(
+            max(0, (r.width() - self._busy_chip.width()) // 2),
+            max(0, (r.height() - self._busy_chip.height()) // 2))
+
     def _apply_ai_busy(self, on: bool) -> None:
         for b in self._ai_buttons:
             b.setEnabled(not on)
         if on:
             self._hint.setText("KI arbeitet …")
+            self._position_busy_chip()
+            self._busy_chip.show()
+            self._busy_chip.raise_()
+        else:
+            self._busy_chip.hide()
 
     def _apply_ai_message(self, msg: str) -> None:
+        self._busy_chip.hide()
         self._hint.setText(msg)
 
     def _apply_ai_result(self, text: str) -> None:
+        self._busy_chip.hide()
         for b in self._ai_buttons:
             b.setEnabled(True)
         original = self._edit.toPlainText()
@@ -1408,6 +1531,10 @@ class DictationWindow(QWidget):
                 and self._editor.has_pending()):
             self._cancel_candidates()
             return True
+        # Keep the „KI arbeitet …“ pill centred when the editor is resized.
+        if (obj is self._edit and event.type() == QEvent.Type.Resize
+                and self._busy_chip.isVisible()):
+            self._position_busy_chip()
         return super().eventFilter(obj, event)
 
     def _cancel_candidates(self) -> None:
