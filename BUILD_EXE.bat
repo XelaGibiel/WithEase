@@ -21,6 +21,15 @@ cd /d "%~dp0"
   --hidden-import audioop ^
   --hidden-import base64 ^
   --hidden-import random ^
+  --hidden-import difflib ^
+  --hidden-import html ^
+  --hidden-import unicodedata ^
+  --hidden-import datetime ^
+  --hidden-import glob ^
+  --hidden-import queue ^
+  --hidden-import faulthandler ^
+  --hidden-import warnings ^
+  --hidden-import site ^
   --noupx ^
   src\withease\__main__.py
 echo.
