@@ -678,10 +678,22 @@ def apply_theme(qt_app: QApplication, name: str,
         pal = qt_app.palette()
         sel_bg = QColor("#F2B27C") if dark else QColor("#BDD3EF")
         sel_fg = QColor("#000000")
+        # Same reasoning for the *alternating-row* colour: any item view with
+        # setAlternatingRowColors(True) that doesn't opt into style_item_view()
+        # (or a themed objectName) falls back to the native AlternateBase palette
+        # role, which Windows can tint with the system accent (e.g. dark red) –
+        # that bit a second, unrelated table (the dictionary editor) after the
+        # first fix only covered the widgets we had touched.  Pinning it here,
+        # app-wide, closes the whole bug class instead of one widget at a time.
+        s = _surfaces()
+        alt_base = QColor(s["listalt"])
+        base = QColor(s["control"])
         for grp in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive,
                     QPalette.ColorGroup.Disabled):
             pal.setColor(grp, QPalette.ColorRole.Highlight, sel_bg)
             pal.setColor(grp, QPalette.ColorRole.HighlightedText, sel_fg)
+            pal.setColor(grp, QPalette.ColorRole.AlternateBase, alt_base)
+            pal.setColor(grp, QPalette.ColorRole.Base, base)
         qt_app.setPalette(pal)
         qt_app.setStyleSheet(base_qss + app_stylesheet())
 
