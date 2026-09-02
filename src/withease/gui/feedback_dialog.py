@@ -35,6 +35,13 @@ from withease.gui import theme
 
 # Hosted form endpoint that emails the author (Formspree).  Empty = feedback
 # not configured yet.
+#
+# The WEBSITE posts to a different form of its own.  They shared one until
+# 0.7.1, which meant a bot burning the monthly quota through the public web
+# form also silenced this button - and the id is extractable from the program
+# either way.  Two forms: two quotas, and one failure cannot take out the
+# other.  This is the older, confirmed one, kept here on purpose because the
+# program is already in people's hands.
 FEEDBACK_ENDPOINT = "https://formspree.io/f/xwvdgrob"
 
 # Where the fallback sends people when the form is unreachable.
@@ -176,7 +183,11 @@ class FeedbackDialog(QDialog):
             "name": self._name.text().strip(),
             "app_version": __version__,
             "os": f"{platform.system()} {platform.release()}",
-            "_subject": f"WithEase-Feedback ({self._category.currentData()})",
+            # Says which of the two forms this came from, so the two are
+            # distinguishable in the inbox (the website sends "website").
+            "source": "app",
+            "_subject": f"WithEase-Feedback (App, "
+                        f"{self._category.currentData()})",
         }
         # The contact field is optional.  Only pass it as Formspree's reserved
         # "email" (reply-to) field when it is a valid address – otherwise the
