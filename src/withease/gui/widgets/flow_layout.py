@@ -24,6 +24,15 @@ class FlowLayout(QLayout):
     def addItem(self, item: QLayoutItem) -> None:      # noqa: N802
         self._items.append(item)
 
+    def insertItem(self, index: int, item: QLayoutItem) -> None:  # noqa: N802
+        """Put an item at a given position instead of appending it.
+
+        QLayout has no such method, and a flow layout of buttons is exactly
+        where ui_utils._separate_from_neighbour() needs to slip a gap in front
+        of a delete button that ended up next to a harmless one."""
+        self._items.insert(max(0, index), item)
+        self.invalidate()
+
     def count(self) -> int:
         return len(self._items)
 

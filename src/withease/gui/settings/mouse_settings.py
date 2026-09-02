@@ -25,6 +25,9 @@ from withease.core.i18n import tr
 from withease.gui import theme
 from withease.gui.widgets.collapsible_section import CollapsibleSection
 from withease.gui.widgets.hotkey_edit import HotkeyEdit
+from withease.gui.widgets.value_slider import ValueSlider
+from withease.gui.ui_utils import (checkbox_with_hint, label_with_hint,
+                                  set_option_hint)
 from withease.gui.widgets.screen_zone_overlay import ScreenZoneOverlay
 
 _GRIDS = [("1×2", "1x2", 1, 2), ("2×2", "2x2", 2, 2), ("3×3", "3x3", 3, 3)]
@@ -43,6 +46,21 @@ class MouseSettingsWidget(QWidget):
         from withease.gui.settings.module_sync import sync_module_checkbox
         sync_module_checkbox(self, module, self._enabled_cb,
                              self._update_enabled_state)
+        # The zone preview must not outlive the settings window (hideEvent
+        # alone doesn't cover every teardown order) – see MainWindow.closeEvent.
+        from withease.core.event_bus import bus
+        bus.subscribe("gui.settings_closed", self._on_settings_closed)
+        self.destroyed.connect(
+            lambda: bus.unsubscribe("gui.settings_closed",
+                                    self._on_settings_closed))
+
+    def _on_settings_closed(self, **_: object) -> None:
+        self._hide_zone_overlay()
+        try:
+            if self._zones_preview_cb.isChecked():
+                self._zones_preview_cb.setChecked(False)
+        except RuntimeError:
+            pass              # widget already destroyed by a rebuild
 
     # ------------------------------------------------------------------
 
@@ -50,6 +68,10 @@ class MouseSettingsWidget(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        # Never scroll sideways (see MainWindow._scrollable): a page scrolled
+        # right hid the cards' left edge behind the sidebar.
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -73,6 +95,7 @@ class MouseSettingsWidget(QWidget):
             tr("module.mouse.centering"),
             self._settings.get("centering_enabled", False),
             description=tr("module.mouse.centering.description"),
+            icon="🎯",
         )
         self._centering_sec.toggled.connect(
             lambda v: self._save("centering_enabled", v))
@@ -96,8 +119,10 @@ class MouseSettingsWidget(QWidget):
             int(self._settings.get("centering_countdown", 3)))
         self._centering_countdown.valueChanged.connect(
             lambda v: self._save("centering_countdown", v))
-        centering_form.addRow(tr("module.mouse.centering.countdown"),
-                              self._centering_countdown)
+        centering_form.addRow(
+            label_with_hint(tr("module.mouse.centering.countdown"),
+                            tr("module.mouse.centering.countdown.hint")),
+            self._centering_countdown)
         self._clamp_countdown_max()
 
         self._centering_hotkey = HotkeyEdit(
@@ -112,7 +137,8 @@ class MouseSettingsWidget(QWidget):
             bool(self._settings.get("centering_show_indicator", True)))
         self._centering_symbol_cb.toggled.connect(
             lambda v: self._save("centering_show_indicator", v))
-        centering_form.addRow("", self._centering_symbol_cb)
+        centering_form.addRow("", checkbox_with_hint(
+            self._centering_symbol_cb, tr("module.mouse.show_symbol.hint")))
 
         centering_form_widget = QWidget()
         centering_form_widget.setLayout(centering_form)
@@ -124,6 +150,7 @@ class MouseSettingsWidget(QWidget):
             tr("module.mouse.precision"),
             self._settings.get("precision_mode_enabled", False),
             description=tr("module.mouse.precision.description"),
+            icon="🐌",
         )
         self._precision_sec.toggled.connect(self._on_precision_toggled)
 
@@ -135,6 +162,9 @@ class MouseSettingsWidget(QWidget):
             tr("module.mouse.precision.mode.hold"), "hold")
         self._precision_mode_combo.addItem(
             tr("module.mouse.precision.mode.toggle"), "toggle")
+        for i, key in enumerate(("hold", "toggle")):
+            set_option_hint(self._precision_mode_combo, i,
+                            tr(f"module.mouse.precision.mode.{key}.hint"))
         current_mode = self._settings.get("precision_mode_type", "hold")
         self._precision_mode_combo.setCurrentIndex(
             0 if current_mode == "hold" else 1)
@@ -142,11 +172,12 @@ class MouseSettingsWidget(QWidget):
             lambda i: self._save(
                 "precision_mode_type",
                 self._precision_mode_combo.itemData(i)))
-        precision_form.addRow(tr("module.mouse.precision.mode"),
-                              self._precision_mode_combo)
+        precision_form.addRow(
+            label_with_hint(tr("module.mouse.precision.mode"),
+                            tr("module.mouse.precision.mode.hint")),
+            self._precision_mode_combo)
 
-        self._precision_slider = QSlider(Qt.Orientation.Horizontal)
-        self._precision_slider.setRange(1, 10)
+        self._precision_slider = ValueSlider(1, 10)
         self._precision_slider.setValue(
             int(self._settings.get("precision_speed", 3)))
         self._precision_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
@@ -169,7 +200,8 @@ class MouseSettingsWidget(QWidget):
             bool(self._settings.get("precision_show_indicator", True)))
         self._precision_symbol_cb.toggled.connect(
             lambda v: self._save("precision_show_indicator", v))
-        precision_form.addRow("", self._precision_symbol_cb)
+        precision_form.addRow("", checkbox_with_hint(
+            self._precision_symbol_cb, tr("module.mouse.show_symbol.hint")))
 
         precision_form_widget = QWidget()
         precision_form_widget.setLayout(precision_form)
@@ -181,6 +213,7 @@ class MouseSettingsWidget(QWidget):
             tr("module.mouse.click_lock"),
             self._settings.get("click_lock_enabled", False),
             description=tr("module.mouse.click_lock.description"),
+            icon="🔒",
         )
         self._clicklock_sec.toggled.connect(
             lambda v: self._save("click_lock_enabled", v))
@@ -201,7 +234,8 @@ class MouseSettingsWidget(QWidget):
             bool(self._settings.get("click_lock_show_indicator", True)))
         self._clicklock_symbol_cb.toggled.connect(
             lambda v: self._save("click_lock_show_indicator", v))
-        clicklock_form.addRow("", self._clicklock_symbol_cb)
+        clicklock_form.addRow("", checkbox_with_hint(
+            self._clicklock_symbol_cb, tr("module.mouse.show_symbol.hint")))
 
         clicklock_form_widget = QWidget()
         clicklock_form_widget.setLayout(clicklock_form)
@@ -213,6 +247,7 @@ class MouseSettingsWidget(QWidget):
             tr("module.mouse.highlight"),
             self._settings.get("highlight_enabled", False),
             description=tr("module.mouse.highlight.description"),
+            icon="✨",
         )
         self._highlight_sec.toggled.connect(
             lambda v: self._save("highlight_enabled", v))
@@ -242,6 +277,9 @@ class MouseSettingsWidget(QWidget):
             tr("module.mouse.highlight.ring_style.open"), "open")
         self._highlight_ring_style.addItem(
             tr("module.mouse.highlight.ring_style.closed"), "closed")
+        for i, key in enumerate(("open", "closed")):
+            set_option_hint(self._highlight_ring_style, i,
+                            tr(f"module.mouse.highlight.ring_style.{key}.hint"))
         if self._settings.get("highlight_ring_style", "open") == "closed":
             self._highlight_ring_style.setCurrentIndex(1)
         self._highlight_ring_style.currentIndexChanged.connect(
@@ -262,8 +300,7 @@ class MouseSettingsWidget(QWidget):
                               self._highlight_color_btn)
 
         # Pulse radius
-        self._highlight_radius = QSlider(Qt.Orientation.Horizontal)
-        self._highlight_radius.setRange(40, 200)
+        self._highlight_radius = ValueSlider(40, 200, suffix=" px")
         self._highlight_radius.setValue(
             int(self._settings.get("highlight_radius", 90)))
         self._highlight_radius.setTickPosition(QSlider.TickPosition.TicksBelow)
@@ -296,8 +333,7 @@ class MouseSettingsWidget(QWidget):
         highlight_form.addRow("", self._highlight_arrow_cb)
 
         # Arrow thickness
-        self._highlight_arrow_thickness = QSlider(Qt.Orientation.Horizontal)
-        self._highlight_arrow_thickness.setRange(3, 30)
+        self._highlight_arrow_thickness = ValueSlider(3, 30, suffix=" px")
         self._highlight_arrow_thickness.setValue(
             int(self._settings.get("highlight_arrow_thickness", 6)))
         self._highlight_arrow_thickness.setTickPosition(
@@ -313,10 +349,13 @@ class MouseSettingsWidget(QWidget):
         # Permanent direction arrow (corner overlay pointing at the cursor)
         self._arrow_persistent_cb = QCheckBox(
             tr("module.mouse.highlight.arrow_persistent"))
+
         self._arrow_persistent_cb.setChecked(
             bool(self._settings.get("highlight_arrow_persistent", False)))
         self._arrow_persistent_cb.toggled.connect(self._on_persistent_arrow_toggled)
-        highlight_form.addRow("", self._arrow_persistent_cb)
+        highlight_form.addRow("", checkbox_with_hint(
+            self._arrow_persistent_cb,
+            tr("module.mouse.highlight.arrow_persistent.hint")))
 
         self._arrow_corner = QComboBox()
         for value, key in (("top-left", "top_left"), ("top-right", "top_right"),
@@ -333,8 +372,7 @@ class MouseSettingsWidget(QWidget):
         self._arrow_corner_label = QLabel(tr("module.mouse.highlight.corner"))
         highlight_form.addRow(self._arrow_corner_label, self._arrow_corner)
 
-        self._arrow_size = QSlider(Qt.Orientation.Horizontal)
-        self._arrow_size.setRange(20, 120)
+        self._arrow_size = ValueSlider(20, 120, suffix=" px")
         self._arrow_size.setValue(int(self._settings.get("highlight_arrow_size", 48)))
         self._arrow_size.setTickPosition(QSlider.TickPosition.TicksBelow)
         self._arrow_size.setTickInterval(20)
@@ -345,13 +383,14 @@ class MouseSettingsWidget(QWidget):
 
         # Permanent, lightly translucent circle around the cursor (always on)
         self._circle_cb = QCheckBox(tr("module.mouse.highlight.circle"))
+
         self._circle_cb.setChecked(
             bool(self._settings.get("highlight_permanent_circle", False)))
         self._circle_cb.toggled.connect(self._on_circle_toggled)
-        highlight_form.addRow("", self._circle_cb)
+        highlight_form.addRow("", checkbox_with_hint(
+            self._circle_cb, tr("module.mouse.highlight.circle.hint")))
 
-        self._circle_radius = QSlider(Qt.Orientation.Horizontal)
-        self._circle_radius.setRange(20, 120)
+        self._circle_radius = ValueSlider(20, 120, suffix=" px")
         self._circle_radius.setValue(
             int(self._settings.get("highlight_circle_radius", 40)))
         self._circle_radius.setTickPosition(QSlider.TickPosition.TicksBelow)
@@ -362,8 +401,7 @@ class MouseSettingsWidget(QWidget):
             tr("module.mouse.highlight.circle_radius"))
         highlight_form.addRow(self._circle_radius_label, self._circle_radius)
 
-        self._circle_opacity = QSlider(Qt.Orientation.Horizontal)
-        self._circle_opacity.setRange(5, 90)
+        self._circle_opacity = ValueSlider(5, 90, suffix=" %")
         self._circle_opacity.setValue(
             int(self._settings.get("highlight_circle_opacity", 25)))
         self._circle_opacity.setTickPosition(QSlider.TickPosition.TicksBelow)
@@ -408,6 +446,7 @@ class MouseSettingsWidget(QWidget):
             tr("module.mouse.keyboard_clicks"),
             self._settings.get("keyboard_clicks_enabled", False),
             description=tr("module.mouse.keyboard_clicks.description"),
+            icon="⌨️",
         )
         self._kbclick_sec.toggled.connect(
             lambda v: self._save("keyboard_clicks_enabled", v))
@@ -440,6 +479,7 @@ class MouseSettingsWidget(QWidget):
             tr("module.mouse.screen_zones"),
             self._settings.get("screen_zones_enabled", False),
             description=tr("module.mouse.screen_zones.description"),
+            icon="🗺️",
         )
         self._zones_sec.toggled.connect(
             lambda v: self._save("screen_zones_enabled", v))
@@ -458,7 +498,10 @@ class MouseSettingsWidget(QWidget):
         self._grid_combo.setCurrentIndex(
             grid_keys.index(saved_grid) if saved_grid in grid_keys else 2)
         self._grid_combo.currentIndexChanged.connect(self._on_grid_changed)
-        grid_form.addRow(tr("module.mouse.screen_zones.grid"), self._grid_combo)
+        grid_form.addRow(
+            label_with_hint(tr("module.mouse.screen_zones.grid"),
+                            tr("module.mouse.screen_zones.grid.hint")),
+            self._grid_combo)
         grid_form_widget = QWidget()
         grid_form_widget.setLayout(grid_form)
         self._zones_sec.content_layout.addWidget(grid_form_widget)
@@ -528,6 +571,9 @@ class MouseSettingsWidget(QWidget):
         self._highlight_form.setRowVisible(self._highlight_ring_style, enabled)
         self._highlight_form.setRowVisible(self._highlight_color_btn, enabled)
         self._highlight_form.setRowVisible(self._highlight_radius, enabled)
+        # The pulse duration is how long ONE ring pulse lasts – with the rings
+        # off it configures something that no longer happens.
+        self._highlight_form.setRowVisible(self._highlight_duration, enabled)
         # Keep at least one visible cue – otherwise the highlight shows nothing.
         if not enabled and not self._highlight_arrow_cb.isChecked():
             self._highlight_arrow_cb.setChecked(True)

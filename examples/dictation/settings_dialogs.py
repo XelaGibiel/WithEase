@@ -15,7 +15,8 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -41,112 +42,29 @@ import vocabulary as vocab
 _READABLE = "color: palette(windowText);"
 
 
-class EnrollmentDialog(QDialog):
-    """Guided reading: shows a known sentence, records the user reading it, and
-    stores (audio, exact text) gold pairs via the ``on_start`` / ``on_stop``
-    callbacks (which the module implements with its recorder)."""
+def _wrap_tip(text: str) -> str:
+    """``ui_utils.wrap_tooltip`` with a fallback for an OLDER core.
 
-    def __init__(self, prompts: list[str],
-                 on_start: Callable[[], bool],
-                 on_stop: Callable[[str], str],
-                 on_discard: Callable[[str], None] | None = None,
-                 parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._prompts = list(prompts)
-        self._on_start = on_start
-        self._on_stop = on_stop
-        self._on_discard = on_discard or (lambda _s: None)
-        self._index = 0
-        self._recording = False
-        self._saved: dict[int, str] = {}    # sentence index → saved sample id
-        self.setWindowTitle("Stimm-Training (Vorlesen)")
-        self.resize(560, 320)
+    Without it Qt lays a tool-tip out as ONE line: a two-sentence explanation
+    then stretches from screen edge to screen edge and is unreadable.  Every
+    setToolTip in this file goes through here."""
+    try:
+        from withease.gui.ui_utils import wrap_tooltip
+        return wrap_tooltip(text)
+    except Exception:
+        return text
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        intro = QLabel("Lies den Satz laut und deutlich vor. „Aufnahme starten“ "
-                       "→ vorlesen → „Stopp“. Die Aufnahme wird zusammen mit dem "
-                       "genauen Text gespeichert (für spätere Stimm-Anpassung).")
-        intro.setWordWrap(True)
-        intro.setStyleSheet(_READABLE)
-        layout.addWidget(intro)
 
-        self._prompt = QLabel()
-        self._prompt.setWordWrap(True)
-        self._prompt.setStyleSheet(
-            "font-size: 16pt; font-weight: bold; color: palette(windowText);")
-        layout.addWidget(self._prompt, 1)
+def _mark_danger(button):
+    """``ui_utils.mark_danger`` with a fallback for an OLDER core.
 
-        self._progress = QLabel()
-        self._progress.setStyleSheet(_READABLE)
-        layout.addWidget(self._progress)
-
-        row = QHBoxLayout()
-        self._back_btn = QPushButton("◀ Zurück (neu aufnehmen)")
-        self._back_btn.setToolTip("Zum vorigen Satz – falls du dich versprochen "
-                                  "hast, dort neu aufnehmen (ersetzt die alte "
-                                  "Aufnahme).")
-        self._back_btn.clicked.connect(self._back)
-        row.addWidget(self._back_btn)
-        self._record_btn = QPushButton("● Aufnahme starten")
-        self._record_btn.clicked.connect(self._toggle)
-        row.addWidget(self._record_btn)
-        skip = QPushButton("Überspringen ▸")
-        skip.clicked.connect(self._next)
-        row.addWidget(skip)
-        row.addStretch()
-        close = QPushButton("Schließen")
-        close.clicked.connect(self.accept)
-        row.addWidget(close)
-        layout.addLayout(row)
-        self._update()
-
-    def _update(self) -> None:
-        marker = "  ✓ (aufgenommen)" if self._index in self._saved else ""
-        self._prompt.setText("„" + self._prompts[self._index] + "“" + marker)
-        self._progress.setText(
-            f"Satz {self._index + 1} von {len(self._prompts)}  ·  "
-            f"aufgenommen: {len(self._saved)}")
-        self._back_btn.setEnabled(not self._recording and self._index > 0)
-
-    def _toggle(self) -> None:
-        if not self._recording:
-            if self._on_start():
-                self._recording = True
-                self._record_btn.setText("■ Stopp & speichern")
-                self._update()
-        else:
-            stamp = self._on_stop(self._prompts[self._index])
-            self._recording = False
-            self._record_btn.setText("● Aufnahme starten")
-            if stamp:
-                old = self._saved.get(self._index)
-                if old:
-                    self._on_discard(old)       # replace the previous take
-                self._saved[self._index] = stamp
-                self._advance()
-            self._update()
-
-    def _next(self) -> None:
-        if not self._recording:
-            self._advance()
-            self._update()
-
-    def _back(self) -> None:
-        if not self._recording and self._index > 0:
-            self._index -= 1
-            self._update()
-
-    def _advance(self) -> None:
-        self._index = (self._index + 1) % len(self._prompts)
-
-    def reject(self) -> None:  # noqa: D102 (Qt override)
-        if self._recording:            # stop + discard a half-read take
-            stamp = self._on_stop(self._prompts[self._index])
-            if stamp:
-                self._on_discard(stamp)
-            self._recording = False
-        super().reject()
+    An add-on is installed independently of the program, so a missing helper
+    must never be more than a missing tint."""
+    try:
+        from withease.gui.ui_utils import mark_danger
+        return mark_danger(button)
+    except Exception:
+        return button
 
 
 class LearnFromTextDialog(QDialog):
@@ -323,18 +241,19 @@ class ListEditorDialog(QDialog):
         footer = QHBoxLayout()
         if on_clear is not None:
             clear_btn = QPushButton(clear_label or "Alle löschen")
+            _mark_danger(clear_btn)
             clear_btn.clicked.connect(self._clear_all)
             footer.addWidget(clear_btn)
         if on_import is not None:
             import_btn = QPushButton("Import …")
-            import_btn.setToolTip("Wörterbuch aus einer Textdatei importieren "
+            import_btn.setToolTip(_wrap_tip("Wörterbuch aus einer Textdatei importieren "
                                   "(eine Zeile je Eintrag: gesprochen = "
-                                  "geschrieben)")
+                                  "geschrieben)"))
             import_btn.clicked.connect(self._import)
             footer.addWidget(import_btn)
         if on_export is not None:
             export_btn = QPushButton("Export …")
-            export_btn.setToolTip("Wörterbuch als Textdatei speichern")
+            export_btn.setToolTip(_wrap_tip("Wörterbuch als Textdatei speichern"))
             export_btn.clicked.connect(self._export)
             footer.addWidget(export_btn)
         footer.addStretch()
@@ -454,7 +373,8 @@ class ListEditorDialog(QDialog):
             row.addWidget(text, 1)
         remove = QPushButton("✕")
         remove.setFixedWidth(30)
-        remove.setToolTip("Entfernen")
+        remove.setToolTip(_wrap_tip("Entfernen"))
+        remove.setProperty("dangerIcon", True)      # red ✕ (theme QSS)
         remove.clicked.connect(lambda _=False, k=key: self._remove(k))
         row.addWidget(remove)
         return widget
@@ -492,24 +412,33 @@ class ListEditorDialog(QDialog):
 
 class AiActionsDialog(QDialog):
     """Manage the user's „KI-Aktionen“: a list of (name, prompt) buttons that
-    appear in the dictation window.  Left: the list; right: name + prompt."""
+    appear in the dictation window.  Left: the list; right: name + prompt.
+
+    The four class attributes below are the only wording differences to the
+    text-snippet editor, which subclasses this instead of copying it."""
+
+    TITLE = "KI-Aktionen"
+    INTRO = ("Belegen Sie Buttons für das Diktierfenster. Jeder Button schickt "
+             "seinen Prompt zusammen mit dem Fensterinhalt an die eingestellte "
+             "KI und ersetzt den Text durch das Ergebnis. Beispiel-Prompt: "
+             "„Formuliere den folgenden Text als höfliche E-Mail.“")
+    NAME_LABEL = "Button-Name:"
+    BODY_LABEL = "Prompt (Anweisung an die KI):"
+    BODY_PLACEHOLDER = ("z. B. Formuliere den folgenden Text als höfliche, gut "
+                        "strukturierte E-Mail. Gib nur die E-Mail zurück.")
 
     def __init__(self, actions: list, on_save: Callable[[list], None],
                  select_index: int | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("KI-Aktionen")
+        self.setWindowTitle(self.TITLE)
         self.resize(640, 460)
         self._actions = [dict(a) for a in actions]     # working copy
         self._on_save = on_save
         self._cur = -1
 
         layout = QVBoxLayout(self)
-        intro = QLabel(
-            "Belegen Sie Buttons für das Diktierfenster. Jeder Button schickt "
-            "seinen Prompt zusammen mit dem Fensterinhalt an die eingestellte "
-            "KI und ersetzt den Text durch das Ergebnis. Beispiel-Prompt: "
-            "„Formuliere den folgenden Text als höfliche E-Mail.“")
+        intro = QLabel(self.INTRO)
         intro.setWordWrap(True)
         intro.setStyleSheet(_READABLE)
         layout.addWidget(intro)
@@ -528,17 +457,17 @@ class AiActionsDialog(QDialog):
         addb = QPushButton("Neu")
         addb.clicked.connect(self._add)
         lbtn.addWidget(addb)
-        self._delb = QPushButton("Entfernen")
+        self._delb = _mark_danger(QPushButton("Entfernen"))
         self._delb.clicked.connect(self._remove)
         lbtn.addWidget(self._delb)
         left.addLayout(lbtn)
         mbtn = QHBoxLayout()          # reorder → the window buttons follow suit
         self._upb = QPushButton("▲ Hoch")
-        self._upb.setToolTip("Ausgewählte Aktion nach oben")
+        self._upb.setToolTip(_wrap_tip("Ausgewählte Aktion nach oben"))
         self._upb.clicked.connect(lambda: self._move(-1))
         mbtn.addWidget(self._upb)
         self._downb = QPushButton("▼ Runter")
-        self._downb.setToolTip("Ausgewählte Aktion nach unten")
+        self._downb.setToolTip(_wrap_tip("Ausgewählte Aktion nach unten"))
         self._downb.clicked.connect(lambda: self._move(1))
         mbtn.addWidget(self._downb)
         left.addLayout(mbtn)
@@ -548,16 +477,14 @@ class AiActionsDialog(QDialog):
         body.addWidget(lw)
 
         right = QVBoxLayout()
-        right.addWidget(QLabel("Button-Name:"))
+        right.addWidget(QLabel(self.NAME_LABEL))
         self._name = QLineEdit()
         self._name.setMaxLength(24)
         self._name.textChanged.connect(self._name_changed)
         right.addWidget(self._name)
-        right.addWidget(QLabel("Prompt (Anweisung an die KI):"))
+        right.addWidget(QLabel(self.BODY_LABEL))
         self._prompt = QPlainTextEdit()
-        self._prompt.setPlaceholderText(
-            "z. B. Formuliere den folgenden Text als höfliche, gut "
-            "strukturierte E-Mail. Gib nur die E-Mail zurück.")
+        self._prompt.setPlaceholderText(self.BODY_PLACEHOLDER)
         self._prompt.textChanged.connect(self._prompt_changed)
         right.addWidget(self._prompt, 1)
         rw = QWidget()
@@ -583,8 +510,14 @@ class AiActionsDialog(QDialog):
     def _reload_list(self) -> None:
         self._list.blockSignals(True)
         self._list.clear()
+        # Give every row an explicit height from the CURRENT font metrics –
+        # otherwise the list's own row-height estimate can lag behind a live
+        # font-size change and rows overlap at larger sizes.
+        row_h = QFontMetrics(self._list.font()).height() + 16   # + padding
         for a in self._actions:
-            self._list.addItem(a.get("name") or "(ohne Namen)")
+            item = QListWidgetItem(a.get("name") or "(ohne Namen)")
+            item.setSizeHint(QSize(-1, row_h))
+            self._list.addItem(item)
         self._list.blockSignals(False)
 
     def _set_editor(self, on: bool) -> None:
@@ -764,18 +697,18 @@ class DictionaryDialog(QDialog):
         footer = QHBoxLayout()
         if on_clear_category is not None:
             b = QPushButton("Kategorie leeren")
-            b.setToolTip("Alle aktuell angezeigten Einträge entfernen "
-                         "(z. B. alle „gelernten“ auf einmal).")
+            b.setToolTip(_wrap_tip("Alle aktuell angezeigten Einträge entfernen "
+                         "(z. B. alle „gelernten“ auf einmal)."))
             b.clicked.connect(self._clear_category)
             footer.addWidget(b)
         if on_import is not None:
             b = QPushButton("Import …")
-            b.setToolTip("Wörterbuch aus einer Textdatei importieren")
+            b.setToolTip(_wrap_tip("Wörterbuch aus einer Textdatei importieren"))
             b.clicked.connect(self._import)
             footer.addWidget(b)
         if on_export is not None:
             b = QPushButton("Export …")
-            b.setToolTip("Wörterbuch als Textdatei speichern")
+            b.setToolTip(_wrap_tip("Wörterbuch als Textdatei speichern"))
             b.clicked.connect(self._export)
             footer.addWidget(b)
         footer.addStretch()
@@ -805,14 +738,14 @@ class DictionaryDialog(QDialog):
             spoken = QTableWidgetItem(trigger)
             if kind == "mem":     # the misheard text is history – not editable
                 spoken.setFlags(noedit)
-                spoken.setToolTip("Automatisch erkannt – nicht editierbar")
+                spoken.setToolTip(_wrap_tip("Automatisch erkannt – nicht editierbar"))
             self._table.setItem(r, 1, spoken)
             origin = QTableWidgetItem(src)
             origin.setFlags(noedit)      # read-only; no grey foreground so it
             self._table.setItem(r, 2, origin)   # stays readable when selected
             btn = QPushButton("✕")
             btn.setFixedWidth(28)
-            btn.setToolTip("Entfernen")
+            btn.setToolTip(_wrap_tip("Entfernen"))
             btn.clicked.connect(
                 lambda _=False, kd=kind, k=key: self._remove(kd, k))
             self._table.setCellWidget(r, 3, btn)
@@ -909,3 +842,25 @@ class DictionaryDialog(QDialog):
                 pass
             self._written.clear()
             self._reload()
+
+
+class SnippetsDialog(AiActionsDialog):
+    """Manage reusable text blocks that can be inserted by voice.
+
+    Same editor as the AI actions – a named list with a long text field – so
+    there is one list editor in this add-on, not two that drift apart.  Stored
+    under the same ``name``/``prompt`` keys; only the wording differs.
+    """
+
+    TITLE = "Textbausteine"
+    INTRO = ("Wiederkehrende Texte, die du per Sprache einfügen kannst: sage "
+             "im Diktierfenster „füge <Name> ein“ oder „Baustein <Name>“. "
+             "Der Name sollte gut sprechbar sein – „Grußformel“ ist leichter "
+             "zu treffen als „Vorlage 3“.\n\n"
+             "Makros vom Typ „Text“ funktionieren bereits genauso: Was dort "
+             "steht, musst du hier NICHT noch einmal anlegen. Diese Liste ist "
+             "für Texte, die kein Makro sein sollen.")
+    NAME_LABEL = "Name (so sprichst du ihn):"
+    BODY_LABEL = "Text, der eingefügt wird:"
+    BODY_PLACEHOLDER = ("z. B. Mit freundlichen Grüßen\n"
+                        "Alexander Leibig")

@@ -9,7 +9,7 @@ AND dark mode (WCAG-oriented contrast, see the accessibility notes per value).
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, Qt
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QIcon, QPalette
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -44,6 +44,55 @@ class _WheelGuard(QObject):
                     QApplication.sendEvent(p.viewport(), event)
                 return True      # never let the control consume it
         return False
+
+
+class _ToolTipKeeper(QObject):
+    """Keeps a tool-tip open for as long as the pointer stays on the element.
+
+    Qt hides a tip on its own timer (about 10 s plus a little per character).
+    The explanations in this app are whole sentences – often two, comparing
+    two options – and reading them is exactly the point, so a tip vanishing
+    mid-sentence forces the user to move the mouse away and back to start over.
+    For people who find precise pointing hard, that is a real cost.
+
+    Re-showing the tip with an explicit hold time and the widget's own rect
+    hands the decision back to the pointer: Qt keeps the tip while the cursor
+    is inside that rect and hides it the moment it leaves.  The hold is long
+    rather than infinite so a tip can never be stranded on screen.
+    """
+
+    HOLD_MS = 10 * 60 * 1000        # effectively "until you move away"
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # noqa: N802
+        if event.type() != QEvent.Type.ToolTip:
+            return False
+        from PySide6.QtWidgets import QAbstractItemView, QToolTip, QWidget
+        if not isinstance(obj, QWidget):
+            return False
+
+        # An item view keeps its tips on the ITEMS, not on the viewport, so
+        # look the hovered entry up itself – this is what carries the
+        # per-entry explanations in the dropdowns (ui_utils.set_option_hint).
+        view = obj.parentWidget() if obj.parentWidget() else None
+        if isinstance(view, QAbstractItemView) and obj is view.viewport():
+            index = view.indexAt(event.pos())
+            if not index.isValid():
+                return False
+            text = index.data(Qt.ItemDataRole.ToolTipRole)
+            if not text:
+                return False
+            QToolTip.showText(event.globalPos(), str(text), obj,
+                              view.visualRect(index), self.HOLD_MS)
+            return True
+
+        text = obj.toolTip()
+        if not text:
+            # Let Qt walk up to a parent that has one, or let a widget that
+            # builds its tip on the fly handle the event itself.
+            return False
+        QToolTip.showText(event.globalPos(), text, obj, obj.rect(),
+                          self.HOLD_MS)
+        return True
 
 
 _SCHEMES = {
@@ -116,6 +165,80 @@ def danger_color() -> str:
     if high_contrast():
         return "#FF6B6B" if is_dark() else "#B00000"
     return "#EF5350" if is_dark() else "#C62828"
+
+
+def action_color() -> str:
+    """Neutral "do something" blue for small action icons (refresh/apply).
+
+    Deliberately NOT accent(): the accent is orange in the dark theme, which
+    on a small refresh glyph read as a warning.  A blue reads as "update /
+    fetch again" in both schemes.  ≥ 4.5:1 contrast on the card surface."""
+    if high_contrast():
+        return "#7FD4FF" if is_dark() else "#00329B"
+    return "#4FA8E8" if is_dark() else "#1565C0"
+
+
+def target_px() -> int:
+    """Height of one control row / minimum click-target edge, in px.
+
+    44px is the WCAG 2.5.5 (AAA) target size and the floor.  Above it the
+    value GROWS with the font-size setting: someone who picks a larger font
+    is telling us they need bigger things, and it would be odd to enlarge
+    the text but keep the buttons small.  The factor is tuned so the floor
+    holds up to ~11pt and every larger step widens the targets."""
+    return max(44, round(_line_px() * 2.8))
+
+
+def refresh_icon(color: str, size: int = 64) -> QIcon:
+    """A slim circular-arrow "refresh" icon drawn in `color`.
+
+    Drawn here rather than tinting QStyle's SP_BrowserReload: that stock icon
+    is a heavy, filled two-tone glyph that looked bold and clunky next to the
+    thin text around it.  A stroked arc gives us the line weight, and it stays
+    crisp at any size because it is rendered at the requested size."""
+    from math import cos, radians, sin
+
+    from PySide6.QtCore import QPointF, QRectF
+    from PySide6.QtGui import QPainter, QPen, QPixmap, QPolygonF
+
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    col = QColor(color)
+    stroke = size * 0.085              # thin – the whole point of this icon
+    margin = size * 0.22
+    rect = QRectF(margin, margin, size - 2 * margin, size - 2 * margin)
+
+    pen = QPen(col)
+    pen.setWidthF(stroke)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    # Leave a gap at the lower right for the arrow head to sit in.
+    start_deg, span_deg = 40.0, 265.0
+    p.drawArc(rect, int(start_deg * 16), int(span_deg * 16))
+
+    # Arrow head at the arc's end, pointing along the (anticlockwise) tangent.
+    end_deg = start_deg + span_deg
+    cx, cy = rect.center().x(), rect.center().y()
+    r = rect.width() / 2.0
+    a = radians(end_deg)
+    tipbase = QPointF(cx + r * cos(a), cy - r * sin(a))
+    dx, dy = -sin(a), -cos(a)          # unit tangent, anticlockwise
+    h, w = size * 0.22, size * 0.15
+    perp = QPointF(-dy, dx)
+    head = QPolygonF([
+        QPointF(tipbase.x() + dx * h, tipbase.y() + dy * h),
+        QPointF(tipbase.x() + perp.x() * w, tipbase.y() + perp.y() * w),
+        QPointF(tipbase.x() - perp.x() * w, tipbase.y() - perp.y() * w),
+    ])
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(col)
+    p.drawPolygon(head)
+    p.end()
+    return QIcon(pm)
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +382,19 @@ def app_stylesheet() -> str:
     acc = accent()
     dgr = danger_color()
     r = 8
-    ctl_h = round(_line_px() * 1.55)
+    # Never below the accessible target edge: at the smaller font sizes
+    # 1.55 line-heights came out at ~36px, i.e. an under-sized target for
+    # every dropdown and text field in the app.
+    row_h = target_px()          # the total height every control should have
+    # Qt's box model puts padding + border OUTSIDE min-height, so subtract
+    # each rule's own padding to land on the same total for all of them.
+    ctl_h = row_h - 10           # inputs:  padding 4px  + 1px border
+    btn_h = row_h - 14           # buttons: padding 6px  + 1px border
+    icn_h = row_h - 6            # icon btn: padding 2px + 1px border
+    # Tool-tip padding grows with the font, like every other
+    # spacing in this stylesheet.
+    tip_pad_v = max(6, round(_line_px() * 0.42))
+    tip_pad_h = max(8, round(_line_px() * 0.55))
     emg_h = round(_line_px() * 2.1)
     gb_pad = round(_line_px() * 2.5)      # room for the inside group-box title
     gb_top = round(_line_px() * 0.7)
@@ -317,12 +452,54 @@ def app_stylesheet() -> str:
             color: {s['text']}; }}
         QLabel#cardTitleDanger {{ font-weight: bold; font-size: {_font_px(1)}pt;
             color: {dgr}; }}
+        /* Card/section icons: a fixed size on purpose – unlike the title text
+           they must NOT grow with the font-size setting (an oversized emoji
+           next to normal-sized text looked unbalanced), while still scaling
+           with the OS display scale like everything else (pt, not px). */
+        QLabel#cardIcon {{ font-size: 15pt; color: {s['text']}; }}
+        QLabel#cardIconDanger {{ font-size: 15pt; color: {dgr}; }}
+        /* Hint ("ⓘ") icons – same fixed-size convention as cardIcon, but in
+           the secondary hint colour so they read as auxiliary, not primary.
+           A transparent border reserves the space so focus doesn't shift the
+           layout by 1px (same trick as QCheckBox above) – hint icons are
+           keyboard-focusable (see widgets/hint_icon.py) so this ring must be
+           visible, not just the mouse-hover tooltip. */
+        QLabel#hintIcon {{
+            font-size: 15pt; color: {hint_color()};
+            border: 1px solid transparent; border-radius: 4px; padding: 0px 2px;
+        }}
+        QLabel#hintIcon:focus {{ border-color: {acc}; color: {acc}; }}
+
+        /* Tool-tips are where every explanation in this app ends up, so they
+           are a reading surface, not a one-word label: real padding, the card
+           background and a border so the text does not float on the desktop.
+           Width, line spacing and paragraph breaks come from the rich-text
+           wrapper (ui_utils.wrap_tooltip).
+
+           The border is the ACCENT colour: a tip always appears on top of the
+           cards it explains, and a neutral border is the same colour as those
+           cards' own edges, so it melted into the page.  Accent also ties the
+           tip to the ⓘ that opened it (which turns accent on focus).  Kept at
+           1px on purpose – 2px accent is the search-hit outline, and one
+           signal should not be able to look like another. */
+        QToolTip {{
+            background: {s['card']}; color: {s['text']};
+            border: 1px solid {acc}; border-radius: {r}px;
+            padding: {tip_pad_v}px {tip_pad_h}px;
+            /* Pin the size in the stylesheet itself.  A QSS rule that matches
+               a widget makes Qt re-polish its font, and a rule WITHOUT a
+               font-size resets it to the style default – which silently undoes
+               the QToolTip.setFont() below and leaves tips at the system size
+               whatever the user picked.  (Same trap as the item views further
+               down, see selection_qss.) */
+            font-size: {_font_px()}pt;
+        }}
 
         /* Unified controls. */
         QPushButton {{
             background: {s['control']}; color: {s['text']};
             border: 1px solid {s['border']}; border-radius: {r}px;
-            padding: 6px 14px; min-height: {ctl_h}px;
+            padding: 6px 14px; min-height: {btn_h}px;
         }}
         QPushButton:hover {{ background: {s['hover']}; border-color: {acc}; }}
         QPushButton:pressed {{ background: {s['navbg']}; }}
@@ -331,11 +508,48 @@ def app_stylesheet() -> str:
            state is the accent with readable text – blue in light, not orange. */
         QPushButton:checked {{
             background: {acc}; color: {accent_fg()}; border-color: {acc};
-            font-weight: bold;
         }}
-        /* Small icon-only buttons (✕, ▲▼): no wide padding so the glyph fits. */
+        /* NOTE: deliberately no font-weight change on :checked.  Qt sizes the
+           button from its NORMAL-weight text, so switching to bold when it is
+           selected made the label wider than the button and clipped the last
+           letter ("Dunkel" → "Dunke").  The accent fill already marks the
+           selection unmistakably. */
+        /* Small icon-only buttons (✕, ▲▼): no wide padding so the glyph fits,
+           but a full accessible click target (see `tgt`).  This used to say
+           min-width:0, which silently overrode the widgets' own
+           setFixedWidth() and left ~20px-wide buttons – far below even the
+           WCAG AA minimum, on the very pages these users need most. */
         QPushButton[iconBtn="true"] {{
-            padding: 2px 4px; min-width: 0; font-weight: bold;
+            padding: 2px; font-weight: bold;
+            min-width: {icn_h}px; min-height: {icn_h}px;
+        }}
+        /* A setting jumped to from the search is outlined for a moment so the
+           eye can find it on a page full of similar-looking rows. */
+        *[searchHit="true"] {{
+            border: 2px solid {acc}; border-radius: {r}px;
+        }}
+
+        /* Remove/clear buttons carry their meaning in colour, not just in the
+           glyph – a plain grey ✕ read as decoration.  Disabled falls back to
+           the muted hint colour so it still looks inactive. */
+        QPushButton[dangerIcon="true"] {{ color: {dgr}; }}
+        QPushButton[dangerIcon="true"]:hover {{
+            color: {dgr}; border-color: {dgr};
+        }}
+        QPushButton[dangerIcon="true"]:disabled {{ color: {hint_color()}; }}
+
+        /* Text buttons that DELETE something.  Tinted, not filled: the point is
+           "stop and read this", not "alarm".  A filled red button next to the
+           harmless ones would pull the eye to the most destructive action on
+           the page, which is the opposite of what is wanted. */
+        QPushButton[danger="true"] {{
+            color: {dgr}; border-color: {dgr};
+        }}
+        QPushButton[danger="true"]:hover {{
+            background: {dgr}; color: {accent_fg()}; border-color: {dgr};
+        }}
+        QPushButton[danger="true"]:disabled {{
+            color: {hint_color()}; border-color: {s['border']};
         }}
 
         QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox,
@@ -348,6 +562,13 @@ def app_stylesheet() -> str:
             selection-background-color: {acc};
             selection-color: {accent_fg()};
         }}
+        /* Reserve room on the right for the sub-controls drawn INSIDE the
+           field (the 24px drop-down arrow, the 22px spin buttons).  Qt does
+           not add their width to sizeHint(), so without this the last
+           characters of the longest entry disappeared under the arrow –
+           "Deutsch" rendered as "Deutsc". */
+        QComboBox {{ padding-right: 30px; }}
+        QSpinBox, QDoubleSpinBox {{ padding-right: 28px; }}
         QComboBox:hover, QLineEdit:hover, QSpinBox:hover,
         QDoubleSpinBox:hover {{ border-color: {acc}; }}
         QComboBox QAbstractItemView {{
@@ -430,6 +651,13 @@ def app_stylesheet() -> str:
         QMenu {{
             background: {s['card']}; color: {s['text']};
             border: 1px solid {s['border']}; border-radius: 8px; padding: 4px;
+            /* Pin the size here, for the same reason as QToolTip above: a QSS
+               rule that matches a widget makes Qt re-polish its font, and a
+               rule WITHOUT a font-size resets it to the style default.  That
+               is why the tray menu ignored the font-size setting until it was
+               changed once at runtime (which rebuilt the menu after the
+               stylesheet was already in place). */
+            font-size: {_font_px()}pt;
         }}
         QMenu::item {{ padding: 6px 26px 6px 14px; border-radius: 6px; }}
         QMenu::item:selected {{
@@ -453,9 +681,12 @@ def app_stylesheet() -> str:
             border: 1px solid {s['border']}; border-radius: 8px;
             padding: 2px; outline: 0;
         }}
+        /* Generous left/right inset: the entry text used to start flush
+           against the list's left edge, which read as cramped next to the
+           roomier padding everywhere else. */
         QListWidget#dictHistory::item {{
             border-bottom: 1px solid {s['border']};
-            border-radius: 4px; padding: 8px 6px;
+            border-radius: 4px; padding: 8px 12px;
         }}
         QListWidget#dictHistory::item:selected {{
             background: {s['navbg']}; color: {s['navfg']};
@@ -624,6 +855,12 @@ def apply_theme(qt_app: QApplication, name: str,
         qt_app.installEventFilter(guard)
         _state["_wheel_guard"] = guard
 
+    # Tool-tips stay up while the pointer rests on the element they belong to.
+    if not _state.get("_tip_keeper"):
+        keeper = _ToolTipKeeper(qt_app)
+        qt_app.installEventFilter(keeper)
+        _state["_tip_keeper"] = keeper
+
     # Font size first (styles below derive sizes from it).  0 = system size.
     font = qt_app.font()
     font.setPointSize(font_pt if font_pt and font_pt > 0 else _default_font_pt)
@@ -642,7 +879,12 @@ def apply_theme(qt_app: QApplication, name: str,
         qt_app.styleHints().setColorScheme(scheme)
     except Exception:
         pass
-    qt_app.processEvents()
+    # Only "system" has to pump the event loop here – _resolve_dark then reads
+    # the palette Qt just recomputed.  For explicit light/dark the answer is
+    # already known, and pumping events mid-switch repainted every open window
+    # with the NEW palette but the OLD stylesheet, i.e. a visible flash.
+    if name not in ("light", "dark"):
+        qt_app.processEvents()
 
     dark = _resolve_dark(qt_app, name)
     _state.update({"dark": dark, "contrast": contrast, "font_pt": font_pt})

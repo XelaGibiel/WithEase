@@ -101,6 +101,7 @@ class MacroModeIndicator(QWidget):
         if self._should_show() and not self._suppressed:
             self._reposition()
             self.show()
+            self.raise_()      # see ModifierIndicator._reapply
         else:
             self.hide()
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 import sys
+import uuid
 from typing import Callable
 
 from PySide6.QtCore import QEvent, QRectF, QSettings, Qt, QTimer, Signal
@@ -44,6 +45,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
@@ -53,6 +55,18 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+# The event bus is how the cheat sheet's microphone asks for one dictation.
+# Imported defensively so this file still runs standalone (see the docstring).
+try:
+    from withease.core.event_bus import bus
+except Exception:                                   # pragma: no cover
+    class _NoBus:
+        def publish(self, *_a, **_k) -> None: ...
+        def subscribe(self, *_a, **_k) -> None: ...
+        def unsubscribe(self, *_a, **_k) -> None: ...
+
+    bus = _NoBus()
 
 import commands_de as cde
 import correction as co
@@ -82,6 +96,43 @@ def _diff_html(original: str, result: str) -> str:
                        'border-radius:3px; padding:0 2px;">' + esc + "</span>")
             parts.append(esc + " ")
     return "".join(parts)
+
+
+def _wrap_tip(text: str) -> str:
+    """``ui_utils.wrap_tooltip`` with a fallback for an OLDER core.
+
+    Without it Qt lays a tool-tip out as ONE line: a two-sentence explanation
+    then stretches from screen edge to screen edge and is unreadable.  Every
+    setToolTip in this file goes through here."""
+    try:
+        from withease.gui.ui_utils import wrap_tooltip
+        return wrap_tooltip(text)
+    except Exception:
+        return text
+
+
+def _mark_danger(button):
+    """``ui_utils.mark_danger`` with a fallback for an OLDER core.
+
+    An add-on is installed independently of the program, so a missing helper
+    must never be more than a missing tint."""
+    try:
+        from withease.gui.ui_utils import mark_danger
+        return mark_danger(button)
+    except Exception:
+        return button
+
+
+def _show_undo(widget, text: str, on_undo) -> bool:
+    """``widgets.undo_bar.show_undo`` with a fallback for an OLDER core.
+
+    False means the bar is not available and the caller must ask first – no
+    path may delete with no way back."""
+    try:
+        from withease.gui.widgets.undo_bar import show_undo
+        return show_undo(widget, text, on_undo) is not None
+    except Exception:
+        return False
 
 
 class _AiPreview(QDialog):
@@ -153,7 +204,7 @@ class _AiPreview(QDialog):
         self._highlight = bool(self._store.value("highlight", True, type=bool))
         self._hl_cb = QCheckBox("Änderungen hervorheben")
         self._hl_cb.setChecked(self._highlight)
-        self._hl_cb.setToolTip("Geänderte oder ergänzte Wörter grün markieren")
+        self._hl_cb.setToolTip(_wrap_tip("Geänderte oder ergänzte Wörter grün markieren"))
         self._hl_cb.toggled.connect(self._on_highlight)
         row.addWidget(self._hl_cb)
         row.addStretch()
@@ -460,40 +511,204 @@ class CorrectionDialog(QDialog):
 
 
 class CommandCheatSheet(QDialog):
-    """A quick reference of the available voice commands."""
+    """Searchable reference of the voice commands.
 
-    _HTML = """
-    <h3>Sprachbefehle</h3>
-    <p><b>Diktat:</b> einfach sprechen · „neue Zeile“ · „neuer Absatz“ ·
-    „Punkt“ / „Komma“ / „Fragezeichen“ · „großschreiben“ / „kleinschreiben“</p>
-    <p><b>Navigation:</b> „Cursor vor &lt;Wort&gt;“ · „hinter &lt;Wort&gt;“ ·
-    „an den Anfang“ · „ans Ende“</p>
-    <p><b>Auswahl:</b> „markiere &lt;Wort/Text&gt;“ · „markiere von A bis B“ ·
-    „markiere diesen Satz“ · „markiere diesen Absatz“ · „markiere alles“ ·
-    bei mehreren Treffern: „nimm 1“ … „nimm 9“</p>
-    <p><b>Löschen:</b> „lösche &lt;Wort&gt;“ · „lösche das“ ·
-    „lösche diesen Satz“ · „alles löschen“</p>
-    <p><b>Korrektur:</b> „korrigiere das“ · „korrigiere &lt;Wort&gt;“ ·
-    „ersetze A durch B“ · „buchstabiere Anton Berta …“ ·
-    „rückgängig“ / „wiederholen“</p>
-    <p><b>Korrekturfenster:</b> tippen oder sprechen · „nimm N“ für einen
-    Vorschlag · „übernehmen“ / „abbrechen“</p>
-    <p><b>Fenster:</b> „einfügen“ / „Text einfügen“ · „kopieren“ /
-    „Text kopieren“ · „Fenster schließen“</p>
-    <p><b>Wörtlich einfügen (statt Befehl):</b> „wörtlich &lt;Text&gt;“</p>
+    Built from ``commands_de.CHEAT_SHEET`` – the same file that defines the
+    grammar – so the list cannot drift away from what actually works, the way
+    the previous hand-written HTML block could.
+
+    Laid out as ONE table with a fixed command column rather than one table per
+    group: with a table each, every group sized its own columns, so the
+    explanations started at a different place in every section and the eye had
+    to find the column again after each heading.  One table means one column
+    edge down the whole page – which is what makes a list of forty entries
+    scannable at all.  Alternating row tints do the same job line by line.
     """
+
+    # Filled in once the online manual exists; until then the button is simply
+    # not shown, so nothing points at a dead link.
+    MANUAL_URL = ""
+
+    # The dictation module answers from its transcription WORKER thread, so the
+    # bus callback must not touch widgets directly – it hops onto the GUI
+    # thread through this signal first.
+    _captured = Signal(str, str)        # token, text
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Sprachbefehle")
-        self.resize(480, 560)
+        # Wide enough for the two columns side by side, and only as tall as the
+        # screen allows – the footer must never be pushed out of view.
+        from PySide6.QtWidgets import QApplication as _QApp
+        screen = _QApp.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        self.resize(760, min(760, avail.height() - 80) if avail else 700)
+        self.setMinimumSize(520, 320)
         layout = QVBoxLayout(self)
-        view = QTextBrowser()
-        view.setHtml(self._HTML)
-        layout.addWidget(view, 1)
+        layout.setSpacing(10)
+
+        intro = QLabel(
+            "Sprich einen dieser Befehle, während das Diktierfenster offen "
+            "ist. Alles andere wird als Text eingefügt.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self._filter = QLineEdit()
+        self._filter.setPlaceholderText("Befehl suchen …")
+        self._filter.setClearButtonEnabled(True)
+        self._filter.textChanged.connect(self._render)
+        # Searching a list of voice commands by typing would be an odd demand
+        # in this program, so the search takes dictation too – the same
+        # one-shot capture the settings search uses.
+        self._mic = QPushButton("🎤")
+        self._mic.setToolTip(_wrap_tip("Suchbegriff sprechen"))
+        self._mic.setAccessibleName("Suchbegriff sprechen")
+        self._mic.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._mic.clicked.connect(self._on_mic)
+        self._capture_token = ""
+        self._captured.connect(self._apply_capture)
+        bus.subscribe("dictation.capture_result", self._on_capture_result)
+        self.destroyed.connect(
+            lambda: bus.unsubscribe("dictation.capture_result",
+                                    self._on_capture_result))
+        search_row = QHBoxLayout()
+        search_row.setSpacing(8)
+        search_row.addWidget(self._filter, 1)
+        search_row.addWidget(self._mic)
+        layout.addLayout(search_row)
+
+        self._view = QTextBrowser()
+        self._view.setOpenExternalLinks(True)
+        layout.addWidget(self._view, 1)
+
+        footer = QHBoxLayout()
+        self._count = QLabel("")
+        footer.addWidget(self._count)
+        footer.addStretch(1)
+        if self.MANUAL_URL:
+            manual = QPushButton("Ausführliche Anleitung …")
+            manual.setToolTip(_wrap_tip(self.MANUAL_URL))
+            manual.clicked.connect(self._open_manual)
+            footer.addWidget(manual)
         close_btn = QPushButton("Schließen")
+        close_btn.setDefault(True)
         close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn)
+        footer.addWidget(close_btn)
+        layout.addLayout(footer)
+
+        self._render("")
+
+    # -- voice search ----------------------------------------------------
+
+    def _set_listening(self, on: bool) -> None:
+        self._mic.setText("⏹" if on else "🎤")
+        self._mic.setToolTip(_wrap_tip("Aufnahme beenden" if on else "Suchbegriff sprechen"))
+        self._filter.setPlaceholderText(
+            "Sprich jetzt …" if on else "Befehl suchen …")
+
+    def _on_mic(self) -> None:
+        # Second click = stop.  The button starts the recording, so it has to
+        # be able to end it too.
+        if self._capture_token:
+            bus.publish("dictation.capture_stop", token=self._capture_token)
+            return
+        token = self._capture_token = uuid.uuid4().hex
+        self._set_listening(True)
+        bus.publish("dictation.capture_request", token=token)
+
+        def give_up() -> None:
+            if self._capture_token == token:
+                self._capture_token = ""
+                self._set_listening(False)
+
+        QTimer.singleShot(120_000, give_up)
+
+    def _on_capture_result(self, token: str = "", text: str = "",
+                           **_: object) -> None:
+        self._captured.emit(token or "", text or "")
+
+    def _apply_capture(self, token: str, text: str) -> None:
+        if token != self._capture_token:
+            return                      # not our request
+        self._capture_token = ""
+        self._set_listening(False)
+        if text:
+            self._filter.setText(text)
+
+    def _open_manual(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl(self.MANUAL_URL))
+
+    def _colors(self) -> dict:
+        """Colours taken from the palette, so the sheet follows light/dark."""
+        pal = self.palette()
+        text = pal.color(pal.ColorRole.WindowText)
+        base = pal.color(pal.ColorRole.Base)
+        dark = base.lightness() < 128
+        # A SOLID tint, not a translucent one: Qt's rich text honours a cell's
+        # `bgcolor` attribute for the whole cell, while a CSS background-color
+        # is only painted behind the text itself – which left half-striped rows.
+        alt = base.lighter(118) if dark else base.darker(105)
+        rule = QColor(255, 255, 255, 46) if dark else QColor(0, 0, 0, 40)
+        muted = QColor(text)
+        muted.setAlpha(190)
+        # Group headings in the design's accent colour, so the sections are
+        # findable at a glance while scrolling.  Falls back to the palette's
+        # highlight when the core theme is not importable (standalone use).
+        try:
+            from withease.gui import theme as _core_theme
+            head = _core_theme.accent()
+        except Exception:                            # pragma: no cover
+            head = pal.color(pal.ColorRole.Highlight).name()
+        return {"alt": alt.name(),
+                "rule": rule.name(QColor.NameFormat.HexArgb),
+                "muted": muted.name(QColor.NameFormat.HexArgb),
+                "head": head}
+
+    def _render(self, needle: str) -> None:
+        from html import escape
+        needle = (needle or "").strip().casefold()
+        c = self._colors()
+        rows: list[str] = []
+        hits = 0
+        for group, items in cde.CHEAT_SHEET:
+            # Deliberately NOT matching the group name: searching "Datum" would
+            # otherwise return the whole "Zahlen, Datum, Bausteine" group
+            # instead of the two commands that actually insert a date.
+            found = [(said, means) for said, means in items
+                     if not needle
+                     or needle in said.casefold()
+                     or needle in means.casefold()]
+            if not found:
+                continue
+            rows.append(
+                f'<tr><td colspan="2" style="padding:16px 6px 6px 0;'
+                f'border-bottom:1px solid {c["rule"]};color:{c["head"]};">'
+                f'<b>{escape(group)}</b></td></tr>')
+            for i, (said, means) in enumerate(found):
+                hits += 1
+                bg = f' bgcolor="{c["alt"]}"' if i % 2 else ""
+                rows.append(
+                    f'<tr><td{bg} style="padding:7px 14px 7px 6px;'
+                    f'white-space:nowrap;"><b>{escape(said)}</b></td>'
+                    f'<td{bg} style="padding:7px 6px;color:{c["muted"]};">'
+                    f'{escape(means)}</td></tr>')
+        if not hits:
+            self._view.setHtml(
+                f'<p style="color:{c["muted"]};">Kein Befehl gefunden. '
+                f'Suchfeld leeren, um wieder alle zu sehen.</p>')
+            self._count.setText("0 Befehle")
+            return
+        # One table for everything, with the command column at a FIXED share of
+        # the width: that is what keeps the explanations lined up across all
+        # groups instead of jumping with every heading.
+        self._view.setHtml(
+            '<table width="100%" cellspacing="0" cellpadding="0">'
+            '<col width="38%"><col width="62%">' + "".join(rows) + "</table>")
+        total = len(cde.cheat_sheet_rows())
+        self._count.setText(f"{hits} von {total} Befehlen"
+                            if needle else f"{total} Befehle")
 
 
 class DictationWindow(QWidget):
@@ -511,6 +726,7 @@ class DictationWindow(QWidget):
     _ai_busy_sig = Signal(bool)                # AI request running (disable UI)
     _ai_result_sig = Signal(str)               # replace buffer with AI result
     _ai_msg_sig = Signal(str)                  # short status/error message
+    _take_sel_sig = Signal(str)                # selection taken from the target
 
     def __init__(self, on_insert: Callable[[str], None] | None = None,
                  on_copy: Callable[[str], None] | None = None,
@@ -521,6 +737,7 @@ class DictationWindow(QWidget):
                  on_confirm_words: Callable[[list], None] | None = None,
                  on_add_vocab: Callable[[str, str], None] | None = None,
                  on_ai_action: Callable[[str], None] | None = None,
+                 on_lookup_snippet: Callable | None = None,
                  on_edit_ai_action: Callable[[int], None] | None = None,
                  on_geometry_changed: Callable[[list], None] | None = None,
                  on_history_toggle: Callable[[bool], None] | None = None,
@@ -535,12 +752,16 @@ class DictationWindow(QWidget):
         self._on_insert = on_insert or (lambda _txt: True)
         self._on_copy = on_copy or (lambda _txt: None)
         self._on_history_changed = on_history_changed or (lambda _items: None)
-        self._on_correction = on_correction or (lambda _old, _new: None)
+        self._on_correction = on_correction or (lambda _old, _new: "")
         self._on_suggest = on_suggest or (lambda _wrong: [])
         self._on_reselect_target = on_reselect_target or (lambda: None)
         self._on_confirm_words = on_confirm_words or (lambda _words: None)
         self._on_add_vocab = on_add_vocab or (lambda _s, _w: None)
         self._on_ai_action = on_ai_action or (lambda _prompt: None)
+        # Voice-inserted text blocks: the module owns the list, the
+        # editor only asks for one by its spoken name.
+        self._on_lookup_snippet = (on_lookup_snippet
+                                   or (lambda _name: (None, [])))
         self._on_edit_ai_action = on_edit_ai_action or (lambda _i: None)
         self._ai_actions = list(ai_actions or [])   # [(name, prompt), …]
         self._on_geometry_changed = on_geometry_changed or (lambda _g: None)
@@ -582,7 +803,7 @@ class DictationWindow(QWidget):
         # collapse (right).  Both side panels fold away the same way.
         top = QHBoxLayout()
         self._ai_toggle = QPushButton()
-        self._ai_toggle.setToolTip("KI-Aktionen ein-/ausklappen")
+        self._ai_toggle.setToolTip(_wrap_tip("KI-Aktionen ein-/ausklappen"))
         self._ai_toggle.clicked.connect(self._toggle_ai)
         top.addWidget(self._ai_toggle, 0, Qt.AlignmentFlag.AlignLeft)
         top.addStretch(1)
@@ -592,8 +813,8 @@ class DictationWindow(QWidget):
         top.addWidget(self._status, 0, Qt.AlignmentFlag.AlignCenter)
         top.addStretch(1)
         self._history_btn = QPushButton()
-        self._history_btn.setToolTip("Verlauf ein-/ausklappen (merkt sich den "
-                                     "Zustand). Standardmäßig eingeklappt.")
+        self._history_btn.setToolTip(_wrap_tip("Verlauf ein-/ausklappen (merkt sich den "
+                                     "Zustand). Standardmäßig eingeklappt."))
         self._history_btn.clicked.connect(self._toggle_history)
         top.addWidget(self._history_btn, 0, Qt.AlignmentFlag.AlignRight)
         layout.addLayout(top)
@@ -631,6 +852,15 @@ class DictationWindow(QWidget):
         self._history.setWordWrap(True)
         self._history.itemClicked.connect(self._load_history)
         right_layout.addWidget(self._history, 1)
+        # Past dictations are kept in the profile file, in plain text – so
+        # there has to be a way to get rid of them.  Before this there was
+        # none: "Leeren" archives the buffer INTO the history.
+        self._hist_clear = QPushButton("🗑 Verlauf löschen")
+        _mark_danger(self._hist_clear)
+        self._hist_clear.setToolTip(_wrap_tip(
+            "Alle gespeicherten Diktate aus dem Verlauf entfernen"))
+        self._hist_clear.clicked.connect(self._clear_history)
+        right_layout.addWidget(self._hist_clear)
         right.setMinimumWidth(150)
         right.setMaximumWidth(280)
         split.addWidget(right)
@@ -650,7 +880,7 @@ class DictationWindow(QWidget):
         self._ai_bar.setSpacing(4)
         self._ai_widget = QWidget()
         self._ai_widget.setLayout(self._ai_bar)
-        self._ai_widget.setFixedWidth(140)
+        self._ai_widget.setFixedWidth(140)      # updated once actions load
         self._ai_buttons: list = []
         mid.addWidget(self._ai_widget)
         mid.addWidget(split, 1)
@@ -670,15 +900,18 @@ class DictationWindow(QWidget):
         redo_btn = QPushButton("↷ Wiederholen")
         redo_btn.clicked.connect(lambda: self._editor.te.redo())
         tools.addWidget(redo_btn)
-        clear_btn = QPushButton("🗑 Leeren")
-        clear_btn.setToolTip("Diktierfenster leeren und frisch anfangen "
+        # A broom, not a bin: this does NOT delete anything – the text is
+        # archived into the history first and only then the buffer is emptied.
+        # The bin icon promised a loss that never happens.
+        clear_btn = QPushButton("🧹 Leeren")
+        clear_btn.setToolTip(_wrap_tip("Diktierfenster leeren und frisch anfangen "
                              "(wird in den Verlauf gesichert; Strg+Z macht es "
-                             "rückgängig)")
+                             "rückgängig)"))
         clear_btn.clicked.connect(self._do_clear)
         tools.addWidget(clear_btn)
         vocab_btn = QPushButton("＋ Wörterbuch")
-        vocab_btn.setToolTip("Markiertes Wort ins Wörterbuch aufnehmen und "
-                             "angeben, wie es gesprochen wird")
+        vocab_btn.setToolTip(_wrap_tip("Markiertes Wort ins Wörterbuch aufnehmen und "
+                             "angeben, wie es gesprochen wird"))
         vocab_btn.clicked.connect(self._add_selection_to_vocab)
         tools.addWidget(vocab_btn)
         self._reselect_btn = QPushButton("🎯 Ziel-App wählen")
@@ -712,31 +945,39 @@ class DictationWindow(QWidget):
         # while setShortcut keeps the key binding active.
         self._insert_btn = QPushButton("Einfügen && Schließen")
         self._insert_btn.setShortcut("Ctrl+Return")
-        self._insert_btn.setToolTip("Text in die App einfügen und schließen "
-                                    "(Strg+Enter)")
+        self._insert_btn.setToolTip(_wrap_tip("Text in die App einfügen und schließen "
+                                    "(Strg+Enter)"))
         self._insert_btn.clicked.connect(self._do_insert)
         row.addWidget(self._insert_btn)
+        self._insert_keep_btn = QPushButton("Einfügen && weiter")
+        self._insert_keep_btn.setToolTip(_wrap_tip(
+            "Text einfügen, Fenster bleibt für den nächsten Absatz offen"))
+        self._insert_keep_btn.clicked.connect(
+            lambda: self._do_insert(keep_open=True))
+        row.addWidget(self._insert_keep_btn)
+
         self._copy_btn = QPushButton("Kopieren")
         self._copy_btn.setShortcut("Ctrl+Shift+C")
-        self._copy_btn.setToolTip("In die Zwischenablage kopieren "
-                                  "(Strg+Umschalt+C)")
+        self._copy_btn.setToolTip(_wrap_tip("In die Zwischenablage kopieren "
+                                  "(Strg+Umschalt+C)"))
         self._copy_btn.clicked.connect(self._do_copy)
         row.addWidget(self._copy_btn)
         self._copy_close_btn = QPushButton("Kopieren && Schließen")
         self._copy_close_btn.setShortcut("Ctrl+Shift+Return")
-        self._copy_close_btn.setToolTip("Kopieren und Fenster schließen "
-                                        "(Strg+Umschalt+Enter)")
+        self._copy_close_btn.setToolTip(_wrap_tip("Kopieren und Fenster schließen "
+                                        "(Strg+Umschalt+Enter)"))
         self._copy_close_btn.clicked.connect(self._do_copy_and_close)
         row.addWidget(self._copy_close_btn)
         self._close_btn = QPushButton("Schließen")
         self._close_btn.setShortcut("Ctrl+W")
-        self._close_btn.setToolTip("Fenster schließen (Strg+W)")
+        self._close_btn.setToolTip(_wrap_tip("Fenster schließen (Strg+W)"))
         self._close_btn.clicked.connect(self._close_and_clear)
         row.addWidget(self._close_btn)
         row.addStretch()
         layout.addLayout(row)
 
         self._editor = ea.Editor(self._edit)
+        self._editor.snippet_lookup = self._on_lookup_snippet
         self._rec_timer = QTimer(self)          # recording elapsed-time ticker
         self._rec_timer.setInterval(1000)
         self._rec_timer.timeout.connect(self._tick_recording)
@@ -755,6 +996,7 @@ class DictationWindow(QWidget):
         self._ai_busy_sig.connect(self._apply_ai_busy)
         self._ai_result_sig.connect(self._apply_ai_result)
         self._ai_msg_sig.connect(self._apply_ai_message)
+        self._take_sel_sig.connect(self._apply_take_selected)
         self._partial_sig.connect(self._apply_partial)
         self._final_sig.connect(self._apply_final)
         self._polish_sig.connect(self._apply_polish)
@@ -807,7 +1049,7 @@ class DictationWindow(QWidget):
             self._ai_bar.addWidget(header)
             for idx, (name, prompt) in enumerate(self._ai_actions):
                 btn = QPushButton(name or "…")
-                btn.setToolTip((prompt[:300] + "\n\n") + "Rechtsklick: bearbeiten")
+                btn.setToolTip(_wrap_tip((prompt[:300] + "\n\n") + "Rechtsklick: bearbeiten"))
                 btn.clicked.connect(
                     lambda _=False, p=prompt: self._on_ai_action(p))
                 btn.setContextMenuPolicy(
@@ -817,6 +1059,15 @@ class DictationWindow(QWidget):
                 self._ai_bar.addWidget(btn)
                 self._ai_buttons.append(btn)
             self._ai_bar.addStretch()
+            # Widen the column to fit the longest button label (so names like
+            # "Sauber formulieren" or a larger font size don't get clipped).
+            # Use each button's own sizeHint – it already accounts for the
+            # button's QSS padding/border – plus the column layout's own
+            # margins, capped so it can't take over the whole window.
+            margins = self._ai_bar.contentsMargins()
+            needed = max((b.sizeHint().width() for b in self._ai_buttons),
+                        default=0) + margins.left() + margins.right()
+            self._ai_widget.setFixedWidth(max(140, min(240, needed)))
         self._update_ai_panel()
 
     def _toggle_ai(self) -> None:
@@ -908,13 +1159,6 @@ class DictationWindow(QWidget):
         fmt.setForeground(QColor(150, 150, 150))   # grey = provisional
         return fmt
 
-    @staticmethod
-    def _needs_sep(prev: str) -> bool:
-        """A new utterance needs a separating space if the buffer ends in a
-        letter/digit or in sentence punctuation (so a new sentence starts with
-        a space after „.", „!", „?" … instead of sticking to it)."""
-        return prev.isalnum() or prev in ".!?…:;,“»)"
-
     def _begin_run_at_cursor(self, text: str,
                              fmt: QTextCharFormat) -> tuple[int, int]:
         """Start a new live utterance at the *current cursor* (not the end), so
@@ -927,8 +1171,16 @@ class DictationWindow(QWidget):
         cur.clearSelection()
         doc = self.text()
         pos = cur.position()
-        if pos > 0 and text and self._needs_sep(doc[pos - 1]):
-            cur.insertText(" ")                # separate from the previous word
+        # Whisper capitalises every utterance like a sentence of its own, so a
+        # continuation used to read "…und dann Das war gut."  join_dictation
+        # decides both the separating space AND the capitalisation from what
+        # stands immediately before the cursor.
+        from postprocess import join_dictation
+        text = join_dictation(doc[:pos], text, doc[pos:])
+        start_offset = len(text) - len(text.lstrip(" "))
+        if start_offset:
+            cur.insertText(text[:start_offset])
+            text = text[start_offset:]
         start = cur.position()
         cur.insertText(text, fmt)
         end = cur.position()
@@ -965,14 +1217,21 @@ class DictationWindow(QWidget):
             cur.insertText(text, plain)
             end = cur.position()
             self._edit.setTextCursor(cur)
+            inserted = text
         else:
             start, end = self._begin_run_at_cursor(text, plain)
+            # What LANDED in the document, not what was passed in: joining may
+            # have changed the first letter's case.  Remembering the raw text
+            # made the polish step's "is this run still untouched?" check fail,
+            # so the polished sentence was dropped – visible as a missing full
+            # stop at the end of a sentence.
+            inserted = self.text()[start:end]
         self._last_final_end = end
         if self._run_start is None:
             self._run_start = start
-            self._run_text = text
+            self._run_text = inserted
         else:
-            self._run_text += " " + text        # fragments joined by one space
+            self._run_text += " " + inserted    # fragments joined by one space
         self._prov_start = self._prov_end = None
 
     def _apply_polish(self, text: str, commit: bool = True) -> None:
@@ -997,8 +1256,10 @@ class DictationWindow(QWidget):
                 self._run_start, self._run_text = None, ""
                 self._last_final_end = None
             else:
+                # Same reason as in _apply_final: track what really landed in
+                # the document, not what was passed in.
                 self._run_start, self._run_text, self._last_final_end = \
-                    start, text, end
+                    start, self.text()[start:end], end
             return
         start, end = self._run_start, self._last_final_end
         cur = self._edit.textCursor()
@@ -1047,6 +1308,24 @@ class DictationWindow(QWidget):
     def request_open(self) -> None:
         """Show the window (safe to call from a worker thread)."""
         self._open_sig.emit()
+
+    def take_selected_text(self, text: str) -> None:
+        """Start from the text that was selected in the target app (thread-safe).
+
+        Only ever fills an EMPTY buffer: a dictation already in progress must
+        never be overwritten by a stray selection somewhere else."""
+        self._take_sel_sig.emit(text or "")
+
+    def _apply_take_selected(self, text: str) -> None:
+        text = (text or "").strip()
+        if not text or self.text().strip():
+            return
+        self._edit.setPlainText(text)
+        cur = self._edit.textCursor()
+        cur.movePosition(QTextCursor.MoveOperation.End)
+        self._edit.setTextCursor(cur)
+        self._set_hint("Markierten Text übernommen – weiter diktieren oder "
+                       "bearbeiten")
 
     def request_hide(self) -> None:
         """Hide the window (safe to call from a worker thread).  Used while the
@@ -1135,6 +1414,7 @@ class DictationWindow(QWidget):
         cur.removeSelectedText()
         cur.endEditBlock()
         self._editor = ea.Editor(self._edit)
+        self._editor.snippet_lookup = self._on_lookup_snippet
         self._clear_marks()
         self._set_hint("geleert – im Verlauf gesichert, Strg+Z macht rückgängig")
 
@@ -1182,7 +1462,8 @@ class DictationWindow(QWidget):
 
         # Window-level commands handled here; editing commands go to the editor.
         if cmd.kind == "insert":
-            self._do_insert()   # sets its own hint (success closes, else fallback)
+            # sets its own hint (success closes or stays open, else fallback)
+            self._do_insert(keep_open=bool(cmd.data.get("keep_open")))
             return
         if cmd.kind == "copy":
             self._do_copy()
@@ -1191,6 +1472,21 @@ class DictationWindow(QWidget):
         if cmd.kind == "close":
             self._report(text, "Befehl: Fenster schließen")
             self._close_and_clear()
+            return
+        if cmd.kind == "show_help":
+            self._show_cheatsheet()
+            self._report(text, "Befehlsliste geöffnet")
+            return
+        if cmd.kind == "history_show":
+            if not self._history_shown:
+                self._toggle_history()
+            n = self._history.count()
+            self._report(text, f"Verlauf: {n} Einträge – „Verlauf 1“ … "
+                               f"„Verlauf {min(n, 9)}“ holt einen zurück"
+                         if n else "Verlauf ist leer")
+            return
+        if cmd.kind == "history_pick":
+            self._insert_from_history(int(cmd.data.get("n", 1)), text)
             return
         if cmd.kind == "reselect_target":
             self._on_reselect_target()
@@ -1224,7 +1520,7 @@ class DictationWindow(QWidget):
             self._clear_marks()
             self._report(text, res.message or f"Befehl: {cmd.kind}")
 
-    def _do_insert(self) -> None:
+    def _do_insert(self, keep_open: bool = False) -> None:
         text = self.text().strip()
         if not text:
             return
@@ -1235,9 +1531,16 @@ class DictationWindow(QWidget):
                            "Zwischenablage (Strg+V)")
             return
         self._confirm_low_words()   # accepted unchanged → learn they were right
-        # "Einfügen" hands the text over and gets out of the way: the window
-        # archives + clears + closes in the same moment, so the next dictation
-        # starts fresh without an extra "schließen".
+        if keep_open:
+            # "Einfügen und weiter": hand the text over but stay open, so a
+            # long text can be dictated paragraph by paragraph without
+            # reopening the window and picking the target app again.
+            self._archive_and_clear()
+            self._set_hint("eingefügt – weiter diktieren")
+            return
+        # Plain "Einfügen" hands the text over and gets out of the way: the
+        # window archives + clears + closes in the same moment, so the next
+        # dictation starts fresh without an extra "schließen".
         self._close_and_clear()
 
     def _confirm_low_words(self) -> None:
@@ -1278,7 +1581,7 @@ class DictationWindow(QWidget):
             label = label[:_HISTORY_LABEL_LEN - 1] + "…"
         item = QListWidgetItem(label)
         item.setData(Qt.ItemDataRole.UserRole, text)
-        item.setToolTip(text)
+        item.setToolTip(_wrap_tip(text))
         self._history.addItem(item)
 
     def _archive(self) -> None:
@@ -1295,7 +1598,7 @@ class DictationWindow(QWidget):
             label = label[:_HISTORY_LABEL_LEN - 1] + "…"
         item = QListWidgetItem(label)
         item.setData(Qt.ItemDataRole.UserRole, text)
-        item.setToolTip(text)
+        item.setToolTip(_wrap_tip(text))
         self._history.insertItem(0, item)
         while self._history.count() > _HISTORY_MAX:     # drop the oldest
             self._history.takeItem(self._history.count() - 1)
@@ -1320,6 +1623,13 @@ class DictationWindow(QWidget):
         self._run_text = ""
         # Fresh editor state (drops any pending selection / correction).
         self._editor = ea.Editor(self._edit)
+        self._editor.snippet_lookup = self._on_lookup_snippet
+
+    def _archive_and_clear(self) -> None:
+        """Put the finished text into the history and start an empty buffer –
+        the same bookkeeping as closing, minus the closing."""
+        self._archive()
+        self._clear_buffer()
 
     def _close_and_clear(self) -> None:
         self._save_geometry()
@@ -1367,6 +1677,78 @@ class DictationWindow(QWidget):
     def _update_history_btn(self) -> None:
         self._history_btn.setText(
             "🗂 Verlauf ▾" if self._history_shown else "🗂 Verlauf ▸")
+
+    def _insert_from_history(self, n: int, said: str) -> None:
+        """Put past dictation number `n` back into the buffer.
+
+        The history held twenty finished dictations but could only be reached
+        with the mouse – after an accidental „Einfügen" there was no spoken way
+        back to the text."""
+        count = self._history.count()
+        if count == 0:
+            self._report(said, "Verlauf ist leer")
+            return
+        if not 1 <= n <= count:
+            self._report(said, f"Verlauf hat nur {count} Einträge")
+            return
+        item = self._history.item(n - 1)
+        past = item.data(Qt.ItemDataRole.UserRole) if item else ""
+        if not past:
+            self._report(said, "Eintrag ist leer")
+            return
+        self._editor.insert_dictation(past)
+        self._report(said, f"Verlauf {n} eingefügt")
+
+    def _clear_history(self) -> None:
+        """Forget every stored dictation – and offer to take it back.
+
+        Used to ask first, which cost a second precise click right after the
+        one that may already have been a slip.  Now the list goes and the way
+        back is one big button (see widgets/undo_bar.py)."""
+        n = self._history.count()
+        if n == 0:
+            self._set_hint("Verlauf ist schon leer")
+            return
+        removed = [self._history.item(i).data(Qt.ItemDataRole.UserRole)
+                   for i in range(n)]
+
+        def undo() -> None:
+            self.reload_history(removed)
+            self._on_history_changed(list(removed))
+            self._set_hint("Verlauf wiederhergestellt")
+
+        if not _show_undo(self, f"{n} Diktate gelöscht.", undo):
+            answer = QMessageBox.question(
+                self, "Verlauf löschen",
+                f"Alle {n} gespeicherten Diktate entfernen?\n"
+                "Das lässt sich nicht rückgängig machen.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._history.clear()
+        self._on_history_changed([])
+        self._set_hint("Verlauf gelöscht")
+
+    def reload_history(self, entries: list) -> None:
+        """Replace the list with ``entries`` (newest first) – used by undo and
+        by the settings page when it puts a cleared history back."""
+        self._history.clear()
+        for text in entries:
+            if not text:
+                continue
+            label = " ".join(str(text).split())
+            if len(label) > _HISTORY_LABEL_LEN:
+                label = label[:_HISTORY_LABEL_LEN - 1] + "…"
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, text)
+            item.setToolTip(_wrap_tip(str(text)))
+            self._history.addItem(item)
+
+    def clear_history_now(self) -> None:
+        """Wipe the history list without asking (the settings page already
+        asked).  Safe from the GUI thread only."""
+        self._history.clear()
 
     def _toggle_history(self) -> None:
         self._history_shown = not self._history_shown
@@ -1430,6 +1812,7 @@ class DictationWindow(QWidget):
         cur.insertText(text)
         cur.endEditBlock()
         self._editor = ea.Editor(self._edit)
+        self._editor.snippet_lookup = self._on_lookup_snippet
         self._clear_marks()
         cur = self._edit.textCursor()
         cur.movePosition(QTextCursor.MoveOperation.End)
@@ -1442,11 +1825,25 @@ class DictationWindow(QWidget):
         self._close_and_clear()
 
     def _forward_correction(self) -> None:
-        """If the last edit replaced a word, let the error memory learn it."""
+        """If the last edit replaced a word, let the error memory learn it –
+        and SAY so.
+
+        The memory needs the same correction twice before it applies it (a
+        deliberate guard against one stray edit poisoning a common word).  That
+        rule was invisible: correcting a word looked like it had no effect at
+        all, so people corrected the same word again and again without knowing
+        they were on the right track."""
         pair = self._editor.last_correction
-        if pair:
-            self._editor.last_correction = None
-            self._on_correction(pair[0], pair[1])
+        if not pair:
+            return
+        self._editor.last_correction = None
+        stage = self._on_correction(pair[0], pair[1])
+        if stage == "always":
+            self._set_hint(f"„{pair[0]}“ → „{pair[1]}“ zum zweiten Mal "
+                           f"korrigiert – wird ab jetzt immer angewendet")
+        elif stage == "uncertain":
+            self._set_hint(f"„{pair[0]}“ → „{pair[1]}“ gemerkt – wird "
+                           f"angewendet, wenn die Erkennung unsicher ist")
 
     # -- Dragon-style correction window --------------------------------
 

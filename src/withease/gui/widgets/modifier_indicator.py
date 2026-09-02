@@ -110,6 +110,10 @@ class ModifierIndicator(QWidget):
             self._update_geometry()
             self.update()
             self.show()
+            # Shown without activating, so Windows keeps the old stacking
+            # position – behind whatever was raised in the meantime.  The chip
+            # is a status display: it is worthless the moment it is covered.
+            self.raise_()
         else:
             self.hide()
 

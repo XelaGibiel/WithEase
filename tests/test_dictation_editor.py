@@ -163,10 +163,13 @@ def test_punct_removes_leading_space(app):
 
 
 def test_newline_and_paragraph(app):
+    """A line break starts a new sentence, so the next dictation is
+    capitalised – the same rule that keeps „…und dann das war gut." lower case
+    while a sentence is still running (see postprocess.join_dictation)."""
     ed = make(app, "a")
     run(ed, "neue Zeile")
     run(ed, "b")
-    assert ed.te.toPlainText() == "a\nb"
+    assert ed.te.toPlainText() == "a\nB"
 
 
 def test_capitalize_selection(app):

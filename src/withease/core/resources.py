@@ -27,3 +27,9 @@ def app_svg_path() -> Path:
     """Absolute path to the vector logo (.svg) – render this for crisp display
     at any size instead of scaling the .ico."""
     return package_dir() / "assets" / "icons" / "withease.svg"
+
+
+def flag_icon_path(country_code: str) -> Path:
+    """Absolute path to a small flag PNG (e.g. "de", "gb") used next to a
+    language name in the language picker."""
+    return package_dir() / "assets" / "icons" / "flags" / f"{country_code}.png"

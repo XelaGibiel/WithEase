@@ -222,3 +222,47 @@ def test_whisper_punctuation_still_lets_dictation_through():
     # A real sentence stays dictation even after punctuation is stripped.
     assert cde.parse("Ich gehe zum Anfang der Straße.") is None
     assert cde.parse("Das markieren wir im Kalender.") is None
+
+
+# ---------------------------------------------------------------------------
+# Short commands must survive the hallucination filter
+# ---------------------------------------------------------------------------
+
+def test_pick_phrases_all_parse():
+    """„nimm N“ is the second half of every ambiguous command, so every way of
+    saying it has to land."""
+    for phrase in ("nimm drei", "Nimm drei.", "nimm 3", "nimm die drei",
+                   "nummer drei", "wähle drei"):
+        cmd = cde.parse(phrase)
+        assert cmd is not None and cmd.kind == "pick", phrase
+        assert cmd.data["n"] == 3, phrase
+
+
+def test_strong_filter_is_not_applied_to_short_commands():
+    """Regression: „stark“ is written for the trailing silence of a LONG
+    dictation – its rules are OR-combined and judge the LAST segment hardest.
+    A two-word command has exactly one segment, which is therefore also the
+    last one, so the whole utterance was dropped (or its final word trimmed:
+    „nimm drei“ → „nimm“, which matches nothing).  From the outside that is
+    indistinguishable from the command being ignored."""
+    import module as dic
+
+    strong = dic._hallucination_params("strong")
+    normal = dic._hallucination_params("normal")
+    # Values a good, short two-word clip can plausibly produce.
+    for no_speech, logprob in ((0.45, -0.95), (0.55, -0.60), (0.42, -0.50)):
+        assert dic._seg_is_hallucination(no_speech, logprob, True, strong)
+        assert not dic._seg_is_hallucination(no_speech, logprob, True, normal)
+
+    # …so a command (and any utterance too short to have a trailing tail) is
+    # filtered at most at "normal".
+    assert dic._effective_hall_level(
+        "strong", is_command=True, seconds=0.9) == "normal"
+    assert dic._effective_hall_level(
+        "strong", is_command=False, seconds=0.9) == "normal"
+    # A real dictation keeps the setting the user chose …
+    assert dic._effective_hall_level(
+        "strong", is_command=False, seconds=6.0) == "strong"
+    # … and "off" is an explicit choice that is never overridden.
+    assert dic._effective_hall_level(
+        "off", is_command=True, seconds=0.5) == "off"

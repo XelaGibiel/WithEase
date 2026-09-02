@@ -6,9 +6,10 @@ like training but works instantly and entirely locally – no model fine-tuning.
 
 Safety model (deliberately conservative):
   * Only single words are learned (phrases are skipped for v1).
-  * A substitution becomes active only after the *same* correction is seen
-    ``threshold`` times (default 2), so a one-off edit can't poison a common
-    word after a single correction.
+  * One correction activates a substitution, but it is then applied ONLY where
+    Whisper was uncertain – so a single edit can never rewrite a word that was
+    clearly spoken.  After the same correction has been made ``_STRONG`` (2)
+    times it is applied everywhere.
   * The learned list is inspectable and resettable from the settings page.
 
 Persistence is via :meth:`to_dict` / :meth:`from_dict`; the module stores it in
@@ -109,7 +110,8 @@ class ErrorMemory:
         """Record a correction (``old`` was in the text, ``new`` was spoken).
 
         Returns ``True`` when this makes a *new* substitution active (so the
-        caller knows it is worth persisting / announcing)."""
+        caller knows it is worth persisting / announcing).  Note that "active"
+        does not yet mean "always applied" – see :meth:`apply`."""
         old = (old or "").strip()
         new = (new or "").strip()
         if not old or not new:
@@ -189,6 +191,14 @@ class ErrorMemory:
 
     def is_empty(self) -> bool:
         return not self._active and not self._candidates
+
+    def strength(self, old: str) -> int:
+        """How often this correction has been confirmed (0 = unknown word).
+
+        1 = applied only where recognition was uncertain, 2+ = applied always.
+        Used so the UI can tell the user which of the two states they are in
+        instead of leaving the rule invisible."""
+        return int(self._candidates.get(_fold(old or ""), {}).get("count", 0))
 
     def remove(self, key: str) -> None:
         """Forget a single learned substitution (folded key)."""

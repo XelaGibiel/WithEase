@@ -44,6 +44,17 @@ class _MONITORINFO(ctypes.Structure):
                 ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
 
 
+def _foreground_window() -> int:
+    """Handle of the window that currently has focus (0 if unknown).
+
+    Used only to notice that it CHANGED – activating a window is what pushes
+    an always-on-top overlay down the stack."""
+    try:
+        return int(ctypes.windll.user32.GetForegroundWindow() or 0)
+    except Exception:
+        return 0
+
+
 def foreground_is_fullscreen() -> bool:
     """True if the focused window covers its entire monitor (fullscreen video,
     game, presentation …).  Our always-on-top cursor symbols must not draw over
@@ -92,6 +103,7 @@ class IndicatorCoordinator:
         # a fullscreen window but are NOT repositioned to the cursor.  Any
         # object with a set_suppressed(bool) method can register.
         self._suppressibles: list[object] = []
+        self._tick = 0
         self._timer = QTimer()
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._reposition)
@@ -126,6 +138,26 @@ class IndicatorCoordinator:
             w.set_suppressed(fullscreen)
         if fullscreen:
             return
+
+        # Keep the overlays on top of every other always-on-top window.  They
+        # all share Windows' single "topmost" band, where the last window
+        # raised wins – so the dictation window (or any other assistive tool
+        # that stays on top) buries the sticky-keys chip, and a status chip
+        # nobody can see is the same as no chip at all.
+        #
+        # The moment that matters is when ANOTHER window is activated: that is
+        # what pushes our overlay down, and a chip that only comes back half a
+        # second later has already been missed.  So watch the foreground window
+        # and re-raise the instant it changes – with a slow tick as a safety
+        # net for anything that reorders without taking focus.
+        self._tick += 1
+        foreground = _foreground_window()
+        changed = foreground != getattr(self, "_last_foreground", None)
+        self._last_foreground = foreground
+        if changed or self._tick % 31 == 0:
+            for w in self._suppressibles + self._indicators:
+                if w.isVisible():
+                    w.raise_()
 
         visible = [i for i in self._indicators if i.isVisible()]
         if not visible:

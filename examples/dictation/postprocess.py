@@ -249,3 +249,164 @@ def fix_casing(text: str) -> str:
                 tokens[i] = lead + head.lower() + rest + trail
         out.append(" ".join(tokens))
     return " ".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Joining a new utterance onto text that is already there
+# ---------------------------------------------------------------------------
+
+# Characters after which a NEW sentence begins.
+_SENTENCE_END = ".!?…"
+# After these no space is wanted before the new text (an opening bracket or
+# quote glues to what follows).
+_NO_SPACE_AFTER = "([{„«\u201c'\"\u2013\u2014-/"
+
+
+def join_dictation(previous: str, new_text: str,
+                   following: str = "") -> str:
+    """Return ``new_text`` prepared to be inserted between ``previous`` and
+    ``following``.
+
+    Whisper transcribes every utterance as if it were a sentence of its own:
+    capital first letter, no leading space.  Appended to existing text that is
+    exactly wrong – "…und dann Das war gut." instead of "…und dann das war
+    gut."  This decides both details from what comes immediately before:
+
+    * a separator space unless the text already ends in one (or in a character
+      that glues, like an opening bracket);
+    * capitalisation – a capital first letter after ``.``/``!``/``?`` or at the
+      very beginning, otherwise lower case, but ONLY for words German never
+      capitalises mid-sentence (``_LOWER_WORDS``).  A noun keeps its capital,
+      so "…und dann Haus" never becomes "haus".
+
+    ``following`` is what stands AFTER the insertion point.  When a word is
+    dictated into the middle of a running sentence, Whisper's trailing full
+    stop would land inside that sentence ("das ist sehr. gut"), so it is
+    dropped – but only there: a complete sentence inserted between two others
+    keeps its punctuation.
+
+    ``previous`` may be the whole buffer or just its last few characters; only
+    the tail is looked at.  The same goes for ``following`` and its head.
+    """
+    if not new_text:
+        return ""
+    tail = (previous or "").rstrip("\r")
+    stripped = tail.rstrip()
+    if not stripped:
+        return new_text                     # nothing before: leave as spoken
+
+    last = stripped[-1]
+    # A line break starts a new sentence just as a full stop does – but it is
+    # removed by rstrip(), so it has to be read off the UNstripped tail.
+    starts_sentence = tail.endswith(("\n", "\r")) or last in _SENTENCE_END
+    # A line break already separates; anything else may need a space.
+    if tail.endswith(("\n", " ", "\t")) or last in _NO_SPACE_AFTER:
+        sep = ""
+    else:
+        sep = " "
+
+    if not starts_sentence and following.strip():
+        # Mid-sentence insertion: the sentence continues after us, so the full
+        # stop Whisper appends to every utterance would end it in the wrong
+        # place.  Only stripped while CONTINUING a sentence – a whole sentence
+        # dictated between two others (previous ends in „.") keeps its own.
+        new_text = new_text.rstrip().rstrip(_SENTENCE_END)
+        if not new_text:
+            return ""
+
+    head, rest = new_text[:1], new_text[1:]
+    if starts_sentence:
+        head = head.upper()
+    elif head.isupper():
+        first_word = re.split(r"[\s,;:.!?]", new_text, 1)[0]
+        if first_word.lower() in _LOWER_WORDS:
+            head = head.lower()             # only the safe function words
+    return sep + head + rest
+
+
+# ---------------------------------------------------------------------------
+# Spoken dates → numeric dates
+# ---------------------------------------------------------------------------
+
+_MONTHS = {
+    "januar": 1, "jan": 1, "jaenner": 1, "jänner": 1,
+    "februar": 2, "feb": 2, "februa": 2,
+    "maerz": 3, "märz": 3, "mrz": 3, "mar": 3,
+    "april": 4, "apr": 4,
+    "mai": 5,
+    "juni": 6, "jun": 6,
+    "juli": 7, "jul": 7,
+    "august": 8, "aug": 8,
+    "september": 9, "sept": 9, "sep": 9,
+    "oktober": 10, "okt": 10,
+    "november": 11, "nov": 11,
+    "dezember": 12, "dez": 12,
+}
+
+# Spoken ordinals for the day.  Whisper writes a dictated ordinal sometimes as
+# "20." and sometimes in words, so both have to be understood.
+_ORDINAL_UNITS = {
+    "erst": 1, "zweit": 2, "dritt": 3, "viert": 4, "fuenft": 5, "fünft": 5,
+    "sechst": 6, "siebt": 7, "siebent": 7, "acht": 8, "neunt": 9, "zehnt": 10,
+    "elft": 11, "zwoelft": 12, "zwölft": 12, "dreizehnt": 13, "vierzehnt": 14,
+    "fuenfzehnt": 15, "fünfzehnt": 15, "sechzehnt": 16, "siebzehnt": 17,
+    "achtzehnt": 18, "neunzehnt": 19, "zwanzigst": 20,
+    "einundzwanzigst": 21, "zweiundzwanzigst": 22, "dreiundzwanzigst": 23,
+    "vierundzwanzigst": 24, "fuenfundzwanzigst": 25, "fünfundzwanzigst": 25,
+    "sechsundzwanzigst": 26, "siebenundzwanzigst": 27, "achtundzwanzigst": 28,
+    "neunundzwanzigst": 29, "dreissigst": 30, "dreißigst": 30,
+    "einunddreissigst": 31, "einunddreißigst": 31,
+}
+# "zwanzigsten", "zwanzigster", "zwanzigste" – any of the usual endings.
+_ORDINAL_WORDS = {stem + end: value
+                  for stem, value in _ORDINAL_UNITS.items()
+                  for end in ("e", "en", "er", "em", "es")}
+
+_MONTH_RE = "|".join(sorted(_MONTHS, key=len, reverse=True))
+_ORD_RE = "|".join(sorted(_ORDINAL_WORDS, key=len, reverse=True))
+
+# "20. August 2026" / "20 August 2026" / "zwanzigsten August 2026"
+_DATE_RE = re.compile(
+    r"\b(?:(\d{1,2})\.?|(" + _ORD_RE + r"))\s+(" + _MONTH_RE + r")\.?"
+    r"(?:\s+(\d{4})|\s+(\d{2})(?![\d.]))?\b",
+    re.IGNORECASE)
+
+
+def fix_dates(text: str) -> str:
+    """Write spoken dates as numbers: "20. August 2026" → "20.08.2026".
+
+    Dictating a date is one of the places where speech and writing differ most:
+    people SAY "zwanzigster August zweitausendsechsundzwanzig" and want to READ
+    "20.08.2026".  Handles the digit form and the spelled-out ordinal, with or
+    without a year; a two-digit year is expanded to 20xx.
+
+    Deliberately conservative: only a real month name triggers it, an
+    impossible day is left untouched, and nothing else in the sentence is
+    changed.  Text that is already numeric ("20.08.2026") is not matched at
+    all, so running this twice is safe.
+    """
+    if not text:
+        return text
+
+    def repl(m: re.Match) -> str:
+        digits, word, month_name, year4, year2 = m.groups()
+        if digits is not None:
+            day = int(digits)
+        else:
+            day = _ORDINAL_WORDS.get(word.lower(), 0)
+        month = _MONTHS.get(month_name.lower().rstrip("."), 0)
+        if not (1 <= day <= 31) or not month:
+            return m.group(0)           # not a date after all – leave it alone
+        out = f"{day:02d}.{month:02d}."
+        if year4:
+            out += year4
+        elif year2:
+            out += f"20{year2}"
+        elif m.string[m.end():m.end() + 1] == ".":
+            # A date without a year already ends in a dot; at the end of a
+            # sentence the sentence's own period would double it ("31.12..").
+            # German merges the two, so drop ours and let the sentence keep its.
+            out = out[:-1]
+        return out
+
+    return _DATE_RE.sub(repl, text)

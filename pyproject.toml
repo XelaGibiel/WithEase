@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "withease"
-version = "0.6.2"
+version = "0.7.0"
 description = "Modular accessibility assistant for people with motor impairments"
 readme = "README.md"
 license = { file = "LICENSE" }

@@ -33,6 +33,14 @@ class _EmergencyBridge(QObject):
     triggered = Signal()
 
 
+class _OpenSettingsBridge(QObject):
+    """Marshals an "open my settings page" request onto the GUI thread.
+
+    Modules publish it on the bus (they hold no reference to the app), and it
+    can arrive from a worker thread – building a window there would crash."""
+    requested = Signal(str)
+
+
 class _SaveBridge(QObject):
     """Marshals a profile save from a worker thread to the main thread.
 
@@ -46,6 +54,8 @@ class WithEaseApp:
     def __init__(self, qt_app: QApplication) -> None:
         self._qt_app = qt_app
         self._app_config = config.load_app_config()
+        from withease.gui.widgets.hint_icon import set_hints_visible
+        set_hints_visible(self._app_config.get("hints_enabled", True))
         i18n.load(self._app_config.get("language", "de"))
         from withease.gui.theme import apply_theme
         apply_theme(qt_app, self._app_config.get("theme", "system"),
@@ -84,6 +94,8 @@ class WithEaseApp:
         self._emergency_trigger = ""
         self._emergency_bridge = _EmergencyBridge()
         self._emergency_bridge.triggered.connect(self.toggle_emergency)
+        self._open_settings_bridge = _OpenSettingsBridge()
+        self._open_settings_bridge.requested.connect(self.show_settings)
         self._save_bridge = _SaveBridge()
         self._save_bridge.requested.connect(
             lambda: self._save_current_profile(silent=True))
@@ -138,7 +150,16 @@ class WithEaseApp:
         for _delay in (3000, 10000):
             QTimer.singleShot(_delay, self._prewarm_overlays)
 
+        # Test switch only (see gui/widgets/support_hint.py) - a normal
+        # start never touches the stored answer.
+        from withease.gui.widgets.support_hint import apply_test_reset
+        if apply_test_reset(self._app_config):
+            config.save_app_config(self._app_config)
+
+        self._start_usage_clock()
+
         self._load_profile(self._active_profile)
+        self._migrate_chip_size()
         self._apply_emergency_key()
         self._apply_indicator_positions()
 
@@ -151,6 +172,7 @@ class WithEaseApp:
         # Persist macro usage counters (bumped on the macro Timer thread) via the
         # main thread, quietly (no "saved" toast on every macro use).
         bus.subscribe("macros.executed", lambda **_: self._save_bridge.requested.emit())
+        bus.subscribe("app.open_settings", self._on_open_settings)
 
         if self._app_config.get("first_run", True):
             self.show_settings()
@@ -163,6 +185,62 @@ class WithEaseApp:
 
     def get_modules(self) -> list[BaseModule]:
         return self._modules
+
+    # -- usage clock -----------------------------------------------------
+
+    _USAGE_TICK_S = 60          # how often the counter advances
+    _USAGE_SAVE_EVERY = 10      # write to disk only every N ticks
+
+    def _start_usage_clock(self) -> None:
+        """Count how long WithEase has actually been in use.
+
+        Used only to decide when the one-off support hint may appear.  Ticks
+        are skipped while the app is emergency-stopped, and the value is
+        written to disk rarely so this costs nothing in normal operation."""
+        from PySide6.QtCore import QTimer
+        self._usage_ticks = 0
+        # A shortened test threshold needs a shortened tick, otherwise the
+        # counter jumps straight past it in one 60s step (see
+        # gui/widgets/support_hint.py for the two test variables).
+        from withease.gui.widgets import support_hint as _hint
+        override = _hint._override_seconds()
+        if override is not None and override < 300:
+            self._usage_tick_s = max(1, min(5, override))
+        else:
+            self._usage_tick_s = self._USAGE_TICK_S
+        self._usage_timer = QTimer(self._qt_app)
+        self._usage_timer.setInterval(self._usage_tick_s * 1000)
+        self._usage_timer.timeout.connect(self._on_usage_tick)
+        self._usage_timer.start()
+
+    def _on_usage_tick(self) -> None:
+        if self._paused:
+            return
+        self._app_config["active_seconds"] = (
+            int(self._app_config.get("active_seconds", 0)) + self._usage_tick_s)
+        self._usage_ticks += 1
+        if self._usage_ticks % self._USAGE_SAVE_EVERY == 0:
+            config.save_app_config(self._app_config)
+
+    def active_seconds(self) -> int:
+        return int(self._app_config.get("active_seconds", 0))
+
+    def support_hint_snoozed_at(self) -> int:
+        return int(self._app_config.get("support_hint_snoozed_at", 0))
+
+    def support_hint_state(self) -> str:
+        return str(self._app_config.get("support_hint_state", "pending"))
+
+    def set_support_hint_state(self, state: str) -> None:
+        """Remember the user's answer for good (survives updates – it lives in
+        app.json, not in a profile)."""
+        if state == "later":
+            # Anchor the postponement to NOW.  Measuring it against the total
+            # usage counter meant "Später" was already satisfied the moment it
+            # was pressed – the note came straight back instead of waiting.
+            self._app_config["support_hint_snoozed_at"] = self.active_seconds()
+        self._app_config["support_hint_state"] = state
+        config.save_app_config(self._app_config)
 
     @property
     def is_paused(self) -> bool:
@@ -507,15 +585,27 @@ class WithEaseApp:
     # Emergency key
     # ------------------------------------------------------------------
 
+    def _migrate_chip_size(self) -> None:
+        """One-time migration: the sticky-keys chip and the macro-mode chip
+        used to be two separate per-module settings; they're now one central
+        Allgemein-level setting.  Seed it from the old macros value once, so
+        an existing customization isn't silently lost."""
+        if self._app_config.get("_migrated_chip_size", False):
+            return
+        macro_chip = self._profile_data.get("modules", {}).get(
+            "macros", {}).get("chip_size", 28)
+        self._app_config["overlay_chip_size"] = macro_chip
+        self._app_config["_migrated_chip_size"] = True
+        config.save_app_config(self._app_config)
+
     def _apply_indicator_positions(self) -> None:
         kb_settings = self._profile_data.get("modules", {}).get("keyboard", {})
         pos = kb_settings.get("sticky_indicator_position", "bottom-right")
         self._modifier_indicator.set_position(pos)
-        size = kb_settings.get("sticky_chip_size", 24)
-        self._modifier_indicator.set_chip_size(size)
 
-        macro_settings = self._profile_data.get("modules", {}).get("macros", {})
-        self._macro_indicator.set_chip_size(macro_settings.get("chip_size", 28))
+        chip_size = int(self._app_config.get("overlay_chip_size", 28))
+        self._modifier_indicator.set_chip_size(chip_size)
+        self._macro_indicator.set_chip_size(chip_size)
 
     def _prewarm_overlays(self) -> None:
         """Realise the cursor overlay windows off-screen (see the scheduling in
@@ -555,13 +645,29 @@ class WithEaseApp:
     # GUI
     # ------------------------------------------------------------------
 
-    def show_settings(self) -> None:
+    def show_settings(self, module_id: str = "") -> None:
+        """Open the settings window, optionally on a module's own page.
+
+        ``module_id`` lets a module send the user straight to the place where
+        its problem can be fixed – an error message that only names a missing
+        setting, without a way to reach it, is not much of a message."""
         if self._settings_window is None:
             from withease.gui.main_window import MainWindow
             self._settings_window = MainWindow(self)
         self._settings_window.show()
         self._settings_window.raise_()
         self._settings_window.activateWindow()
+        if module_id:
+            try:
+                self._settings_window.goto_module_page(module_id)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "could not open the settings page for %r", module_id)
+
+    def _on_open_settings(self, module_id: str = "", **_: object) -> None:
+        """Bus entry point, so a module can ask without holding a reference."""
+        self._open_settings_bridge.requested.emit(str(module_id or ""))
 
     # ------------------------------------------------------------------
     # Lifecycle

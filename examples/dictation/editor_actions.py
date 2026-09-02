@@ -154,14 +154,29 @@ class Editor:
             # can't pollute what the memory learns.
             if old and was_correction:
                 self.last_correction = (old, text)
-        else:
-            # Smart spacing: add a leading space between words.
-            prev = self._text()[:cur.position()]
-            if prev and prev[-1].isalnum() and (text[0].isalnum() or text[0] in "„("):
-                text = " " + text
+        trailing = ""
+        if not cur.hasSelection():
+            # Spacing AND capitalisation from what stands before the cursor –
+            # Whisper capitalises every utterance like its own sentence, so a
+            # continuation used to read "…und dann Das war gut."
+            from postprocess import join_dictation
+            doc = self._text()
+            pos = cur.position()
+            after = doc[pos:]
+            text = join_dictation(doc[:pos], text, after)
+            # …and a space on the OTHER side too, or a word dictated into the
+            # middle glues to the one that follows ("sehrgut").
+            if after[:1].isalnum() and not text.endswith(" "):
+                trailing = " "
         start = cur.selectionStart()
         cur.insertText(text)
-        self._last_insert = (start, start + len(text))
+        end = cur.position()
+        if trailing:
+            cur.insertText(trailing)
+            cur.setPosition(end)        # cursor stays behind the new text
+        # The trailing space is NOT part of the run: "lösche das" must remove
+        # the words, not the separator that belongs to the sentence.
+        self._last_insert = (start, end)
         self.te.setTextCursor(cur)
         return ActionResult("ok")
 
@@ -195,7 +210,14 @@ class Editor:
         op, extra = self._pending["op"], self._pending.get("extra", {})
         start, end = matches[n - 1]
         self._pending = None
-        return self._apply_to_span(op, start, end, extra)
+        result = self._apply_to_span(op, start, end, extra)
+        if result.status == "ok" and not result.message:
+            # "Befehl: pick" told the user nothing – and after a cursor move
+            # there is often nothing visible either, so a silent success is
+            # indistinguishable from the command being ignored.
+            result = ActionResult("ok", message=f"Treffer {n} von "
+                                               f"{len(matches)} gewählt")
+        return result
 
     def _resolve(self, op: str, word: str, extra: dict | None = None) -> ActionResult:
         """Find ``word`` (or phrase); act on it, or defer if several matches."""
@@ -336,6 +358,52 @@ class Editor:
         self._set_cursor(e, s)
         self.te.textCursor().removeSelectedText()
         return ActionResult("ok")
+
+    def _do_next_sentence(self, _d):
+        """Cursor to the start of the next sentence (end of text if none)."""
+        text = self._text()
+        pos = self.te.textCursor().position()
+        m = re.search(r"[.!?…]+\s+", text[pos:])
+        self._set_cursor(pos + m.end() if m else len(text))
+        return ActionResult("ok")
+
+    def _do_prev_sentence(self, _d):
+        """Cursor to the start of the sentence before the current one."""
+        text = self._text()
+        pos = self.te.textCursor().position()
+        starts = [0] + [m.end() for m in re.finditer(r"[.!?…]+\s+", text)]
+        earlier = [s for s in starts if s < pos]
+        # One step back from the sentence the cursor is already in.
+        target = earlier[-2] if len(earlier) >= 2 and earlier[-1] >= pos - 0             else (earlier[-1] if earlier else 0)
+        if earlier and earlier[-1] == pos and len(earlier) >= 2:
+            target = earlier[-2]
+        self._set_cursor(target)
+        return ActionResult("ok")
+
+    def _do_insert_date(self, _d):
+        from datetime import date
+        return self.insert_dictation(date.today().strftime("%d.%m.%Y"))
+
+    def _do_insert_time(self, _d):
+        from datetime import datetime
+        return self.insert_dictation(datetime.now().strftime("%H:%M"))
+
+    def _do_snippet(self, d):
+        """Insert a saved text block by its spoken name.
+
+        ``snippet_lookup`` is set by the window; without it (or with an unknown
+        name) the user is told which names exist instead of silently doing
+        nothing."""
+        lookup = getattr(self, "snippet_lookup", None)
+        if lookup is None:
+            return ActionResult("info", message="keine Textbausteine angelegt")
+        text, known = lookup(d.get("name", ""))
+        if text is None:
+            names = ", ".join(known) if known else "keine angelegt"
+            return ActionResult(
+                "not_found",
+                message=f"Baustein „{d.get('name', '')}“ unbekannt – {names}")
+        return self.insert_dictation(text)
 
     def _last_words_span(self, n: int) -> tuple[int, int] | None:
         pos = self.te.textCursor().position()

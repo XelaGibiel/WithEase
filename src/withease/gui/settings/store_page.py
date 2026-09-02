@@ -64,6 +64,12 @@ class StorePage(QWidget):
         header.addWidget(self._refresh_btn)
         outer.addLayout(header)
 
+        # Same heading-then-separator convention every other page uses.
+        title_sep = QFrame()
+        title_sep.setFrameShape(QFrame.Shape.HLine)
+        title_sep.setFrameShadow(QFrame.Shadow.Sunken)
+        outer.addWidget(title_sep)
+
         hint = QLabel(tr("settings.store.hint"))
         hint.setStyleSheet(theme.hint_style())
         hint.setWordWrap(True)
@@ -241,12 +247,19 @@ class StorePage(QWidget):
             btn.setEnabled(False)
             return
         btn.setEnabled(True)
+        # The SAME button installs, updates or removes, so its danger tint has
+        # to follow the current meaning – otherwise "Entfernen" would look as
+        # harmless as "Installieren".
+        removing = bool(m.installed and not m.update_available)
         if m.update_available:
             btn.setText(tr("settings.store.update"))
         elif m.installed:
             btn.setText(tr("settings.store.remove"))
         else:
             btn.setText(tr("settings.store.install"))
+        btn.setProperty("danger", removing)
+        btn.style().unpolish(btn)
+        btn.style().polish(btn)
 
     def _on_action(self, module_id: str) -> None:
         card = self._cards.get(module_id)

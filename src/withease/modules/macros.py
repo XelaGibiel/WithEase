@@ -186,6 +186,10 @@ class Macro:
     uses: int = 0               # execution counter, for "sort by usage"
 
 
+# Category given to text blocks taken over from the dictation add-on, so
+# they are recognisable as a group in the macro list.
+_TEXT_BLOCK_CATEGORY = "Textbausteine"
+
 _MACRO_FIELDS = {"id", "label", "trigger_key", "type", "payload",
                  "category", "uses"}
 
@@ -232,11 +236,17 @@ class MacrosModule(BaseModule):
     def start(self) -> None:
         self._refresh_trigger()
         self._start_hook()
+        bus.subscribe("macros.collect_text_blocks",
+                      self._on_collect_text_blocks)
+        bus.subscribe("macros.add_text_block", self._on_add_text_block)
         bus.publish("module.started", module_id=self.MODULE_ID)
 
     def stop(self) -> None:
         self._stop_hook()
         self._macro_mode = False
+        bus.unsubscribe("macros.collect_text_blocks",
+                        self._on_collect_text_blocks)
+        bus.unsubscribe("macros.add_text_block", self._on_add_text_block)
         bus.publish("macros.mode_changed", active=False)
         bus.publish("module.stopped", module_id=self.MODULE_ID)
 
@@ -284,6 +294,58 @@ class MacrosModule(BaseModule):
     def macros(self) -> list[Macro]:
         """The current macros (live objects – treat as read-only)."""
         return list(self._macros)
+
+    # -- text blocks shared with other modules ---------------------------
+
+    def text_blocks(self) -> list[tuple[str, str]]:
+        """``(label, text)`` for every macro of type "text".
+
+        A text macro and a dictation text block are the same thing – a named
+        piece of text – so they are kept in ONE place instead of being entered
+        twice.  This is that place; the dictation add-on asks for it over the
+        bus (see ``_on_collect_text_blocks``) rather than importing this
+        module, so neither side depends on the other being installed."""
+        return [(m.label.strip(), m.payload.get("text", ""))
+                for m in self._macros
+                if m.type == "text" and m.label.strip()
+                and m.payload.get("text", "")]
+
+    def _on_collect_text_blocks(self, out: list | None = None,
+                                **_: object) -> None:
+        """Answer a ``macros.collect_text_blocks`` request.
+
+        The bus is synchronous, so a caller can publish with an empty list and
+        read the answer straight afterwards – a request/response without either
+        side holding a reference to the other."""
+        if out is None:
+            return
+        out.extend(self.text_blocks())
+
+    def _on_add_text_block(self, name: str = "", text: str = "",
+                           out: list | None = None, **_: object) -> None:
+        """Take over a named text from elsewhere as a macro of type "text".
+
+        The counterpart to the collect request: the dictation add-on used to
+        keep its own second list of text blocks, which meant the same sign-off
+        had to be created twice and neither list showed the other's entries.
+        There is one list now – this one – and the old entries are moved here.
+
+        No trigger key: a text block is meant to be spoken, and taking up a key
+        in macro mode is exactly what the user may not want.  A duplicate name
+        is skipped rather than doubled."""
+        name, text = (name or "").strip(), (text or "")
+        if not name or not text:
+            return
+        if any(m.type == "text" and m.label.strip().lower() == name.lower()
+               for m in self._macros):
+            return
+        macro = Macro(id=str(uuid.uuid4()), label=name, trigger_key="",
+                      type="text", payload={"text": text},
+                      category=_TEXT_BLOCK_CATEGORY)
+        self._macros.append(macro)
+        self.on_settings_changed()
+        if out is not None:
+            out.append(macro.id)
 
     def categories(self) -> list[str]:
         """Distinct non-empty user categories, in first-seen order."""
@@ -420,15 +482,21 @@ class MacrosModule(BaseModule):
             previous = _clipboard_get_text()
             if not _clipboard_set_text(text):
                 return False
-            time.sleep(0.03)  # let the clipboard settle before pasting
+            time.sleep(0.05)  # let the clipboard settle before pasting
             ctrl = KeyController()
             ctrl.press(pynput_keyboard.Key.ctrl)
             ctrl.press("v")
             ctrl.release("v")
             ctrl.release(pynput_keyboard.Key.ctrl)
             if previous is not None:
-                time.sleep(0.25)  # let the paste complete before restoring
-                _clipboard_set_text(previous)
+                # The injected Ctrl+V is only *sent* here – the target app
+                # processes it asynchronously (can take a while on the first
+                # paste after a focus change).  Restoring the old clipboard
+                # too soon raced with that and pasted the STALE previous
+                # content instead of the macro's text.  0.25s was too tight;
+                # match the dictation module's already-proven 0.4s and run it
+                # off-thread (like dictation does) instead of blocking here.
+                threading.Timer(0.4, _clipboard_set_text, args=[previous]).start()
             return True
         except Exception:
             return False

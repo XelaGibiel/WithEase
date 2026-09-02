@@ -36,6 +36,17 @@ DEFAULT_APP_CONFIG: dict[str, Any] = {
     "theme": "system",
     "autostart": False,
     "tray_icon": True,
+    "hints_enabled": True,
+    "overlay_chip_size": 28,
+    "_migrated_chip_size": False,
+    # Support hint: shown ONCE, after real usage.  "active_seconds" counts
+    # time the app was actually running and not emergency-stopped, so a PC
+    # left on overnight does not trigger it.  State: pending | later | done.
+    "active_seconds": 0,
+    "support_hint_state": "pending",
+    # Reading of "active_seconds" at the moment "Später" was pressed, so the
+    # postponement counts from THEN and not from the install.
+    "support_hint_snoozed_at": 0,
 }
 
 DEFAULT_PROFILE: dict[str, Any] = {

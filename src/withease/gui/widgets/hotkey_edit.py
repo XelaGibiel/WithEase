@@ -58,10 +58,11 @@ class HotkeyEdit(QWidget):
         self._btn.clicked.connect(self._start_recording)
         layout.addWidget(self._btn)
 
-        from withease.gui.ui_utils import em
         self._clear_btn = QPushButton("✕")
         self._clear_btn.setProperty("iconBtn", True)   # tight padding so ✕ fits
-        self._clear_btn.setFixedWidth(max(34, em(2.0)))
+        self._clear_btn.setProperty("dangerIcon", True)   # red ✕ (theme QSS)
+        # Size comes from the central QSS (accessible click target); a
+        # setFixedWidth() here would fight that rule.
         self._clear_btn.setToolTip(tr("hotkey.clear"))
         self._clear_btn.clicked.connect(self._clear)
         layout.addWidget(self._clear_btn)

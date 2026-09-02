@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QFrame,
     QLabel,
     QPushButton,
     QSpinBox,
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from withease.core import config
 from withease.core.event_bus import bus
+from withease.gui import theme as _core_theme
 from withease.modules.base import BaseModule
 
 STYLES = ("popup", "rain", "liquid")
@@ -62,10 +64,21 @@ _STRINGS: dict[str, dict[str, str]] = {
         "group.settings": "Einstellungen",
         "interval": "Erinnern alle",
         "style": "Darstellung",
-        "style.popup": "Dezentes Fenster (Mitte)",
-        "style.rain": "Regen über den ganzen Bildschirm",
-        "style.liquid": "Flüssigkeitsstand (Bildschirm füllt sich)",
-        "dismiss": "Wie stark unterbrechen",
+        "style.hint": "Bestimmt, wie die Trinkpausen-Erinnerung angezeigt wird.",
+        "style.popup": "Dezentes Fenster",
+        "style.popup.hint": "Erscheint in der Bildschirmmitte",
+        "style.rain": "Regen",
+        "style.rain.hint": "Regen fällt über den ganzen Bildschirm",
+        "style.liquid": "Flüssigkeitsstand",
+        "style.liquid.hint": "Der Bildschirm füllt sich",
+        "dismiss": "Schließverhalten",
+        "dismiss.hint":
+            "Sofort wegklickbar: Ein Klick genügt – am wenigsten störend.\n"
+            "Kurze Wartezeit: Der Schließen-Knopf wird erst nach ein paar "
+            "Sekunden aktiv, damit die Erinnerung nicht reflexhaft "
+            "weggeklickt wird.\n"
+            "Bestätigung nötig: Es muss ausdrücklich bestätigt werden – "
+            "am verbindlichsten.",
         "dismiss.instant": "Sofort wegklickbar",
         "dismiss.delay": "Kurze Wartezeit",
         "dismiss.confirm": "Bestätigung nötig",
@@ -90,10 +103,20 @@ _STRINGS: dict[str, dict[str, str]] = {
         "group.settings": "Settings",
         "interval": "Remind every",
         "style": "Presentation",
-        "style.popup": "Discreet window (centre)",
-        "style.rain": "Rain across the whole screen",
-        "style.liquid": "Liquid level (screen fills up)",
-        "dismiss": "How strongly to interrupt",
+        "style.hint": "Determines how the drink reminder is displayed.",
+        "style.popup": "Discreet window",
+        "style.popup.hint": "Appears in the centre of the screen",
+        "style.rain": "Rain",
+        "style.rain.hint": "Rain falls across the whole screen",
+        "style.liquid": "Liquid level",
+        "style.liquid.hint": "The screen fills up",
+        "dismiss": "Dismiss behavior",
+        "dismiss.hint":
+            "Dismiss instantly: one click is enough – the least intrusive.\n"
+            "Short wait: the close button only becomes active after a "
+            "few seconds, so the reminder is not dismissed on reflex.\n"
+            "Confirmation required: it has to be confirmed explicitly "
+            "– the most binding.",
         "dismiss.instant": "Dismiss instantly",
         "dismiss.delay": "Short wait",
         "dismiss.confirm": "Confirmation required",
@@ -460,6 +483,25 @@ class HydrationReminder(QWidget):
 # Settings page
 # ---------------------------------------------------------------------------
 
+def _label_with_hint(text: str, tooltip: str):
+    """``ui_utils.label_with_hint`` with a fallback for an OLDER core.
+
+    An add-on module is installed independently of the program itself, so it
+    can end up next to a core that predates a helper it uses.  Importing that
+    helper unguarded turns "one row looks plainer" into "the whole app refuses
+    to start with an ImportError" – which is exactly what happened with a
+    packaged build older than the module.  Degrade instead: plain caption, the
+    explanation still reachable as its tooltip.
+    """
+    try:
+        from withease.gui.ui_utils import label_with_hint
+        return label_with_hint(text, tooltip)
+    except Exception:
+        lbl = QLabel(text)
+        lbl.setToolTip(tooltip)
+        return lbl
+
+
 class HydrationSettings(QWidget):
     def __init__(self, module: "HydrationModule") -> None:
         super().__init__()
@@ -480,14 +522,24 @@ class HydrationSettings(QWidget):
         self._enabled_cb.toggled.connect(self._on_module_toggled)
         layout.addWidget(self._enabled_cb)
 
+        # Heading → separator → description, exactly like the core module pages
+        # (Maus/Tastatur): the separator was missing here, and the description
+        # had no style at all, so it rendered in full-brightness white instead
+        # of the secondary grey every other page uses.
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(sep)
+
         desc = QLabel(_t("description"))
         desc.setWordWrap(True)
+        desc.setStyleSheet(_core_theme.hint_style())
         layout.addWidget(desc)
 
         # All settings live on one card (bold title), consistent with the other
         # module pages.  The whole card greys out while the module is off.
         from withease.gui.ui_utils import card as _card
-        self._card, body = _card(_t("group.settings"))
+        self._card, body = _card(_t("group.settings"), "⚙️")
         layout.addWidget(self._card)
 
         form = QFormLayout()
@@ -504,16 +556,24 @@ class HydrationSettings(QWidget):
             lambda v: self._save("interval_minutes", v))
         form.addRow(_t("interval"), self._interval)
 
+        label_with_hint = _label_with_hint
         self._style = QComboBox()
         self._style.addItem(_t("style.popup"), "popup")
+        self._style.setItemData(0, _t("style.popup.hint"),
+                                Qt.ItemDataRole.ToolTipRole)
         self._style.addItem(_t("style.rain"), "rain")
+        self._style.setItemData(1, _t("style.rain.hint"),
+                                Qt.ItemDataRole.ToolTipRole)
         self._style.addItem(_t("style.liquid"), "liquid")
+        self._style.setItemData(2, _t("style.liquid.hint"),
+                                Qt.ItemDataRole.ToolTipRole)
         saved_style = self._settings.get("style", "popup")
         if saved_style in STYLES:
             self._style.setCurrentIndex(STYLES.index(saved_style))
         self._style.currentIndexChanged.connect(
             lambda i: self._save("style", self._style.itemData(i)))
-        form.addRow(_t("style"), self._style)
+        form.addRow(label_with_hint(_t("style"), _t("style.hint")),
+                   self._style)
 
         self._dismiss = QComboBox()
         self._dismiss.addItem(_t("dismiss.instant"), "instant")
@@ -523,7 +583,8 @@ class HydrationSettings(QWidget):
         self._dismiss.setCurrentIndex(
             DISMISS_MODES.index(cur) if cur in DISMISS_MODES else 1)
         self._dismiss.currentIndexChanged.connect(self._on_dismiss_changed)
-        form.addRow(_t("dismiss"), self._dismiss)
+        form.addRow(label_with_hint(_t("dismiss"), _t("dismiss.hint")),
+                   self._dismiss)
 
         self._delay = QSpinBox()
         self._delay.setRange(1, 60)

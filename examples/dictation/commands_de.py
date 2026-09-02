@@ -188,6 +188,14 @@ def _clean_target(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _m_window(t: str) -> Command | None:
+    # Checked BEFORE the plain "einfügen": hand the text over but keep the
+    # window open, so a long text can be dictated paragraph by paragraph
+    # without reopening and re-picking the target every time.
+    if t in ("einfügen und weiter", "einfuegen und weiter",
+             "übernehmen und weiter", "uebernehmen und weiter",
+             "text einfügen und weiter", "text einfuegen und weiter",
+             "einfügen und offen lassen", "einfuegen und offen lassen"):
+        return Command("insert", {"keep_open": True})
     if t in ("einfügen", "einfuegen", "text einfügen", "text einfuegen",
              "übernehmen", "uebernehmen", "fertig"):
         return Command("insert")
@@ -391,3 +399,177 @@ def parse(transcript: str) -> Command | None:
                 cmd.data["to"] = _clean_target(m.group(2))
         return cmd
     return None
+
+
+# ---------------------------------------------------------------------------
+# Sentence navigation, numbers, date/time and text snippets
+# ---------------------------------------------------------------------------
+
+# Spoken number words → digits.  Only the ones people actually dictate as a
+# figure ("Ziffer fünf" → "5"); anything else stays as Whisper wrote it.
+NUMBER_WORDS = {
+    "null": "0", "eins": "1", "ein": "1", "eine": "1", "zwei": "2", "zwo": "2",
+    "drei": "3", "vier": "4", "fünf": "5", "fuenf": "5", "sechs": "6",
+    "sieben": "7", "acht": "8", "neun": "9", "zehn": "10", "elf": "11",
+    "zwölf": "12", "zwoelf": "12", "dreizehn": "13", "vierzehn": "14",
+    "fünfzehn": "15", "fuenfzehn": "15", "sechzehn": "16", "siebzehn": "17",
+    "achtzehn": "18", "neunzehn": "19", "zwanzig": "20", "dreißig": "30",
+    "dreissig": "30", "vierzig": "40", "fünfzig": "50", "fuenfzig": "50",
+    "hundert": "100", "tausend": "1000",
+}
+
+
+def _m_sentence_nav(t: str) -> Command | None:
+    """Move sentence by sentence – the gap that made longer texts tedious."""
+    if t in ("nächster satz", "naechster satz", "zum nächsten satz",
+             "zum naechsten satz", "satz weiter"):
+        return Command("next_sentence")
+    if t in ("vorheriger satz", "voriger satz", "zum vorherigen satz",
+             "letzter satz", "satz zurück", "satz zurueck"):
+        return Command("prev_sentence")
+    if t in ("lösche den letzten satz", "loesche den letzten satz",
+             "lösche letzten satz", "loesche letzten satz"):
+        return Command("delete_sentence", {"which": "last"})
+    return None
+
+
+def _m_number_date(t: str) -> Command | None:
+    """Figures and today's date/time – Whisper writes numbers inconsistently,
+    and a date is something you should not have to spell out."""
+    m = re.fullmatch(r"(?:ziffer|zahl)\s+(.+)", t)
+    if m:
+        word = m.group(1).strip()
+        if word in NUMBER_WORDS:
+            return Command("literal", {"text": NUMBER_WORDS[word]})
+        digits = "".join(NUMBER_WORDS.get(w, "") for w in word.split())
+        if digits:
+            return Command("literal", {"text": digits})
+        return None
+    if t in ("datum", "datum heute", "heutiges datum", "das datum",
+             "datum einfügen", "datum einfuegen"):
+        return Command("insert_date")
+    if t in ("uhrzeit", "die uhrzeit", "uhrzeit einfügen",
+             "uhrzeit einfuegen", "wie spät ist es"):
+        return Command("insert_time")
+    return None
+
+
+def _m_help_history(t: str) -> Command | None:
+    """Reach the reference and the history WITHOUT the mouse.
+
+    Both were button-only – in a program whose whole point is avoiding precise
+    pointing, the list of voice commands should itself be reachable by voice."""
+    if t in ("hilfe", "befehle", "welche befehle gibt es",
+             "welche befehle gibt es denn", "zeig die befehle",
+             "zeige die befehle", "befehlsliste", "sprachbefehle"):
+        return Command("show_help")
+    m = re.fullmatch(r"(?:verlauf|aus dem verlauf|verlauf eintrag)\s+(\d+)", t)
+    if m:
+        n = int(m.group(1))
+        if 1 <= n <= 20:
+            return Command("history_pick", {"n": n})
+    m = re.fullmatch(r"(?:verlauf|aus dem verlauf)\s+(.+)", t)
+    if m and m.group(1) in _NUMBER_TO_INT:
+        return Command("history_pick", {"n": _NUMBER_TO_INT[m.group(1)]})
+    if t in ("verlauf", "verlauf zeigen", "zeig den verlauf",
+             "zeige den verlauf"):
+        return Command("history_show")
+    return None
+
+
+def _m_snippet(t: str) -> Command | None:
+    """Insert a saved text block by name – the biggest saving for anyone who
+    has to speak every single word of a phrase they use daily."""
+    m = re.fullmatch(r"(?:füge|fuege|einfügen|einfuegen)\s+(.+?)\s+ein", t)
+    if m:
+        return Command("snippet", {"name": _clean_target(m.group(1))})
+    m = re.fullmatch(r"(?:baustein|textbaustein|vorlage)\s+(.+)", t)
+    if m:
+        return Command("snippet", {"name": _clean_target(m.group(1))})
+    return None
+
+
+# Registered BEFORE _m_window so "füge Grußformel ein" is not swallowed by the
+# bare "einfügen" window command, and before _m_format so "Ziffer fünf" wins
+# over the punctuation matcher.
+# Spoken ordinals for "Verlauf zwei".
+_NUMBER_TO_INT = {w: int(d) for w, d in NUMBER_WORDS.items()
+                  if d.isdigit() and 1 <= int(d) <= 20}
+
+_MATCHERS = (_m_help_history, _m_snippet, _m_number_date,
+             _m_sentence_nav) + _MATCHERS
+
+
+# ---------------------------------------------------------------------------
+# Self-description – the single source for the cheat sheet
+# ---------------------------------------------------------------------------
+
+# (group, [(example utterance, what it does)]).  Kept HERE, next to the
+# matchers, so the reference cannot drift away from the grammar the way a
+# separate hand-written HTML block did.
+CHEAT_SHEET: list[tuple[str, list[tuple[str, str]]]] = [
+    ("Diktieren", [
+        ("einfach sprechen", "Text einfügen – groß/klein und Leerzeichen "
+                             "richten sich nach dem, was davor steht"),
+        ("neue Zeile", "Zeilenumbruch"),
+        ("neuer Absatz", "Leerzeile und neuer Absatz"),
+        ("Punkt · Komma · Fragezeichen", "Satzzeichen einfügen"),
+        ("großschreiben · kleinschreiben", "nächstes Wort groß/klein"),
+        ("wörtlich <Text>", "Text einfügen, auch wenn er wie ein Befehl klingt"),
+        ("buchstabiere Anton Berta …", "buchstabiert einfügen"),
+    ]),
+    ("Zahlen, Datum, Bausteine", [
+        ("Ziffer fünf", "als Zahl einfügen: 5"),
+        ("Datum heute", "heutiges Datum einfügen"),
+        ("Uhrzeit", "aktuelle Uhrzeit einfügen"),
+        ("füge <Name> ein", "gespeicherten Textbaustein einfügen"),
+        ("Baustein <Name>", "dasselbe, kürzer gesprochen"),
+    ]),
+    ("Bewegen", [
+        ("Cursor vor <Wort>", "Cursor vor dieses Wort setzen"),
+        ("hinter <Wort>", "Cursor dahinter setzen"),
+        ("nächster Satz · Satz zurück", "Satz für Satz bewegen"),
+        ("an den Anfang · ans Ende", "an den Textanfang/-schluss"),
+    ]),
+    ("Auswählen", [
+        ("markiere <Wort>", "dieses Wort markieren"),
+        ("markiere von A bis B", "alles dazwischen markieren"),
+        ("markiere diesen Satz", "den Satz am Cursor markieren"),
+        ("markiere diesen Absatz", "den Absatz am Cursor markieren"),
+        ("markiere alles", "gesamten Text markieren"),
+        ("nimm 2", "bei mehreren Treffern den richtigen wählen (1 bis 9)"),
+    ]),
+    ("Löschen", [
+        ("lösche <Wort>", "dieses Wort löschen"),
+        ("lösche das", "Markierung oder zuletzt Eingefügtes löschen"),
+        ("lösche diesen Satz", "den Satz am Cursor löschen"),
+        ("lösche den letzten Satz", "den letzten Satz im Text löschen"),
+        ("alles löschen", "Fenster leeren"),
+    ]),
+    ("Korrigieren", [
+        ("korrigiere das", "Korrekturfenster zum zuletzt Eingefügten"),
+        ("korrigiere <Wort>", "Korrekturfenster zu diesem Wort"),
+        ("ersetze A durch B", "A durch B ersetzen"),
+        ("rückgängig · wiederholen", "letzte Änderung zurück/erneut"),
+    ]),
+    ("Hilfe und Verlauf", [
+        ("Hilfe", "diese Befehlsliste öffnen"),
+        ("Verlauf", "die letzten Diktate einblenden"),
+        ("Verlauf 2", "das zweitletzte Diktat zurückholen (1 bis 9)"),
+    ]),
+    ("Fenster", [
+        ("einfügen", "Text in die Ziel-App einfügen und schließen"),
+        ("einfügen und weiter", "einfügen, Fenster bleibt für den nächsten "
+                                "Absatz offen"),
+        ("kopieren", "Text in die Zwischenablage"),
+        ("Ziel wählen", "andere Ziel-App bestimmen"),
+        ("Fenster schließen", "Diktierfenster schließen"),
+    ]),
+]
+
+
+def cheat_sheet_rows() -> list[tuple[str, str, str]]:
+    """Flat ``(group, utterance, meaning)`` rows – what the reference renders
+    and what its search filters."""
+    return [(group, said, means)
+            for group, items in CHEAT_SHEET for said, means in items]

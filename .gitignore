@@ -46,3 +46,11 @@ check.ps1
 
 # Personal macro export (test artifact)
 withease-makros.json
+
+# Website (Astro) – wird getrennt gepflegt, gehoert nicht ins
+# Programm-Repository
+website/
+START_Webseite.bat
+
+# Lokale Werkzeug-Einstellungen (Claude Code)
+.claude/

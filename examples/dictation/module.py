@@ -77,13 +77,22 @@ def audioop_available() -> bool:
 # dictation_window) both when loaded by WithEase and when run standalone.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from PySide6.QtCore import QObject, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath
+from PySide6.QtCore import QObject, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -107,6 +116,7 @@ from withease.core.win_keyboard_hook import (
     shared_keyboard_hook,
     vk_to_combo_str,
 )
+from withease.gui import theme as _core_theme
 from withease.gui.widgets.hotkey_edit import HotkeyEdit
 from withease.modules.base import BaseModule
 
@@ -120,6 +130,9 @@ except ImportError:
 _log = logging.getLogger(__name__)
 
 _SAMPLE_RATE = 16_000  # what whisper expects
+# A little longer than the undo bar's own 20 s, so the files are still there
+# for the whole time the button is offered – and gone shortly after.
+_UNDO_PURGE_MS = 25_000
 _CHANNELS = 1
 
 # Dump the C-level stack of every thread to a file if a native library crashes
@@ -146,9 +159,15 @@ _STRINGS: dict[str, dict[str, str]] = {
         "deps_missing": "⚠ Für dieses Add-on fehlen Komponenten. Zum Aktivieren im Programmordner ausführen:  pip install sounddevice requests  (für lokale Erkennung zusätzlich: faster-whisper)",
         "group.basics": "Grundeinstellungen",
         "group.recognition": "Spracherkennung",
-        "group.output": "Textausgabe",
+        "group.output": "▸ Textausgabe",
+        "group.output.open": "▾ Textausgabe",
         "group.vocab_ai": "Wörterbuch & KI",
-        "group.vocab": "Wörterbuch",
+        "group.vocab": "▸ Wörterbuch",
+        "group.vocab.open": "▾ Wörterbuch",
+        "group.vocab.desc":
+            "Eigene Wörter, Namen und Fachbegriffe, die die Erkennung "
+            "sicherer treffen soll – und optional, wie sie geschrieben "
+            "werden.",
         "group.ai": "▸ KI",
         "group.ai.open": "▾ KI",
         "group.advanced": "▸ Erweitert",
@@ -159,13 +178,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hotkey.command": "Befehls-Taste (optional)",
         "hotkey.command.hint": "Wenn gesetzt: Diese Taste ist nur für Befehle (Cursor, markiere …), die Diktier-Taste nur für Text. So werden Befehl und Diktat sauber getrennt.",
         "mode": "Aufnahmemodus",
-        "mode.toggle": "Umschalten (Taste startet/stoppt)",
-        "mode.hold": "Halten (sprechen solange gedrückt)",
+        "mode.hint": "Halten: Aufnahme läuft, solange die Taste gedrückt wird – sie endet von selbst.\nUmschalten: Einmal drücken startet, noch einmal beendet – besser, wenn längeres Halten schwerfällt.",
+        "mode.toggle": "Umschalten",
+        "mode.toggle.hint": "Taste startet/stoppt",
+        "mode.hold": "Halten",
+        "mode.hold.hint": "Sprechen solange gedrückt",
         "backend": "Erkennung",
-        "backend.cloud": "Cloud-Dienst (OpenRouter, OpenAI, Groq …)",
+        "backend.hint": "Lokal: Die Aufnahme verlässt diesen PC nie. Braucht einmalig einen Download und mehr Rechenleistung.\nCloud-Dienst: Schneller und genauer, dafür wird die Aufnahme an den Anbieter gesendet.",
+        "backend.cloud": "Cloud-Dienst",
+        "backend.cloud.hint": "Die Aufnahme wird an einen Anbieter geschickt (OpenRouter, OpenAI, Groq …) – den wählst du unten unter „Anbieter“.",
         "backend.local": "Lokal auf diesem PC",
         "backend.local.missing": "nicht installiert",
-        "backend.live": "Live-Diktat (Vosk, wortweise + Whisper-Politur)",
+        "backend.live": "Live-Diktat",
         "backend.live.hint": "Wort-für-Wort live wie am Handy; der fertige Satz wird von Whisper nachpoliert (Zeichensetzung, Groß-/Kleinschreibung, dein Wörterbuch). Benötigt Vosk + ein deutsches Vosk-Modell (siehe Anleitung, falls nicht vorhanden).",
         "live_use_vosk": "Vosk-Vorschau (Wort-für-Wort)",
         "live_use_vosk.hint": "Aus (empfohlen): Nur Whisper – der Text erscheint in ~1–2-Sekunden-Schritten, dafür genauer. Ein: Vosk zeigt sofort graue Wörter (Wort-für-Wort), die Whisper danach korrigiert – schneller sichtbar, aber gröber und lädt ein großes Vosk-Modell.",
@@ -181,13 +205,21 @@ _STRINGS: dict[str, dict[str, str]] = {
         "provider.openrouter": "OpenRouter",
         "provider.openai": "OpenAI",
         "provider.groq": "Groq",
-        "provider.custom": "Eigene URL (OpenAI-kompatibel)",
+        "provider.custom": "Eigene URL",
+        "provider.custom.hint": "Beliebiger Dienst, der die OpenAI-Schnittstelle spricht.",
         "base_url": "Server-URL",
         "api_key": "API-Schlüssel",
         "api_key.hint": "Wird gerätweit gespeichert (nicht im Profil), derzeit im Klartext in app.json.",
         "model": "Modell",
+        "model.hint": "Welches Modell der Anbieter verwenden soll. Im Zweifel die Vorauswahl lassen – größere Modelle erkennen genauer, brauchen aber länger und kosten beim Anbieter mehr.",
         "local_model": "Whisper-Modell",
         "local.hint": "Beim ersten Diktat wird das Modell heruntergeladen (tiny ≈ 75 MB … large-v3 ≈ 1,5 GB). Größer = genauer, aber langsamer.",
+        "local_model.load": "Jetzt laden",
+        "local_model.load.hint": "Lädt das gewählte Modell sofort herunter und in den Speicher.\nOhne das passiert es beim ersten Diktat – dann steht minutenlang nur „Erkenne Text …“ da, ohne dass etwas über den Fortschritt gesagt wird.",
+        "local_model.changed": "Geändert. Das Modell wird beim ersten Diktat geladen – bei großen Modellen kann das einige Minuten dauern. Mit „Jetzt laden“ gleich erledigen.",
+        "local_model.loading": "Modell wird geladen … (kann dauern)",
+        "local_model.ready": "Modell ist geladen und einsatzbereit.",
+        "local_model.failed": "Laden fehlgeschlagen: {err}",
         "local.not_installed": "Die lokale Erkennung ist auf diesem PC noch nicht installiert. Du kannst sie mit einem Klick automatisch installieren lassen – es sind keine Vorkenntnisse nötig.",
         "local.frozen_note": "Die lokale Erkennung kann auf diesem PC eingerichtet werden. Beim ersten Mal lädt WithEase dafür eine kleine, eigene Spracherkennungs-Umgebung herunter (Internetverbindung nötig, einige Minuten). Ein Klick genügt – keine Vorkenntnisse erforderlich. Alles bleibt auf diesem PC.",
         "local.setup.uv": "Installationswerkzeug wird geladen …",
@@ -210,14 +242,26 @@ _STRINGS: dict[str, dict[str, str]] = {
         "deps.install.failed": "Die Installation hat leider nicht geklappt: {err}\nBitte versuche es erneut oder nutze die Anleitung.",
         "deps.howto.text": "So installierst du die fehlenden Komponenten von Hand:\n\n1. Öffne die Eingabeaufforderung (Windows-Taste drücken, „cmd“ eintippen, Enter).\n2. Tippe ein:  pip install {pkgs}\n3. Drücke Enter und warte, bis die Installation fertig ist.\n4. Starte WithEase neu.\n\nTipp: Der Knopf „Automatisch installieren“ erledigt genau diese Schritte für dich.",
         "language": "Sprache",
-        "chip_size": "Chip-Größe",
+        "chip_size": "Statusanzeige",
         "chip_size.hint": "Größe des Status-Chips oben am Bildschirm "
                           "(Aufnahme-Anzeige und Ziel-App-Hinweis).",
-        "chip.small": "Klein",
-        "chip.medium": "Standard",
-        "chip.large": "Groß",
-        "chip.xlarge": "Sehr groß",
+        "chip_size.sync": "Größe von der Allgemein-Seite übernehmen",
+        "chip_size.sync.same":
+            "Die Größe stimmt bereits mit der Allgemein-Seite überein.",
         "lang.auto": "Automatisch erkennen",
+        "lang.de": "Deutsch",
+        "lang.en": "Englisch",
+        "lang.fr": "Französisch",
+        "lang.es": "Spanisch",
+        "lang.it": "Italienisch",
+        "lang.nl": "Niederländisch",
+        "lang.pl": "Polnisch",
+        "lang.pt": "Portugiesisch",
+        "lang.ru": "Russisch",
+        "lang.tr": "Türkisch",
+        "lang.uk": "Ukrainisch",
+        "lang.zh": "Chinesisch",
+        "lang.ja": "Japanisch",
         "glossary": "Eigene Wörter",
         "glossary.hint": "Namen/Fachbegriffe, die Whisper besser erkennen soll (z. B. „Leibig“, „WithEase“, „Diktierfenster“).",
         "glossary.empty": "Noch keine eigenen Wörter.",
@@ -243,44 +287,66 @@ _STRINGS: dict[str, dict[str, str]] = {
         "edit": "Bearbeiten…",
         "add": "Hinzufügen",
         "ai": "KI-Nachbearbeitung",
-        "ai.enable": "Diktierten Text von einer KI glätten (optional, aus)",
+        "ai.enable": "Diktierten Text von einer KI glätten",
         "ai.hint": "Korrigiert nur Grammatik/Zeichensetzung, ändert die Bedeutung nicht. Läuft nur bei reinem Diktat (nicht bei Befehlen); Ergebnis erscheint im Diktierfenster.",
-        "ai.backend": "KI läuft",
+        "ai.backend": "Wo die KI läuft",
+        "ai.backend.hint":
+            "Ollama: Läuft lokal auf diesem PC – der Text bleibt hier.\n"
+            "LM Studio: Ebenfalls lokal, für alle, die dieses Programm "
+            "schon nutzen.\n"
+            "Cloud: Der diktierte Text wird zum Glätten an den Anbieter "
+            "gesendet.",
         "ai.local": "Lokal (Ollama, bleibt auf dem PC)",
-        "ai.ollama": "Ollama (lokal, bleibt auf dem PC)",
-        "ai.lmstudio": "LM Studio (lokal, bleibt auf dem PC)",
-        "ai.cloud": "Cloud (Text wird an den Anbieter gesendet)",
+        "ai.ollama": "Ollama",
+        "ai.ollama.hint": "Läuft lokal – der Text bleibt auf diesem PC.",
+        "ai.lmstudio": "LM Studio",
+        "ai.lmstudio.hint": "Läuft lokal – der Text bleibt auf diesem PC.",
+        "ai.cloud": "Cloud",
+        "ai.cloud.hint": "Der Text wird an den Anbieter gesendet.",
         "ai.model": "KI-Modell",
-        "ai.model.hint": "Bei Ollama/LM Studio aus der Liste wählbar (↻ lädt die im Programm verfügbaren Modelle); Cloud als Freitext, z. B. „gpt-4o-mini“.",
-        "ai.model.refresh": "↻",
+        "ai.model.hint": "Bei Ollama/LM Studio aus der Liste wählbar (Aktualisieren-Knopf lädt die im Programm verfügbaren Modelle); Cloud als Freitext, z. B. „gpt-4o-mini“.",
         "ai.model.refresh.hint": "Modell-Liste vom laufenden Programm (Ollama/LM Studio) neu laden",
         "ai.model.none": "Keine Modelle gefunden – läuft Ollama bzw. LM Studio und ist ein Modell geladen?",
-        "raw": "Nur reine Erkennung (keine Nachbearbeitung)",
+        "raw": "Nur reine Erkennung",
         "raw.hint": "Zeigt die reine Ausgabe der Spracherkennung – ohne unsere Nachbearbeitung (keine Satzzeichen-Korrektur, kein Wörterbuch, kein Fehler-Gedächtnis, keine Halluzinations-Filter, keine KI-Bereinigung). Zum Diagnostizieren: So sieht man, ob Fehler von der Erkennung selbst oder von der Nachbearbeitung kommen.",
+        "numeric_dates": "Datumsangaben als Zahlen schreiben",
+        "numeric_dates.hint": "Gesprochene Datumsangaben werden in die kurze Schreibweise umgesetzt: „20. August 2026“ oder „zwanzigsten August 2026“ wird zu „20.08.2026“.\nNur bei einem echten Monatsnamen. Ein unmöglicher Tag („40. August“) und alles andere im Satz bleiben unberührt. Ausschalten, wenn du die ausgeschriebene Form behalten möchtest.",
         "ai.actions": "KI-Aktionen",
         "ai.actions.hint": "Frei belegbare Buttons links im Diktierfenster: Jeder Button schickt deinen Prompt zusammen mit dem Fensterinhalt an die KI (z. B. „mach daraus eine E-Mail“) und ersetzt den Text durch das Ergebnis. Nutzt das oben eingestellte KI-Backend.",
+        "snippets": "Textbausteine",
+        "snippets.note": "Textbausteine werden bei den MAKROS verwaltet – dort, wo sie auch stehen. Ein Makro vom Typ „Text“ fügst du im Diktierfenster mit „füge <Name> ein“ oder „Baustein <Name>“ ein; eine Taste musst du dafür nicht vergeben.\nSo legst du deine Grußformel nur EINMAL an und siehst alle an einer Stelle.",
+        "snippets.goto": "Zu den Makros",
+        "snippets.move": "{n} alte Textbausteine übernehmen",
+        "snippets.move.failed": "Makromodul ist nicht aktiv",
         "output": "Ausgabe",
-        "output.window": "Diktierfenster (mit Sprachbefehlen & Korrektur)",
+        "output.hint": "Diktierfenster: Der Text landet zuerst in einem Fenster, in dem du ihn per Sprache korrigieren kannst.\nDirekt: Der Text geht sofort dorthin, wo gerade der Cursor steht.",
+        "output.window": "Diktierfenster",
+        "output.window.hint": "Mit Sprachbefehlen und Korrekturmöglichkeit.",
         "output.direct": "Direkt in die aktive Anwendung einfügen",
         "insert": "Text einfügen per",
-        "insert.clipboard": "Zwischenablage + Strg+V (schnell)",
-        "insert.type": "Tippen (Zeichen für Zeichen)",
+        "insert.hint": "Zwischenablage: Schnell, überschreibt aber, was gerade kopiert ist.\nTippen: Langsamer, funktioniert dafür auch in Programmen, die Strg+V nicht annehmen.",
+        "insert.clipboard": "Zwischenablage",
+        "insert.clipboard.hint": "Fügt über Strg+V ein – schnell.",
+        "insert.type": "Tippen",
+        "insert.type.hint": "Schreibt Zeichen für Zeichen – langsamer, dafür überall zuverlässig.",
         "keep_clipboard": "Erkannten Text zusätzlich in der Zwischenablage behalten",
+        "join_dictations": "Diktate aneinanderhängen",
+        "join_dictations.hint": "Beim direkten Einfügen wird das nächste Diktat passend an das vorige angehängt: Leerzeichen davor, und groß oder klein weitergeschrieben, je nachdem ob ein Satzzeichen davor steht.\nNur solange dasselbe Programm im Vordergrund ist. Klickst du zwischen zwei Diktaten woanders hin, beginnt der Text wieder wie gesprochen.",
+        "take_selection": "Markierten Text ins Diktierfenster holen",
+        "take_selection.hint": "Ist beim Start des Diktats etwas markiert, landet dieser Text im Diktierfenster – zum Weiterdiktieren oder Bearbeiten. Beim Einfügen ersetzt er die Markierung.\nStandardmäßig aus: Zum Holen wird Strg+C an das Programm geschickt, und in einem Konsolenfenster bricht Strg+C den laufenden Befehl ab. Nur einschalten, wenn du nicht in solche Programme diktierst. Deine Zwischenablage bleibt unverändert.",
         "max_seconds": "Max. Aufnahmedauer",
-        "max_seconds.off": "Endlos (kein Limit)",
+        "max_seconds.off": "Endlos",
         "hallucination": "Halluzinationen filtern",
         "hallucination.hint": "Whisper erfindet am Ende einer Aufnahme manchmal Text, der gar nicht gesprochen wurde. „Normal“ entfernt solche eindeutig erfundenen Stellen. „Stark“ filtert aggressiver (auch den letzten Satz) – falls am Ende noch etwas übrig bleibt; kann in seltenen Fällen ein leise gesprochenes Wort verschlucken. „Aus“ schaltet die Prüfung ab.",
+        "mic.quiet": "Mikrofon sehr leise – bitte Aufnahmepegel erhöhen.",
         "hallucination.off": "Aus",
-        "hallucination.normal": "Normal (empfohlen)",
+        "hallucination.normal": "Normal",
+        "hallucination.normal.hint": "Empfohlene Einstellung.",
         "hallucination.strong": "Stark",
         "pause_media": "Medien während des Diktats pausieren",
         "pause_media.hint": "Sobald du den Diktierknopf drückst und die Aufnahme läuft, wird die Medienwiedergabe (Musik, Video) pausiert. Sie wird automatisch fortgesetzt, wenn das Diktat fertig ist – auch erst, nachdem die Erkennung die Aufnahme berechnet hat.",
         "preload": "Spracherkennung beim Start vorladen",
         "preload.hint": "Lädt das Whisper-Modell schon beim Start, damit das erste Diktat sofort schnell ist. Erscheint nur, wenn „Mit Windows starten“ (Allgemein) aktiv ist.",
-        "training": "Trainingsdaten sammeln (für spätere Stimm-Anpassung)",
-        "training.hint": "Speichert Aufnahme + erkannten Text lokal, damit später ein Anlernen an deine Stimme (Fine-Tuning, z. B. auf GPU) möglich wird. Optional, braucht Speicherplatz.",
-        "enroll": "Stimm-Training (Vorlesen) …",
-        "enroll.hint": "Bekannte Sätze vorlesen → perfekte (Audio + exakter Text)-Paare als Gold-Trainingsdaten.",
         "device": "Mikrofon",
         "device.default": "Standardgerät",
         "test": "Test: 3 Sekunden aufnehmen und erkennen",
@@ -288,10 +354,48 @@ _STRINGS: dict[str, dict[str, str]] = {
         "test.result": "Erkannter Text:\n\n{text}",
         "test.error": "Test fehlgeschlagen:\n\n{err}",
         "chip.recording": "Aufnahme … (Esc bricht ab)",
+        "nothing.heard": "Nichts erkannt – noch einmal versuchen",
+        "nothing.quiet": "Nichts erkannt – Mikrofon zu leise",
+        "nothing.short": "Zu kurz – Taste etwas länger halten",
+        "chip.warn.dismiss": "verschwindet von selbst",
         "chip.transcribing": "Erkenne Text …",
         "chip.dictation": "Diktat",
         "chip.command": "Befehl",
         "chip.error": "Diktat-Fehler",
+        "chip.error.fix": "Klicken, um die Einstellungen zu öffnen",
+        "setup.todo": "Noch zu tun:",
+        "setup.hotkey": "Diktier-Taste festlegen",
+        "setup.local": "Spracherkennung installieren (Knopf unten)",
+        "setup.key": "API-Schlüssel eintragen",
+        "setup.url": "Server-URL eintragen",
+        "setup.test": "Mit „Test“ prüfen, ob alles sitzt",
+        "setup.ready": "Eingerichtet. Mit „Test“ prüfen, ob die Erkennung sitzt.",
+        "group.data": "▸ Deine Daten",
+        "group.data.open": "▾ Deine Daten",
+        "data.desc": "Was WithEase beim Diktieren über dich speichert – alles nur auf diesem PC, und alles hier löschbar.",
+        "data.history": "Verlauf",
+        "data.history.value": "{n} gespeicherte Diktate",
+        "data.history.hint": "Die zuletzt diktierten Texte, im Klartext in deinem Profil. Praktisch zum Zurückholen – aber sie stehen dort, bis du sie löschst.\nMit „Anzahl“ = 0 wird gar nichts mehr gespeichert.",
+        "data.history.limit": "Anzahl",
+        "data.training": "Sprachaufnahmen (ältere Version)",
+        "data.training.value": "{n} Aufnahmen · {size}",
+        "data.training.hint": "Tonaufnahmen deiner Diktate, die eine ältere Version von WithEase gesammelt hat.\nNeue Aufnahmen entstehen nicht mehr: WithEase speichert deine Stimme nicht. Diese Zeile ist nur noch zum Aufräumen da und verschwindet, sobald du gelöscht hast.",
+        "data.dictionary": "Wörterbuch & Korrekturen",
+        "data.dictionary.value": "{n} Einträge",
+        "data.dictionary.hint": "Eigene Wörter und gelernte Korrekturen. Über „Bearbeiten“ im Bereich Wörterbuch einsehen, ändern und einzeln löschen.",
+        "data.key": "API-Schlüssel",
+        "data.key.set": "gespeichert (im Klartext in app.json)",
+        "data.key.unset": "keiner gespeichert",
+        "data.key.hint": "Wird gerätweit gespeichert, nicht im Profil – und derzeit unverschlüsselt.",
+        "data.delete": "Löschen",
+        "data.deleted": "Gelöscht.",
+        "data.confirm.history": "Alle {n} gespeicherten Diktate entfernen? Das lässt sich nicht rückgängig machen.",
+        "data.confirm.training": "Alle {n} Sprachaufnahmen ({size}) unwiderruflich löschen?",
+        "data.confirm.key": "Den gespeicherten API-Schlüssel entfernen?",
+        "undo.history": "{n} Diktate gelöscht.",
+        "undo.recordings": "{n} Sprachaufnahmen gelöscht.",
+        "undo.api_key": "API-Schlüssel entfernt.",
+        "data.nothing": "Nichts zu löschen.",
         "chip.reselect": "Ziel-App-Modus",
         "chip.reselect.hint": "Zur gewünschten App wechseln, dann Leertaste · Esc bricht ab",
         "err.no_audio_lib": "Audio-Bibliothek (sounddevice) fehlt",
@@ -306,9 +410,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "description.long": "Press the hotkey, speak, done – the recognised text is inserted into the active application. Note: with the cloud backend the recording is sent to the chosen provider; with the local backend everything stays on this PC.",
         "group.basics": "Basics",
         "group.recognition": "Speech recognition",
-        "group.output": "Text output",
+        "group.output": "▸ Text output",
+        "group.output.open": "▾ Text output",
         "group.vocab_ai": "Dictionary & AI",
-        "group.vocab": "Dictionary",
+        "group.vocab": "▸ Dictionary",
+        "group.vocab.open": "▾ Dictionary",
+        "group.vocab.desc":
+            "Your own words, names and technical terms that recognition "
+            "should get right – and optionally how they are written.",
         "group.ai": "▸ AI",
         "group.ai.open": "▾ AI",
         "group.advanced": "▸ Advanced",
@@ -320,13 +429,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hotkey.command": "Command key (optional)",
         "hotkey.command.hint": "When set: this key is for commands only (Cursor, select …) and the dictation key for text only – a clean split between command and dictation.",
         "mode": "Recording mode",
-        "mode.toggle": "Toggle (key starts/stops)",
-        "mode.hold": "Hold (speak while pressed)",
+        "mode.hint": "Hold: recording runs for as long as the key is held – it stops by itself.\nToggle: press once to start, again to stop – better if holding a key for longer is difficult.",
+        "mode.toggle": "Toggle",
+        "mode.toggle.hint": "Key starts/stops",
+        "mode.hold": "Hold",
+        "mode.hold.hint": "Speak while pressed",
         "backend": "Recognition",
-        "backend.cloud": "Cloud service (OpenRouter, OpenAI, Groq …)",
+        "backend.hint": "Local: the recording never leaves this PC. Needs a one-off download and more computing power.\nCloud service: faster and more accurate, but the recording is sent to the provider.",
+        "backend.cloud": "Cloud service",
+        "backend.cloud.hint": "The recording is sent to a provider (OpenRouter, OpenAI, Groq …) – pick it below under “Provider”.",
         "backend.local": "Locally on this PC",
         "backend.local.missing": "not installed",
-        "backend.live": "Live dictation (Vosk, word-by-word + Whisper polish)",
+        "backend.live": "Live dictation",
         "backend.live.hint": "Word-by-word live like on a phone; the finished sentence is polished by Whisper (punctuation, casing, your dictionary). Needs Vosk + a German Vosk model.",
         "live_use_vosk": "Vosk preview (word-by-word)",
         "live_use_vosk.hint": "Off (recommended): Whisper only – text appears in ~1–2 s steps but is more accurate. On: Vosk shows instant grey words (word-by-word) that Whisper then corrects – faster to appear but rougher, and loads a large Vosk model.",
@@ -342,13 +456,21 @@ _STRINGS: dict[str, dict[str, str]] = {
         "provider.openrouter": "OpenRouter",
         "provider.openai": "OpenAI",
         "provider.groq": "Groq",
-        "provider.custom": "Custom URL (OpenAI-compatible)",
+        "provider.custom": "Custom URL",
+        "provider.custom.hint": "Any service that speaks the OpenAI API.",
         "base_url": "Server URL",
         "api_key": "API key",
         "api_key.hint": "Stored device-wide (not in the profile), currently in plain text in app.json.",
         "model": "Model",
+        "model.hint": "Which model the provider should use. When in doubt keep the preselection – bigger models recognise more accurately but take longer and cost more at the provider.",
         "local_model": "Whisper model",
         "local.hint": "The model is downloaded on first use (tiny ≈ 75 MB … large-v3 ≈ 1.5 GB). Bigger = more accurate but slower.",
+        "local_model.load": "Load now",
+        "local_model.load.hint": "Downloads the chosen model and loads it into memory right away.\nWithout this it happens during the first dictation – where it just says „Erkenne Text …“ for minutes with nothing about the progress.",
+        "local_model.changed": "Changed. The model is fetched on the first dictation – for large models that can take several minutes. Use „Load now“ to get it over with.",
+        "local_model.loading": "Loading the model … (may take a while)",
+        "local_model.ready": "Model loaded and ready.",
+        "local_model.failed": "Loading failed: {err}",
         "local.not_installed": "Local recognition is not installed on this PC yet. You can have it installed automatically with one click – no technical knowledge needed.",
         "local.frozen_note": "Local recognition can be set up on this PC. The first time, WithEase downloads a small dedicated speech-recognition environment for it (internet connection required, a few minutes). One click is enough – no technical knowledge needed. Everything stays on this PC.",
         "local.setup.uv": "Downloading the setup tool …",
@@ -371,14 +493,26 @@ _STRINGS: dict[str, dict[str, str]] = {
         "deps.install.failed": "The installation did not work: {err}\nPlease try again or use the instructions.",
         "deps.howto.text": "How to install the missing components manually:\n\n1. Open the command prompt (press the Windows key, type \"cmd\", press Enter).\n2. Type:  pip install {pkgs}\n3. Press Enter and wait until the installation finishes.\n4. Restart WithEase.\n\nTip: the \"Install automatically\" button does exactly these steps for you.",
         "language": "Language",
-        "chip_size": "Chip size",
+        "chip_size": "Status display",
         "chip_size.hint": "Size of the status chip at the top of the screen "
                           "(recording indicator and target-app hint).",
-        "chip.small": "Small",
-        "chip.medium": "Standard",
-        "chip.large": "Large",
-        "chip.xlarge": "Very large",
+        "chip_size.sync": "Copy the size from the General page",
+        "chip_size.sync.same":
+            "The size already matches the General page.",
         "lang.auto": "Detect automatically",
+        "lang.de": "German",
+        "lang.en": "English",
+        "lang.fr": "French",
+        "lang.es": "Spanish",
+        "lang.it": "Italian",
+        "lang.nl": "Dutch",
+        "lang.pl": "Polish",
+        "lang.pt": "Portuguese",
+        "lang.ru": "Russian",
+        "lang.tr": "Turkish",
+        "lang.uk": "Ukrainian",
+        "lang.zh": "Chinese",
+        "lang.ja": "Japanese",
         "glossary": "Custom words",
         "glossary.hint": "Names/terms Whisper should recognise better (e.g. \"Leibig\", \"WithEase\").",
         "glossary.empty": "No custom words yet.",
@@ -404,44 +538,66 @@ _STRINGS: dict[str, dict[str, str]] = {
         "edit": "Edit…",
         "add": "Add",
         "ai": "AI cleanup",
-        "ai.enable": "Smooth dictated text with an AI (optional, off)",
+        "ai.enable": "Smooth dictated text with an AI",
         "ai.hint": "Fixes only grammar/punctuation, never the meaning. Runs on plain dictation (not commands); result appears in the dictation window.",
-        "ai.backend": "AI runs",
+        "ai.backend": "Where the AI runs",
+        "ai.backend.hint":
+            "Ollama: runs locally on this PC – the text stays here.\n"
+            "LM Studio: also local, for anyone already using that "
+            "program.\n"
+            "Cloud: the dictated text is sent to the provider for "
+            "smoothing.",
         "ai.local": "Local (Ollama, stays on this PC)",
-        "ai.ollama": "Ollama (local, stays on this PC)",
-        "ai.lmstudio": "LM Studio (local, stays on this PC)",
-        "ai.cloud": "Cloud (text is sent to the provider)",
+        "ai.ollama": "Ollama",
+        "ai.ollama.hint": "Runs locally – the text stays on this PC.",
+        "ai.lmstudio": "LM Studio",
+        "ai.lmstudio.hint": "Runs locally – the text stays on this PC.",
+        "ai.cloud": "Cloud",
+        "ai.cloud.hint": "The text is sent to the provider.",
         "ai.model": "AI model",
-        "ai.model.hint": "For Ollama/LM Studio pick from the list (↻ loads the models available in the program); cloud is free-text, e.g. \"gpt-4o-mini\".",
-        "ai.model.refresh": "↻",
+        "ai.model.hint": "For Ollama/LM Studio pick from the list (the refresh button loads the models available in the program); cloud is free-text, e.g. \"gpt-4o-mini\".",
         "ai.model.refresh.hint": "Reload the model list from the running program (Ollama/LM Studio)",
         "ai.model.none": "No models found – is Ollama or LM Studio running with a model loaded?",
-        "raw": "Raw recognition only (no post-processing)",
+        "raw": "Raw recognition only",
         "raw.hint": "Shows the recogniser's plain output – without any of our post-processing (no punctuation fixes, no dictionary, no error memory, no hallucination filter, no AI cleanup). For diagnosing whether errors come from recognition itself or from post-processing.",
+        "numeric_dates": "Write dates as numbers",
+        "numeric_dates.hint": "Spoken dates are turned into the short form: „20. August 2026“ or „zwanzigsten August 2026“ becomes „20.08.2026“.\nOnly with a real month name. An impossible day („40. August“) and everything else in the sentence are left untouched. Switch it off to keep the spelled-out form.",
         "ai.actions": "AI actions",
         "ai.actions.hint": "Custom buttons on the left of the dictation window: each sends your prompt together with the window text to the AI (e.g. \"turn this into an email\") and replaces the text with the result. Uses the AI backend set above.",
+        "snippets": "Text blocks",
+        "snippets.note": "Text blocks are managed with the MACROS – where they already live. A macro of type „Text“ is inserted in the dictation window with „füge <name> ein“ or „Baustein <name>“; it does not need a key at all.\nSo your sign-off is created ONCE and everything is in one place.",
+        "snippets.goto": "Go to the macros",
+        "snippets.move": "Take over {n} old text blocks",
+        "snippets.move.failed": "The macros module is not active",
         "output": "Output",
-        "output.window": "Dictation window (with voice commands & correction)",
+        "output.hint": "Dictation window: the text lands in a window first, where you can correct it by voice.\nDirect: the text goes straight to wherever the cursor is.",
+        "output.window": "Dictation window",
+        "output.window.hint": "With voice commands and correction.",
         "output.direct": "Insert directly into the active application",
         "insert": "Insert text via",
-        "insert.clipboard": "Clipboard + Ctrl+V (fast)",
-        "insert.type": "Typing (character by character)",
+        "insert.hint": "Clipboard: fast, but overwrites whatever is currently copied.\nTyping: slower, but also works in programs that do not accept Ctrl+V.",
+        "insert.clipboard": "Clipboard",
+        "insert.clipboard.hint": "Pastes via Ctrl+V – fast.",
+        "insert.type": "Typing",
+        "insert.type.hint": "Writes character by character – slower, but works everywhere.",
         "keep_clipboard": "Also keep the recognised text in the clipboard",
+        "join_dictations": "Join dictations together",
+        "join_dictations.hint": "When inserting directly, the next dictation is attached to the previous one: a space in front, and continued in upper or lower case depending on whether a sentence mark comes before it.\nOnly while the same program is in front. Click somewhere else between two dictations and the text starts exactly as spoken again.",
+        "take_selection": "Take the selected text into the dictation window",
+        "take_selection.hint": "If something is selected when dictation starts, that text appears in the dictation window – to continue or edit it. On insert it replaces the selection.\nOff by default: fetching it sends Ctrl+C to the program, and in a console window Ctrl+C aborts the running command. Only switch it on if you do not dictate into such programs. Your clipboard is left untouched.",
         "max_seconds": "Max. recording length",
-        "max_seconds.off": "Endless (no limit)",
+        "max_seconds.off": "Endless",
         "hallucination": "Hallucination filter",
         "hallucination.hint": "Whisper sometimes invents text on the silence at the end of a recording. \"Normal\" removes such clearly invented bits. \"Strong\" filters more aggressively (including the last sentence) – if something still slips through; in rare cases it may swallow a very quietly spoken word. \"Off\" disables the check.",
+        "mic.quiet": "Microphone very quiet – please raise the recording level.",
         "hallucination.off": "Off",
-        "hallucination.normal": "Normal (recommended)",
+        "hallucination.normal": "Normal",
+        "hallucination.normal.hint": "The recommended setting.",
         "hallucination.strong": "Strong",
         "pause_media": "Pause media while dictating",
         "pause_media.hint": "As soon as you press the dictation key and recording starts, media playback (music, video) is paused. It resumes automatically once dictation is finished – only after recognition has finished processing the audio.",
         "preload": "Preload speech recognition at start",
         "preload.hint": "Loads the Whisper model at start so the first dictation is fast right away. Only shown when 'Start with Windows' (General) is on.",
-        "training": "Collect training data (for later voice adaptation)",
-        "training.hint": "Saves the recording + recognised text locally so a later adaptation to your voice (fine-tuning, e.g. on a GPU) becomes possible. Optional, uses disk space.",
-        "enroll": "Voice training (read aloud) …",
-        "enroll.hint": "Read known sentences aloud → perfect (audio + exact text) pairs as gold training data.",
         "device": "Microphone",
         "device.default": "Default device",
         "test": "Test: record 3 seconds and transcribe",
@@ -449,10 +605,48 @@ _STRINGS: dict[str, dict[str, str]] = {
         "test.result": "Recognised text:\n\n{text}",
         "test.error": "Test failed:\n\n{err}",
         "chip.recording": "Recording … (Esc cancels)",
+        "nothing.heard": "Nothing recognised – please try again",
+        "nothing.quiet": "Nothing recognised – microphone too quiet",
+        "nothing.short": "Too short – hold the key a little longer",
+        "chip.warn.dismiss": "disappears by itself",
         "chip.transcribing": "Transcribing …",
         "chip.dictation": "Dictation",
         "chip.command": "Command",
         "chip.error": "Dictation error",
+        "chip.error.fix": "Click to open the settings",
+        "setup.todo": "Still to do:",
+        "setup.hotkey": "Set a dictation key",
+        "setup.local": "Install speech recognition (button below)",
+        "setup.key": "Enter an API key",
+        "setup.url": "Enter a server URL",
+        "setup.test": "Use „Test“ to check that it works",
+        "setup.ready": "Set up. Use „Test“ to check that recognition works.",
+        "group.data": "▸ Your data",
+        "group.data.open": "▾ Your data",
+        "data.desc": "What WithEase stores about you while dictating – all of it on this PC only, and all of it deletable here.",
+        "data.history": "History",
+        "data.history.value": "{n} stored dictations",
+        "data.history.hint": "The most recent dictations, in plain text in your profile. Handy for getting one back – but they stay there until you delete them.\nWith „Anzahl“ = 0 nothing is stored at all.",
+        "data.history.limit": "Number",
+        "data.training": "Voice recordings (older version)",
+        "data.training.value": "{n} recordings · {size}",
+        "data.training.hint": "Audio recordings of your dictations that an older version of WithEase collected.\nNo new ones are made: WithEase does not store your voice. This row is only here for tidying up and disappears once you have deleted them.",
+        "data.dictionary": "Dictionary & corrections",
+        "data.dictionary.value": "{n} entries",
+        "data.dictionary.hint": "Your own words and learned corrections. Use „Bearbeiten“ in the dictionary section to view, change and remove them one by one.",
+        "data.key": "API key",
+        "data.key.set": "stored (in plain text in app.json)",
+        "data.key.unset": "none stored",
+        "data.key.hint": "Stored device-wide, not in the profile – and currently unencrypted.",
+        "data.delete": "Delete",
+        "data.deleted": "Deleted.",
+        "data.confirm.history": "Remove all {n} stored dictations? This cannot be undone.",
+        "data.confirm.training": "Permanently delete all {n} voice recordings ({size})?",
+        "data.confirm.key": "Remove the stored API key?",
+        "undo.history": "{n} dictations deleted.",
+        "undo.recordings": "{n} voice recordings deleted.",
+        "undo.api_key": "API key removed.",
+        "data.nothing": "Nothing to delete.",
         "chip.reselect": "Target-app mode",
         "chip.reselect.hint": "Switch to the app you want, then press Space · Esc cancels",
         "err.no_audio_lib": "Audio library (sounddevice) missing",
@@ -490,11 +684,14 @@ _lang = _Lang()
 _t = _lang.t
 
 
-# Theme-aware, self-contained label styles (no dependency on the core theme
-# module).  Uses the high-contrast text colour (palette(mid) was too dark to
-# read on the dark theme); the smaller font keeps hints visually secondary.
+# Delegate to the core theme so hints look EXACTLY like those on the built-in
+# module pages (Maus/Tastatur/…).  This used to be a self-contained
+# palette(windowText) rule, but that is the full-brightness text colour – the
+# descriptions came out plain white in the dark theme while every core page
+# showed them in the secondary grey, which read as two different designs.
+# theme.hint_color() is the accessible (≥4.5:1) secondary grey per scheme.
 def _hint_style() -> str:
-    return "color: palette(windowText); font-size: smaller;"
+    return _core_theme.hint_style()
 
 
 class _HintLabel(QLabel):
@@ -525,6 +722,143 @@ def _title_style() -> str:
     return "font-weight: bold; font-size: larger;"
 
 
+# Fixed point size for section-header icons – matches theme.py's
+# QLabel#cardIcon (15pt) so both icon-rendering paths look the same size.
+_SECTION_ICON_PT = 15
+
+
+def _section_icon_side() -> int:
+    """Pixel side length for a section-header icon at the fixed point size –
+    computed from that FIXED font, never the app's current font, so it stays
+    constant regardless of the font-size setting."""
+    font = QFont()
+    font.setPointSize(_SECTION_ICON_PT)
+    return QFontMetrics(font).height()
+
+
+def _option_hint(combo, index: int, text: str) -> None:
+    """Explain ONE dropdown entry, shown when it is hovered in the open list.
+
+    Same two places for an explanation as the core UI, so nothing has to be
+    re-learned when switching between a built-in page and this add-on: the ⓘ
+    after a setting's NAME, and the entry itself for a CHOICE.  Falls back to a
+    plain tooltip if the core is older than the shared helper – an add-on can
+    be installed next to any WithEase version.
+    """
+    try:
+        from withease.gui.ui_utils import set_option_hint
+        set_option_hint(combo, index, text)
+    except Exception:
+        combo.setItemData(index, text, Qt.ItemDataRole.ToolTipRole)
+
+
+def _label_with_hint(text: str, tooltip: str):
+    """``ui_utils.label_with_hint`` with a fallback for an OLDER core.
+
+    An add-on module is installed independently of the program itself, so it
+    can end up next to a core that predates a helper it uses.  Importing that
+    helper unguarded turns "one row looks plainer" into "the whole app refuses
+    to start with an ImportError" – which is exactly what happened with a
+    packaged build older than the module.  Degrade instead: plain caption, the
+    explanation still reachable as its tooltip.
+    """
+    try:
+        from withease.gui.ui_utils import label_with_hint
+        return label_with_hint(text, tooltip)
+    except Exception:
+        lbl = QLabel(text)
+        lbl.setToolTip(tooltip)
+        return lbl
+
+
+def _mark_danger(button):
+    """``ui_utils.mark_danger`` with a fallback for an OLDER core.
+
+    An add-on is installed independently of the program, so a missing helper
+    must never be more than a missing tint."""
+    try:
+        from withease.gui.ui_utils import mark_danger
+        return mark_danger(button)
+    except Exception:
+        return button
+
+
+def _checkbox_with_hint(checkbox, tooltip: str):
+    """``ui_utils.checkbox_with_hint`` with a fallback for an older core."""
+    try:
+        from withease.gui.ui_utils import checkbox_with_hint
+        return checkbox_with_hint(checkbox, tooltip)
+    except Exception:
+        checkbox.setToolTip(tooltip)
+        return checkbox
+
+
+def _undo_possible() -> bool:
+    """True if this core has the undo bar.  Asked BEFORE deleting: on an older
+    core the user must be asked first instead, because deleting with no way
+    back is the one behaviour that is never acceptable."""
+    try:
+        from withease.gui.widgets.undo_bar import show_undo  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _show_undo(widget, text: str, on_undo) -> bool:
+    """``widgets.undo_bar.show_undo`` with a fallback for an older core.
+    Returns True if the bar is actually up."""
+    try:
+        from withease.gui.widgets.undo_bar import show_undo
+        return show_undo(widget, text, on_undo) is not None
+    except Exception:
+        return False
+
+
+def _wrap_tip(text: str) -> str:
+    """``ui_utils.wrap_tooltip`` with a fallback for an OLDER core.
+
+    Without it Qt lays a tool-tip out as ONE line, so a two-sentence
+    explanation stretches from screen edge to screen edge."""
+    try:
+        from withease.gui.ui_utils import wrap_tooltip
+        return wrap_tooltip(text)
+    except Exception:
+        return text
+
+
+def _setting_note(text: str):
+    """``ui_utils.setting_note`` with a fallback for an older core.
+
+    A permanently visible explanation under a single setting – used only where
+    the user cannot decide without it (does my voice leave this PC, how big is
+    the download, where does the key end up)."""
+    try:
+        from withease.gui.ui_utils import setting_note
+        return setting_note(text)
+    except Exception:
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(_hint_style())
+        return lbl
+
+
+def _fixed_size_icon(glyph: str) -> QIcon:
+    """Render a glyph/emoji to a QIcon at a FIXED point size, independent of
+    the app's font-size setting – used for section icons so they stay put next
+    to text that does scale (matches theme.py's QLabel#cardIcon convention)."""
+    font = QFont()
+    font.setPointSize(_SECTION_ICON_PT)
+    side = _section_icon_side()
+    pm = QPixmap(side, side)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setFont(font)
+    p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, glyph)
+    p.end()
+    return QIcon(pm)
+
+
 class _Collapsible(QWidget):
     """A titled section that shows/hides its content on click – used to tuck
     rarely-needed expert options away so the page stays calm by default.
@@ -536,38 +870,102 @@ class _Collapsible(QWidget):
     toggled = Signal(bool)
 
     def __init__(self, title_closed: str, title_open: str,
-                 parent: QWidget | None = None) -> None:
+                 icon: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._title_closed = title_closed
         self._title_open = title_open
-        v = QVBoxLayout(self)
-        v.setContentsMargins(0, 0, 0, 0)
+
+        # The WHOLE section – header included – lives inside one card frame,
+        # not just the content: a collapsed section used to be a bare
+        # chevron button floating between cards, which didn't read as its
+        # own list item.  Same objectName("card") every other card uses, so
+        # it looks identical to CollapsibleSection (mouse/keyboard settings)
+        # while collapsed.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self._frame = QFrame()
+        self._frame.setObjectName("card")
+        outer.addWidget(self._frame)
+
+        v = QVBoxLayout(self._frame)
+        v.setContentsMargins(0, 0, 0, 0)   # padding comes from the card QSS
         v.setSpacing(6)
         self._btn = QToolButton()
         self._btn.setText(title_closed)
+        if icon:
+            # Qt's own icon+text layout keeps the icon at setIconSize()
+            # regardless of the button's (font-size-driven) text size.  A
+            # QToolButton shows only the icon by default – tell it to keep
+            # the text alongside.
+            self._btn.setIcon(_fixed_size_icon(icon))
+            side = _section_icon_side()
+            self._btn.setIconSize(QSize(side, side))
+            self._btn.setToolButtonStyle(
+                Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._btn.setCheckable(True)
         self._btn.setChecked(False)
         self._btn.setAutoRaise(True)
+        # The header is an accessible click target in BOTH directions: full
+        # card width and at least the standard target height.  It used to be
+        # only as wide as its own text, so opening (whole card) was easy but
+        # closing meant hitting the short title exactly.
+        self._btn.setMinimumHeight(_core_theme.target_px())
+        self._btn.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                QSizePolicy.Policy.Fixed)
+        self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn.setStyleSheet(
-            "QToolButton { border: none; font-weight: bold; padding: 2px 0; }")
+            "QToolButton { border: none; font-weight: bold; padding: 2px 0;"
+            " text-align: left; }")
         self._btn.toggled.connect(self._on_toggled)
         v.addWidget(self._btn)
         self._content = QWidget()
         self._content.setVisible(False)
+        self._content_body = QVBoxLayout(self._content)
+        self._content_body.setContentsMargins(0, 6, 0, 2)
+        self._content_body.setSpacing(10)
         v.addWidget(self._content)
+        self._frame.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        """Clicking anywhere on a COLLAPSED card opens it.
+
+        Aiming at the small chevron/title strip is exactly the kind of
+        precision this app exists to avoid, so the whole card is the target.
+        Only while collapsed, though: once open, a stray click beside a
+        control must not fold the section away again (and clicks on the
+        controls themselves never reach this handler anyway)."""
+        if not self._btn.isChecked():
+            self._btn.setChecked(True)
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def _on_toggled(self, on: bool) -> None:
         self._btn.setText(self._title_open if on else self._title_closed)
         self._content.setVisible(on)
+        # A closed card is one big button – say so with the cursor.
+        self._frame.setCursor(Qt.CursorShape.ArrowCursor if on
+                              else Qt.CursorShape.PointingHandCursor)
         self.toggled.emit(on)
+        if on:
+            # Scroll the freshly opened card fully into view (same helper the
+            # core's CollapsibleSection uses, so both behave identically).
+            try:
+                from withease.gui.ui_utils import ensure_card_visible
+                ensure_card_visible(self)
+            except Exception:
+                pass
 
     def set_open(self, on: bool) -> None:
         """Open/close the section programmatically (e.g. to restore a saved
         state).  Emits ``toggled`` like a user click."""
         self._btn.setChecked(on)
 
-    def content(self) -> QWidget:
-        return self._content
+    def content_body(self) -> QVBoxLayout:
+        """Layout to add the section's own content (e.g. a QFormLayout) into –
+        the content widget itself already owns a QVBoxLayout (see __init__),
+        so callers must not install a layout directly on it."""
+        return self._content_body
 
 
 def _sync_module_checkbox(widget: QWidget, module: "DictationModule",
@@ -988,6 +1386,13 @@ def _smtc_play_apps(apps: list[str]) -> None:
     _run_powershell(_SMTC_PLAY, extra_env={"WITHEASE_RESUME_IDS": "\n".join(apps)})
 
 
+class ConfigError(RuntimeError):
+    """A failure that a SETTING has to fix (missing key, URL, recogniser).
+
+    Distinguished from a passing glitch so the message can stay on screen and
+    lead the user to the page instead of vanishing after a few seconds."""
+
+
 def _hallucination_params(level: str) -> dict:
     """Segment-filter + decode settings for the end-of-dictation hallucination
     filter.  ``level`` is 'off' | 'normal' | 'strong'.
@@ -1009,6 +1414,42 @@ def _hallucination_params(level: str) -> dict:
     return {"drop": True, "ns": 0.6, "lp": -1.0, "combine": "and",   # normal
             "trail_ns": 2.0, "hall_sil": 2.0,
             "word_prob": 0.35, "word_gap": 1.5}
+
+
+def _clip_seconds(wav_bytes: bytes, rate: int = _SAMPLE_RATE) -> float:
+    """Length of a 16-bit mono WAV in seconds (header ≈ 44 bytes)."""
+    if not wav_bytes or len(wav_bytes) <= 44:
+        return 0.0
+    return (len(wav_bytes) - 44) / 2.0 / max(1, rate)
+
+
+# Below this a recording cannot contain "a long dictation plus invented text
+# at the end" – it is one short utterance, and the aggressive rules would be
+# judging the whole of it rather than a trailing tail.
+_SHORT_CLIP_S = 1.8
+
+
+def _effective_hall_level(level: str, *, is_command: bool,
+                          seconds: float) -> str:
+    """The filter level to really use for THIS recording.
+
+    „Stark“ is tuned for the trailing silence of a long dictation: its rules
+    are OR-combined and it scrutinises the LAST segment especially hard
+    (``trail_ns`` 0.4).  On a two-word command the only segment *is* the last
+    one, so the whole utterance is dropped – or its trailing word is trimmed
+    and „nimm drei“ arrives as „nimm“, which matches no command at all.  From
+    the outside that looks exactly like the program ignoring you.
+
+    A word swallowed while dictating is visible and can be corrected; one
+    swallowed in a command silently does nothing.  So a command – and any
+    utterance too short to *have* a trailing tail – is filtered at most at
+    „Normal“.  „Aus“ stays off, because that is an explicit choice.
+    """
+    if level != "strong":
+        return level
+    if is_command or seconds <= _SHORT_CLIP_S:
+        return "normal"
+    return level
 
 
 def _seg_is_hallucination(no_speech_prob: float, avg_logprob: float,
@@ -1192,14 +1633,25 @@ _CHIP_FG = "#FFFFFF"
 _CHIP_RADIUS = 6
 _CHIP_MARGIN = 12
 _CHIP_DEFAULT_H = 28
+# Allowed chip heights in px.  Deliberately the SAME range as the shared
+# Sticky-Keys/macro chip size on the Allgemein page, so the "take the
+# value from there" button can transfer any value 1:1 – with a narrower
+# range here a larger central value was silently clamped and the button
+# looked like it had done nothing.
+_CHIP_MIN_H = 16
+_CHIP_MAX_H = 64
 _CHIP_SUB_GAP = 6               # gap between the chip and its hint line
-_CHIP_SUB_H = 20               # height of the hint line under the chip
+# The hint line's height is DERIVED from its font size (see _sub_h): it used
+# to be a fixed 20px while the font grew with the chip size, so from about
+# scale 1.6 upwards the text was cut off – exactly where a larger chip was
+# chosen because the text was hard to read in the first place.
 _CHIP_ERROR_MS = 3500
 _CHIP_PULSE_MS = 40
 _CHIP_PULSE_PERIOD_MS = 1100
 
 
 class _ChipBridge(QObject):
+    level = Signal(float)
     state = Signal(str, str)
 
 
@@ -1221,6 +1673,7 @@ class DictationIndicator(QWidget):
         self._chip_h = _CHIP_DEFAULT_H
         self._state = "idle"
         self._detail = ""
+        self._suppressed = False       # hidden over a fullscreen window
         self._pulse_opacity = 1.0
         self._pulse_elapsed = 0
 
@@ -1234,16 +1687,35 @@ class DictationIndicator(QWidget):
         self._error_timer.timeout.connect(self._clear_error)
 
         self._bridge = _ChipBridge()
+        self._fixable = False
         self._bridge.state.connect(self._apply_state)
+        self._bridge.level.connect(self._apply_level)
+        self._level = 0.0
         bus.subscribe("dictation.state", self._on_state)
+        bus.subscribe("dictation.level", self._on_level)
 
-    def _on_state(self, state: str, detail: str = "", **_: object) -> None:
+    def _on_state(self, state: str, detail: str = "",
+                  fixable: bool = False, **_: object) -> None:
+        self._fixable = bool(fixable)
         self._bridge.state.emit(state, detail)
+
+    def _on_level(self, level: float = 0.0, **_: object) -> None:
+        # Published from the AUDIO thread – hand over to the GUI thread.
+        self._bridge.level.emit(float(level))
+
+    def _apply_level(self, level: float) -> None:
+        if self._state != "recording":
+            return
+        self._level = max(0.0, min(1.0, level))
+        self.update()
 
     def _apply_state(self, state: str, detail: str) -> None:
         self._error_timer.stop()
         self._state = state
         self._detail = detail
+        if self._suppressed and state != "idle":
+            self._stop_pulse()
+            return                     # a fullscreen window is in front
         if state == "recording":
             self._start_pulse()
         else:
@@ -1251,14 +1723,52 @@ class DictationIndicator(QWidget):
         if state in ("recording", "transcribing", "reselect"):
             self._update_geometry()
             self.show()
+            self._to_front()
             self.update()
-        elif state == "error":
+        elif state in ("error", "warn"):
+            # "warn" is a one-off note (e.g. a very quiet microphone): shown
+            # like an error but worded as advice, and it disappears by itself.
             self._update_geometry()
             self.show()
+            self._to_front()
             self.update()
-            self._error_timer.start()
+            if not (state == "error" and getattr(self, "_fixable", False)):
+                self._error_timer.start()
+            # A configuration error stays: it will still be broken in four
+            # seconds, and the message is the only pointer to the fix.
         else:  # idle
             self.hide()
+
+    def _to_front(self) -> None:
+        """Put the chip in front of the other always-on-top windows.
+
+        Shown with WA_ShowWithoutActivating, which deliberately does NOT change
+        the stacking position – so the chip reappeared wherever it had been
+        pushed to, i.e. behind the dictation window.  A status chip that is
+        covered is the same as no chip at all."""
+        self.raise_()
+
+    def register_with_coordinator(self) -> None:
+        """Let the core's overlay coordinator keep this chip in front, the same
+        way it does for the sticky-keys and macro chips.  It also hides the
+        chip while a fullscreen window is in front.  Guarded: on an older core
+        the chip simply keeps the one-off raise above."""
+        try:
+            from withease.gui.widgets.cursor_indicator import (
+                IndicatorCoordinator)
+            IndicatorCoordinator.get().register_suppressible(self)
+        except Exception:
+            pass
+
+    def set_suppressed(self, suppressed: bool) -> None:
+        """Required by the coordinator: hide over a fullscreen window."""
+        self._suppressed = bool(suppressed)
+        if self._suppressed:
+            self.hide()
+        elif self._state != "idle":
+            self._update_geometry()
+            self.show()
+            self._to_front()
 
     def set_chip_scale(self, scale: float) -> None:
         """Scale the chip relative to its default height (label/hint sizes and
@@ -1267,14 +1777,14 @@ class DictationIndicator(QWidget):
             scale = float(scale)
         except (TypeError, ValueError):
             scale = 1.0
-        scale = max(0.6, min(2.0, scale))
-        self._chip_h = max(16, round(_CHIP_DEFAULT_H * scale))
+        self._chip_h = max(_CHIP_MIN_H,
+                           min(_CHIP_MAX_H, round(_CHIP_DEFAULT_H * scale)))
         if self._state != "idle":
             self._update_geometry()
             self.update()
 
     def _clear_error(self) -> None:
-        if self._state == "error":
+        if self._state in ("error", "warn"):
             self._state = "idle"
             self.hide()
 
@@ -1306,6 +1816,8 @@ class DictationIndicator(QWidget):
         if self._state == "error":
             detail = f" – {self._detail}" if self._detail else ""
             return f"⚠ {_t('chip.error')}{detail}"
+        if self._state == "warn":
+            return f"💡 {self._detail}"
         if self._state == "reselect":
             return f"🎯 {_t('chip.reselect')}"
         return ""
@@ -1314,7 +1826,18 @@ class DictationIndicator(QWidget):
         """A second, smaller line shown *under* the chip (e.g. how to pick)."""
         if self._state == "reselect":
             return _t("chip.reselect.hint")
+        if self._state == "error" and getattr(self, "_fixable", False):
+            return _t("chip.error.fix")
         return ""
+
+    def mousePressEvent(self, event: object) -> None:  # noqa: N802
+        """Clicking a configuration error opens the dictation settings."""
+        if self._state == "error" and getattr(self, "_fixable", False):
+            bus.publish("app.open_settings", module_id="dictation")
+            self._state = "idle"
+            self.hide()
+            return
+        super().mousePressEvent(event)
 
     def _text_w(self, text: str, px: int, bold: bool = True) -> int:
         from PySide6.QtGui import QFontMetrics
@@ -1328,6 +1851,13 @@ class DictationIndicator(QWidget):
 
     def _sub_px(self) -> int:
         return max(9, int(self._chip_h * 0.46))
+
+    def _sub_h(self) -> int:
+        """Height of the hint pill – always enough for its own font."""
+        from PySide6.QtGui import QFontMetrics
+        font = self.font()
+        font.setPixelSize(self._sub_px())
+        return QFontMetrics(font).height() + 6      # + a little breathing room
 
     def _chip_w(self) -> int:
         return self._text_w(self._label(), self._label_px()) + 28
@@ -1343,7 +1873,7 @@ class DictationIndicator(QWidget):
         content_w = self._content_w()
         total_h = self._chip_h
         if self._subtitle():
-            total_h += _CHIP_SUB_GAP + _CHIP_SUB_H
+            total_h += _CHIP_SUB_GAP + self._sub_h()
         self.setFixedSize(content_w + 2 * _CHIP_MARGIN,
                           total_h + 2 * _CHIP_MARGIN)
         screen = QApplication.primaryScreen()
@@ -1378,13 +1908,31 @@ class DictationIndicator(QWidget):
         p.drawText(QRect(chip_x, _CHIP_MARGIN, chip_w, self._chip_h),
                    Qt.AlignmentFlag.AlignCenter, self._label())
 
+        if self._state == "recording":
+            # A slim level bar along the bottom edge of the chip: nearly full
+            # means "loud and clear", a stub means the microphone is barely
+            # picking you up.  Inside the chip, so it costs no extra space.
+            bar_h = max(2, round(self._chip_h * 0.09))
+            bar_y = _CHIP_MARGIN + self._chip_h - bar_h - 2
+            inset = 8
+            track = QRect(chip_x + inset, bar_y, chip_w - 2 * inset, bar_h)
+            p.fillRect(track, QColor(255, 255, 255, 60))
+            level = getattr(self, "_level", 0.0)
+            if level > 0:
+                lit = QRect(track.x(), track.y(),
+                            max(1, round(track.width() * level)), bar_h)
+                # Amber below the level at which Whisper starts inventing text.
+                weak = level < 0.12
+                p.fillRect(lit, QColor(255, 205, 120) if weak
+                           else QColor(255, 255, 255, 235))
         sub = self._subtitle()
         if sub:
             # Its own dark, semi-transparent pill so the hint is readable over
             # any desktop background (the widget itself is transparent).
             sub_y = _CHIP_MARGIN + self._chip_h + _CHIP_SUB_GAP
             sub_path = QPainterPath()
-            sub_path.addRoundedRect(_CHIP_MARGIN, sub_y, content_w, _CHIP_SUB_H,
+            sub_h = self._sub_h()
+            sub_path.addRoundedRect(_CHIP_MARGIN, sub_y, content_w, sub_h,
                                     _CHIP_RADIUS, _CHIP_RADIUS)
             p.fillPath(sub_path, QColor(0, 0, 0, 190))
             p.setPen(QColor(_CHIP_FG))
@@ -1392,7 +1940,7 @@ class DictationIndicator(QWidget):
             sfont.setPixelSize(self._sub_px())
             sfont.setBold(False)
             p.setFont(sfont)
-            p.drawText(QRect(_CHIP_MARGIN, sub_y, content_w, _CHIP_SUB_H),
+            p.drawText(QRect(_CHIP_MARGIN, sub_y, content_w, sub_h),
                        Qt.AlignmentFlag.AlignCenter, sub)
         p.end()
 
@@ -1427,6 +1975,9 @@ class DictationSettingsWidget(QWidget):
         self._install_bridge.progress.connect(self._on_install_progress)
         self._deps_bridge = _InstallBridge()
         self._deps_bridge.finished.connect(self._on_deps_install_finished)
+        # Model loading answers from a worker thread – same bridge pattern.
+        self._model_bridge = _InstallBridge()
+        self._model_bridge.finished.connect(self._on_model_loaded)
         self._ai_models_bridge = _AiModelsBridge()
         self._ai_models_bridge.loaded.connect(self._on_ai_models_loaded)
         self._build_ui()
@@ -1439,6 +1990,12 @@ class DictationSettingsWidget(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        # Never scroll sideways (same rule as the core pages, see
+        # MainWindow._scrollable): with a horizontal scrollbar the page could
+        # end up scrolled right, and then the cards' left edge disappeared
+        # behind the sidebar.  Vertical scrolling is unaffected.
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll = scroll          # so expanding a section can scroll to it
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -1452,10 +2009,24 @@ class DictationSettingsWidget(QWidget):
         self._enabled_cb.toggled.connect(self._on_module_toggled)
         layout.addWidget(self._enabled_cb)
 
+        # Heading → separator → description, like the core module pages.
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(sep)
+
         desc = QLabel(_t("description.long"))
         desc.setStyleSheet(_hint_style())
         desc.setWordWrap(True)
         layout.addWidget(desc)
+
+        # What is still missing before a single word can be dictated.  A
+        # freshly installed module has no key and no recogniser, and NOTHING on
+        # a page of fifteen settings said which two of them matter first.
+        self._setup_note = QLabel("")
+        self._setup_note.setWordWrap(True)
+        self._setup_note.setVisible(False)
+        layout.addWidget(self._setup_note)
 
         self._deps_box = self._build_deps_box()
         layout.addWidget(self._deps_box)
@@ -1465,12 +2036,12 @@ class DictationSettingsWidget(QWidget):
         # be greyed out while the module is off (like the Mouse/Keyboard pages).
         self._sections: list[QWidget] = []
 
-        def _group(title: str) -> QFormLayout:
+        def _group(title: str, icon: str = "") -> QFormLayout:
             # Use the app's card helper: it gives a BOLD title label inside the
             # card (Qt ignores font-weight on a QGroupBox::title, so the group
             # headings looked non-bold).  Consistent with the General page.
             from withease.gui.ui_utils import card as _card
-            card_w, body = _card(title)
+            card_w, body = _card(title, icon)
             f = QFormLayout()
             f.setSpacing(10)
             f.setFieldGrowthPolicy(
@@ -1480,27 +2051,76 @@ class DictationSettingsWidget(QWidget):
             self._sections.append(card_w)
             return f
 
+        def _group_foldable(title: str, title_open: str,
+                            icon: str = "") -> QFormLayout:
+            """Like _group(), but the card starts collapsed.
+
+            Used for the cards that are not needed to get dictation running –
+            this page showed 23 controls at once while every other module page
+            shows 4-7, which is exactly the overload the collapsible pattern
+            exists to prevent."""
+            sec = _Collapsible(title, title_open, icon=icon)
+            f = QFormLayout()
+            f.setSpacing(10)
+            f.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+            sec.content_body().addLayout(f)
+            sec.toggled.connect(lambda on, x=sec: self._reveal_section(x, on))
+            layout.addWidget(sec)
+            self._sections.append(sec)
+            return f
+
+        from withease.gui.ui_utils import em
+        label_with_hint = _label_with_hint
+
         # -- (1) Grundeinstellungen ------------------------------------
-        basics = _group(_t("group.basics"))
+        basics = _group(_t("group.basics"), "⚙️")
 
         self._hotkey = HotkeyEdit(self._settings.get("hotkey", ""),
                                   action_id="dictation.toggle")
         self._hotkey.key_changed.connect(lambda k: self._save("hotkey", k))
+        self._hotkey.key_changed.connect(
+            lambda _k: self._refresh_setup_note())
         basics.addRow(_t("hotkey"), self._hotkey)
 
         self._mode = QComboBox()
         self._mode.addItem(_t("mode.toggle"), "toggle")
+        self._mode.setItemData(0, _t("mode.toggle.hint"),
+                               Qt.ItemDataRole.ToolTipRole)
         self._mode.addItem(_t("mode.hold"), "hold")
+        self._mode.setItemData(1, _t("mode.hold.hint"),
+                               Qt.ItemDataRole.ToolTipRole)
         if self._settings.get("mode", "toggle") == "hold":
             self._mode.setCurrentIndex(1)
         self._mode.currentIndexChanged.connect(
             lambda i: self._save("mode", self._mode.itemData(i)))
-        basics.addRow(_t("mode"), self._mode)
+        basics.addRow(
+            label_with_hint(_t("mode"), _t("mode.hint")),
+            self._mode)
 
+        # Flags in front of the names, exactly like the Allgemein page's
+        # language box – same setting, same picture.  A language without a flag
+        # PNG simply gets no icon instead of a placeholder, so the list stays
+        # usable while more flags are added.
+        _LANG_COUNTRY = {"de": "de", "en": "gb", "fr": "fr", "es": "es",
+                         "it": "it", "nl": "nl", "pl": "pl", "pt": "pt",
+                         "ru": "ru", "tr": "tr", "uk": "ua", "zh": "cn",
+                         "ja": "jp"}
         self._lang = QComboBox()
+        self._lang.setIconSize(QSize(em(1.1), round(em(1.1) * 2 / 3)))
         for code in LANGUAGES:
-            label = _t("lang.auto") if code == "auto" else code
-            self._lang.addItem(label, code)
+            label = _t("lang.auto") if code == "auto" else _t(f"lang.{code}")
+            icon = QIcon()
+            country = _LANG_COUNTRY.get(code)
+            if country:
+                try:
+                    from withease.core import resources as _res
+                    path = _res.flag_icon_path(country)
+                    if path.exists():
+                        icon = QIcon(str(path))
+                except Exception:
+                    pass
+            self._lang.addItem(icon, label, code)
         saved_lang = self._settings.get("language", "auto")
         if saved_lang in LANGUAGES:
             self._lang.setCurrentIndex(LANGUAGES.index(saved_lang))
@@ -1510,36 +2130,70 @@ class DictationSettingsWidget(QWidget):
 
         # Size of the status chip (recording indicator + target-app hint) shown
         # at the top of the screen – some users want it bigger/more visible.
-        self._chip_size = QComboBox()
-        self._chip_size.addItem(_t("chip.small"), 0.8)
-        self._chip_size.addItem(_t("chip.medium"), 1.0)
-        self._chip_size.addItem(_t("chip.large"), 1.3)
-        self._chip_size.addItem(_t("chip.xlarge"), 1.6)
+        # In actual pixels (like the shared Sticky-Keys/macro chip size on the
+        # Allgemein page) instead of named sizes, plus a button to copy that
+        # page's value directly instead of having to go check it first.  Same
+        # range as the central spin box (see _CHIP_MIN_H/_CHIP_MAX_H) so that
+        # button can transfer any value unchanged.
+        self._chip_size = QSpinBox()
+        self._chip_size.setRange(_CHIP_MIN_H, _CHIP_MAX_H)
+        self._chip_size.setSuffix(" px")
         saved_scale = float(self._settings.get("chip_scale", 1.0))
-        cidx = self._chip_size.findData(saved_scale)
-        self._chip_size.setCurrentIndex(cidx if cidx >= 0 else 1)
-        self._chip_size.setToolTip(_t("chip_size.hint"))
-        self._chip_size.currentIndexChanged.connect(self._on_chip_scale_changed)
-        basics.addRow(_t("chip_size"), self._chip_size)
+        self._chip_size.setValue(round(saved_scale * _CHIP_DEFAULT_H))
+        self._chip_size.valueChanged.connect(self._on_chip_size_px_changed)
+        # A real icon (not a text glyph) so it grows with the font-size
+        # setting instead of staying visually tiny – setIconSize must be set
+        # explicitly, otherwise the icon stays at Qt's small default even
+        # though the button box grows.  A refresh glyph (not a down-arrow):
+        # the button re-reads the value from the Allgemein page, so "update
+        # from there" reads truer than "download".
+        self._chip_sync_btn = QPushButton()
+        self._chip_sync_btn.setIconSize(QSize(em(1.2), em(1.2)))
+        self._chip_sync_btn.setFixedSize(em(2), em(2))
+        self._chip_sync_btn.setToolTip(_wrap_tip(_t("chip_size.sync")))
+        self._chip_sync_btn.setAccessibleName(_t("chip_size.sync"))
+        self._chip_sync_btn.clicked.connect(self._on_chip_size_sync)
+        self._chip_size.valueChanged.connect(
+            lambda _v: self._update_chip_sync_btn())
+        self._update_chip_sync_btn()
+        chip_row = QHBoxLayout()
+        chip_row.setContentsMargins(0, 0, 0, 0)
+        chip_row.setSpacing(6)
+        chip_row.addWidget(self._chip_size)
+        chip_row.addWidget(self._chip_sync_btn)
+        chip_row.addStretch(1)
+        basics.addRow(label_with_hint(_t("chip_size"), _t("chip_size.hint")),
+                     chip_row)
 
         # -- (2) Spracherkennung ---------------------------------------
-        rec = _group(_t("group.recognition"))
+        rec = _group(_t("group.recognition"), "🎙️")
         self._form_rec = rec
 
         self._backend = QComboBox()
         self._backend.addItem(_t("backend.cloud"), "cloud")
+        # The provider list used to be spelled out in the label itself, which
+        # made this the widest control in the app – at a large font size it no
+        # longer fitted its card and the text was cut off.  It belongs in a
+        # tooltip anyway: the actual provider is picked in "Anbieter" below.
+        self._backend.setItemData(0, _t("backend.cloud.hint"),
+                                  Qt.ItemDataRole.ToolTipRole)
         local_label = _t("backend.local")
         if not local_recognition_ready():
             local_label += f" ({_t('backend.local.missing')})"
         self._backend.addItem(local_label, "local")
-        saved_backend = self._settings.get("backend", "cloud")
+        saved_backend = self._settings.get("backend", "local")
         if saved_backend == "live":          # retire an old "live" selection
             saved_backend = "local"
         idx = self._backend.findData(saved_backend)
         if idx >= 0:
             self._backend.setCurrentIndex(idx)
         self._backend.currentIndexChanged.connect(self._on_backend_changed)
+        self._backend.currentIndexChanged.connect(
+            lambda _i: self._refresh_setup_note())
+        # Visible, never behind a hover: this is the one setting that decides
+        # whether the user's voice leaves this PC.
         rec.addRow(_t("backend"), self._backend)
+        rec.addRow("", _setting_note(_t("backend.hint")))
 
         # Microphone – applies to both cloud and local backends, so it lives
         # here in the Speech-recognition group (always visible), not tucked away
@@ -1566,40 +2220,51 @@ class DictationSettingsWidget(QWidget):
         self._pause_media_cb = QCheckBox(_t("pause_media"))
         self._pause_media_cb.setChecked(
             bool(self._settings.get("pause_media", False)))
-        self._pause_media_cb.setToolTip(_t("pause_media.hint"))
         self._pause_media_cb.toggled.connect(
             lambda v: self._save("pause_media", v))
-        rec.addRow("", self._pause_media_cb)
-        _pause_media_hint = _HintLabel(_t("pause_media.hint"))
-        rec.addRow("", _pause_media_hint)
+        from withease.gui.widgets.hint_icon import HintIcon
+        pause_media_row = QHBoxLayout()
+        pause_media_row.setContentsMargins(0, 0, 0, 0)
+        pause_media_row.setSpacing(6)
+        pause_media_row.addWidget(self._pause_media_cb)
+        pause_media_row.addWidget(HintIcon(_t("pause_media.hint")))
+        pause_media_row.addStretch(1)
+        rec.addRow("", pause_media_row)
 
         # Cloud fields
         self._provider = QComboBox()
         for pid in PROVIDERS:
             self._provider.addItem(_t(f"provider.{pid}"), pid)
+            if pid == "custom":
+                _option_hint(self._provider, self._provider.count() - 1,
+                             _t("provider.custom.hint"))
         saved_provider = self._settings.get("provider", "openrouter")
         ids = list(PROVIDERS.keys())
         if saved_provider in ids:
             self._provider.setCurrentIndex(ids.index(saved_provider))
         self._provider.currentIndexChanged.connect(self._on_provider_changed)
+        self._provider.currentIndexChanged.connect(
+            lambda _i: self._refresh_setup_note())
         rec.addRow(_t("provider"), self._provider)
 
         self._base_url = QLineEdit(self._settings.get("base_url", ""))
         self._base_url.setPlaceholderText("https://.../v1")
-        self._base_url.setMinimumWidth(280)
+        self._base_url.setMinimumWidth(em(11))
         self._base_url.editingFinished.connect(
             lambda: self._save("base_url", self._base_url.text().strip()))
         rec.addRow(_t("base_url"), self._base_url)
 
         self._api_key = QLineEdit()
         self._api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._api_key.setMinimumWidth(280)
+        self._api_key.setMinimumWidth(em(11))
         self._api_key.setText(self._module.get_api_key(saved_provider))
         self._api_key.editingFinished.connect(self._on_api_key_changed)
+        self._api_key.editingFinished.connect(self._refresh_setup_note)
+        # Where the key ends up (unencrypted, device-wide) has to be readable
+        # BEFORE it is typed in, not on hover afterwards.
         rec.addRow(_t("api_key"), self._api_key)
-
-        self._key_hint = _HintLabel(_t("api_key.hint"))
-        rec.addRow("", self._key_hint)
+        self._api_key_note = _setting_note(_t("api_key.hint"))
+        rec.addRow("", self._api_key_note)
 
         self._model = QComboBox()
         self._model.setEditable(True)
@@ -1609,7 +2274,9 @@ class DictationSettingsWidget(QWidget):
             self._model.setEditText(saved_model)
         self._model.currentTextChanged.connect(
             lambda t: self._save("model", t.strip()))
-        rec.addRow(_t("model"), self._model)
+        rec.addRow(
+            label_with_hint(_t("model"), _t("model.hint")),
+            self._model)
 
         # Local fields
         self._local_model = QComboBox()
@@ -1620,10 +2287,30 @@ class DictationSettingsWidget(QWidget):
             self._local_model.setCurrentIndex(LOCAL_MODELS.index(saved_local))
         self._local_model.currentIndexChanged.connect(
             lambda i: self._save("local_model", self._local_model.itemData(i)))
-        rec.addRow(_t("local_model"), self._local_model)
-
-        self._local_hint = _HintLabel(_t("local.hint"))
-        rec.addRow("", self._local_hint)
+        from withease.gui.ui_utils import wrap_tooltip
+        self._model_load_btn = QPushButton(_t("local_model.load"))
+        self._model_load_btn.setToolTip(wrap_tooltip(_t("local_model.load.hint")))
+        self._model_load_btn.clicked.connect(self._on_load_model)
+        self._model_status = QLabel("")
+        self._model_status.setStyleSheet(_hint_style())
+        self._model_status.setWordWrap(True)
+        self._model_status.setVisible(False)
+        model_row = QHBoxLayout()
+        model_row.setContentsMargins(0, 0, 0, 0)
+        model_row.setSpacing(6)
+        model_row.addWidget(self._local_model)
+        model_row.addWidget(self._model_load_btn)
+        model_row.addStretch(1)
+        # A one-off download of up to 1.5 GB is not something to discover by
+        # hovering – it belongs next to the choice that triggers it.
+        rec.addRow(_t("local_model"), model_row)
+        self._local_model_note = _setting_note(_t("local.hint"))
+        rec.addRow("", self._local_model_note)
+        rec.addRow("", self._model_status)
+        # Changing the model means the next dictation would silently download
+        # it – say so, right where the choice was made.
+        self._local_model.currentIndexChanged.connect(
+            lambda _i: self._note_model_change())
 
         import sys as _sys
         self._frozen = bool(getattr(_sys, "frozen", False))
@@ -1644,12 +2331,15 @@ class DictationSettingsWidget(QWidget):
         howto_btn.clicked.connect(self._on_show_howto)
         # The manual how-to is command-line pip, which does not apply in the
         # packaged .exe – there the automatic button is the only path.
-        howto_btn.setVisible(not self._frozen)
+        # Only ever HIDE explicitly – see the deps-box button above for why.
         install_btns.addWidget(howto_btn)
+        if self._frozen:
+            howto_btn.setVisible(False)
         install_btns.addStretch()
         install_layout.addLayout(install_btns)
         self._install_status = QLabel("")
         self._install_status.setWordWrap(True)
+        self._install_status.setVisible(False)
         install_layout.addWidget(self._install_status)
         rec.addRow("", self._install_box)
         self._update_install_note()
@@ -1659,25 +2349,33 @@ class DictationSettingsWidget(QWidget):
         rec.addRow("", self._test_btn)
 
         # -- (3) Textausgabe -------------------------------------------
-        out = _group(_t("group.output"))
+        out = _group_foldable(_t("group.output"),
+                              _t("group.output.open"), "📋")
 
         self._output_mode = QComboBox()
         self._output_mode.addItem(_t("output.window"), "window")
         self._output_mode.addItem(_t("output.direct"), "direct")
+        _option_hint(self._output_mode, 0, _t("output.window.hint"))
         if self._settings.get("output_mode", "window") == "direct":
             self._output_mode.setCurrentIndex(1)
         self._output_mode.currentIndexChanged.connect(
             lambda i: self._save("output_mode", self._output_mode.itemData(i)))
+        # Decides the whole workflow, and is met once while setting up.
         out.addRow(_t("output"), self._output_mode)
+        out.addRow("", _setting_note(_t("output.hint")))
 
         self._insert = QComboBox()
         self._insert.addItem(_t("insert.clipboard"), "clipboard")
         self._insert.addItem(_t("insert.type"), "type")
+        for i, key in enumerate(("clipboard", "type")):
+            _option_hint(self._insert, i, _t(f"insert.{key}.hint"))
         if self._settings.get("insert_method", "clipboard") == "type":
             self._insert.setCurrentIndex(1)
         self._insert.currentIndexChanged.connect(
             lambda i: self._save("insert_method", self._insert.itemData(i)))
-        out.addRow(_t("insert"), self._insert)
+        out.addRow(
+            label_with_hint(_t("insert"), _t("insert.hint")),
+            self._insert)
 
         self._keep_clipboard = QCheckBox(_t("keep_clipboard"))
         self._keep_clipboard.setChecked(
@@ -1686,6 +2384,22 @@ class DictationSettingsWidget(QWidget):
             lambda v: self._save("keep_in_clipboard", v))
         out.addRow("", self._keep_clipboard)
 
+        self._join_cb = QCheckBox(_t("join_dictations"))
+        self._join_cb.setChecked(
+            bool(self._settings.get("join_dictations", True)))
+        self._join_cb.toggled.connect(
+            lambda v: self._save("join_dictations", v))
+        out.addRow("", _checkbox_with_hint(
+            self._join_cb, _t("join_dictations.hint")))
+
+        self._take_sel_cb = QCheckBox(_t("take_selection"))
+        self._take_sel_cb.setChecked(
+            bool(self._settings.get("take_selection", False)))
+        self._take_sel_cb.toggled.connect(
+            lambda v: self._save("take_selection", v))
+        out.addRow("", _checkbox_with_hint(
+            self._take_sel_cb, _t("take_selection.hint")))
+
         # -- (4) Woerterbuch -------------------------------------------
         # One full-width row (the card is already titled "Wörterbuch", so no
         # extra label column – that duplicated the heading and, being top-
@@ -1693,10 +2407,19 @@ class DictationSettingsWidget(QWidget):
         # Everything is vertically centred so the count and buttons align.
         # Two columns like every other row: the word count on the left, the
         # two buttons left-aligned in the field column – one consistent picture.
-        vocab = _group(_t("group.vocab"))
+        vocab = _group_foldable(_t("group.vocab"),
+                                _t("group.vocab.open"), "📖")
+        # One always-visible line saying what the dictionary is FOR; the
+        # long how-to stays in the tooltip.  Full-width row, so it reads
+        # like the description under a card heading.
+        vocab_desc = QLabel(_t("group.vocab.desc"))
+        vocab_desc.setStyleSheet(_hint_style())
+        vocab_desc.setWordWrap(True)
+        vocab.addRow(vocab_desc)
         self._dict_summary = QLabel(self._dict_summary_text())
         self._dict_summary.setStyleSheet(_hint_style())
-        self._dict_summary.setToolTip(_t("vocab.hint"))
+        from withease.gui.ui_utils import wrap_tooltip
+        self._dict_summary.setToolTip(wrap_tooltip(_t("vocab.hint")))
         self._dict_summary.setAlignment(Qt.AlignmentFlag.AlignLeft
                                         | Qt.AlignmentFlag.AlignVCenter)
         dict_row = QHBoxLayout()
@@ -1715,8 +2438,10 @@ class DictationSettingsWidget(QWidget):
         # A chevron section (▸/▾) like "Erweitert" below – not a checkable box,
         # so it never looks like an on/off toggle and shows no stale "expand"
         # hint once it is open.
-        ki_section = _Collapsible(_t("group.ai"), _t("group.ai.open"))
-        ai = QFormLayout(ki_section.content())
+        ki_section = _Collapsible(
+            _t("group.ai"), _t("group.ai.open"), icon="🤖")
+        ai = QFormLayout()
+        ki_section.content_body().addLayout(ai)
         ai.setSpacing(8)
         ai.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
@@ -1735,23 +2460,40 @@ class DictationSettingsWidget(QWidget):
         aiact_btn.clicked.connect(self._open_ai_actions)
         aiact_row.addWidget(aiact_btn)      # left-aligned in the field column
         aiact_row.addStretch(1)
-        ai.addRow(_t("ai.actions"), aiact_row)
-        _aiact_hint = _HintLabel(_t("ai.actions.hint"))
-        ai.addRow("", _aiact_hint)
+        ai.addRow(label_with_hint(_t("ai.actions"), _t("ai.actions.hint")),
+                 aiact_row)
+
+        # Text blocks live with the MACROS – one list, not two.  Keeping a
+        # second list here meant the same sign-off had to be created twice and
+        # neither list showed the other's entries, which is confusing in
+        # exactly the place where people go looking for it.  So this row is a
+        # signpost, not an editor.
+        snip_row = QHBoxLayout()
+        snip_row.setContentsMargins(0, 0, 0, 0)
+        snip_row.setSpacing(8)
+        self._snip_goto = QPushButton(_t("snippets.goto"))
+        self._snip_goto.clicked.connect(self._open_macros)
+        snip_row.addWidget(self._snip_goto)
+        self._snip_move = QPushButton("")
+        self._snip_move.clicked.connect(self._move_snippets_to_macros)
+        snip_row.addWidget(self._snip_move)
+        snip_row.addStretch(1)
+        ai.addRow(_t("snippets"), snip_row)
+        ai.addRow("", _setting_note(_t("snippets.note")))
+        self._update_snippet_row()
 
         self._ai_enable = QCheckBox(_t("ai.enable"))
         self._ai_enable.setChecked(bool(self._settings.get("ai_cleanup", False)))
-        self._ai_enable.setToolTip(_t("ai.hint"))
         self._ai_enable.toggled.connect(lambda v: self._save("ai_cleanup", v))
         self._ai_enable.toggled.connect(lambda _v: self._update_ai_rows())
-        ai.addRow(_t("ai"), self._ai_enable)
-        _ai_hint = _HintLabel(_t("ai.hint"))
-        ai.addRow("", _ai_hint)
+        ai.addRow(label_with_hint(_t("ai"), _t("ai.hint")), self._ai_enable)
 
         self._ai_backend = QComboBox()
         self._ai_backend.addItem(_t("ai.ollama"), "ollama")
         self._ai_backend.addItem(_t("ai.lmstudio"), "lmstudio")
         self._ai_backend.addItem(_t("ai.cloud"), "cloud")
+        for i, key in enumerate(("ollama", "lmstudio", "cloud")):
+            _option_hint(self._ai_backend, i, _t(f"ai.{key}.hint"))
         saved_ai_backend = self._settings.get("ai_backend", "ollama")
         if saved_ai_backend == "local":          # legacy value → Ollama
             saved_ai_backend = "ollama"
@@ -1759,25 +2501,35 @@ class DictationSettingsWidget(QWidget):
         if bidx >= 0:
             self._ai_backend.setCurrentIndex(bidx)
         self._ai_backend.currentIndexChanged.connect(self._on_ai_backend_changed)
-        ai.addRow(_t("ai.backend"), self._ai_backend)
+        ai.addRow(
+            label_with_hint(_t("ai.backend"), _t("ai.backend.hint")),
+            self._ai_backend)
         self._ai_backend_label = ai.labelForField(self._ai_backend)
 
         # Model as an editable dropdown, populated from the running local
         # provider (Ollama / LM Studio); still free-text for the cloud backend.
         self._ai_model = QComboBox()
         self._ai_model.setEditable(True)
-        self._ai_model.setMinimumWidth(220)
-        self._ai_model.setToolTip(_t("ai.model.hint"))
+        self._ai_model.setMinimumWidth(em(10))
+        from withease.gui.ui_utils import wrap_tooltip
+        self._ai_model.setToolTip(wrap_tooltip(_t("ai.model.hint")))
         saved_ai_model = self._settings.get("ai_model", "")
         if saved_ai_model:
             self._ai_model.setEditText(saved_ai_model)
         self._ai_model.currentTextChanged.connect(
             lambda t: self._save("ai_model", t.strip()))
-        self._ai_model_refresh = QPushButton(_t("ai.model.refresh"))
-        self._ai_model_refresh.setFixedWidth(36)
-        self._ai_model_refresh.setToolTip(_t("ai.model.refresh.hint"))
+        # A Unicode glyph ("↻") in a fixed-width button rendered inconsistently
+        # across fonts/sizes – a drawn icon is crisp at any font size.
+        self._ai_model_refresh = QPushButton()
+        self._ai_model_refresh.setIcon(
+            _core_theme.refresh_icon(_core_theme.action_color()))
+        self._ai_model_refresh.setFixedSize(em(2), em(2))
+        self._ai_model_refresh.setIconSize(QSize(em(1.2), em(1.2)))
+        self._ai_model_refresh.setToolTip(
+            _wrap_tip(_t("ai.model.refresh.hint")))
+        self._ai_model_refresh.setAccessibleName(_t("ai.model.refresh.hint"))
         self._ai_model_refresh.clicked.connect(self._refresh_ai_models)
-        self._ai_model.setMinimumWidth(240)
+        self._ai_model.setMinimumWidth(em(10))
         self._ai_model_container = QWidget()
         model_row = QHBoxLayout(self._ai_model_container)
         model_row.setContentsMargins(0, 0, 0, 0)
@@ -1789,8 +2541,9 @@ class DictationSettingsWidget(QWidget):
 
         # -- (5) Erweitert (collapsed by default) ----------------------
         adv_section = _Collapsible(
-            _t("group.advanced"), _t("group.advanced.open"))
-        adv = QFormLayout(adv_section.content())
+            _t("group.advanced"), _t("group.advanced.open"), icon="🔧")
+        adv = QFormLayout()
+        adv_section.content_body().addLayout(adv)
         adv.setSpacing(8)
         adv.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
@@ -1805,10 +2558,9 @@ class DictationSettingsWidget(QWidget):
             action_id="dictation.command")
         self._command_hotkey.key_changed.connect(
             lambda k: self._save("command_hotkey", k))
-        self._command_hotkey.setToolTip(_t("hotkey.command.hint"))
-        adv.addRow(_t("hotkey.command"), self._command_hotkey)
-        _cmd_hint = _HintLabel(_t("hotkey.command.hint"))
-        adv.addRow("", _cmd_hint)
+        adv.addRow(label_with_hint(_t("hotkey.command"),
+                                   _t("hotkey.command.hint")),
+                  self._command_hotkey)
 
         self._max_seconds = QSpinBox()
         self._max_seconds.setRange(0, 3600)     # 0 = endless (no auto-stop)
@@ -1822,20 +2574,24 @@ class DictationSettingsWidget(QWidget):
         self._hall_filter = QComboBox()
         for level in ("off", "normal", "strong"):
             self._hall_filter.addItem(_t(f"hallucination.{level}"), level)
-        saved_hall = self._settings.get("hallucination_filter", "normal")
+            if level == "normal":
+                _option_hint(self._hall_filter,
+                             self._hall_filter.count() - 1,
+                             _t("hallucination.normal.hint"))
+        saved_hall = self._settings.get("hallucination_filter", "strong")
         hi = self._hall_filter.findData(saved_hall)
-        self._hall_filter.setCurrentIndex(hi if hi >= 0 else 1)
+        self._hall_filter.setCurrentIndex(hi if hi >= 0 else 2)
         self._hall_filter.currentIndexChanged.connect(
             lambda i: self._save("hallucination_filter",
                                  self._hall_filter.itemData(i)))
-        adv.addRow(_t("hallucination"), self._hall_filter)
-        _hall_hint = _HintLabel(_t("hallucination.hint"))
-        adv.addRow("", _hall_hint)
+        adv.addRow(label_with_hint(_t("hallucination"), _t("hallucination.hint")),
+                  self._hall_filter)
 
         self._preload_cb = QCheckBox(_t("preload"))
         self._preload_cb.setChecked(
             bool(self._settings.get("preload_model", False)))
-        self._preload_cb.setToolTip(_t("preload.hint"))
+        from withease.gui.ui_utils import wrap_tooltip
+        self._preload_cb.setToolTip(wrap_tooltip(_t("preload.hint")))
         self._preload_cb.toggled.connect(
             lambda v: self._save("preload_model", v))
         adv.addRow("", self._preload_cb)
@@ -1844,14 +2600,81 @@ class DictationSettingsWidget(QWidget):
         self._raw_cb = QCheckBox(_t("raw"))
         self._raw_cb.setChecked(
             bool(self._settings.get("raw_recognition", False)))
-        self._raw_cb.setToolTip(_t("raw.hint"))
         self._raw_cb.toggled.connect(
             lambda v: self._save("raw_recognition", v))
-        adv.addRow("", self._raw_cb)
-        _raw_hint = QLabel(_t("raw.hint"))
-        _raw_hint.setWordWrap(True)
-        _raw_hint.setStyleSheet(_hint_style())
-        adv.addRow("", _raw_hint)
+        raw_row = QHBoxLayout()
+        raw_row.setContentsMargins(0, 0, 0, 0)
+        raw_row.setSpacing(6)
+        raw_row.addWidget(self._raw_cb)
+        raw_row.addWidget(HintIcon(_t("raw.hint")))
+        raw_row.addStretch(1)
+        adv.addRow("", raw_row)
+
+        self._dates_cb = QCheckBox(_t("numeric_dates"))
+        self._dates_cb.setChecked(
+            bool(self._settings.get("numeric_dates", True)))
+        self._dates_cb.toggled.connect(
+            lambda v: self._save("numeric_dates", v))
+        adv.addRow("", _checkbox_with_hint(self._dates_cb,
+                                           _t("numeric_dates.hint")))
+
+        # -- (7) Deine Daten -------------------------------------------
+        # One place that says what this module keeps about the user, how much
+        # of it there is, and lets every piece be removed.  Until now the
+        # history could not be cleared at all and the training recordings grew
+        # without limit, unseen (1868 files / 1.4 GB on the author's machine).
+        data = _group_foldable(_t("group.data"), _t("group.data.open"), "🗄️")
+        data_desc = QLabel(_t("data.desc"))
+        data_desc.setStyleSheet(_hint_style())
+        data_desc.setWordWrap(True)
+        data.addRow(data_desc)
+
+        def _data_row(label_key: str, hint_key: str, value_label: QLabel,
+                      on_delete) -> None:
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
+            value_label.setStyleSheet(_hint_style())
+            row.addWidget(value_label, 1)
+            btn = QPushButton(_t("data.delete"))
+            _mark_danger(btn)
+            btn.clicked.connect(on_delete)
+            row.addWidget(btn)
+            data.addRow(label_with_hint(_t(label_key), _t(hint_key)), row)
+
+        self._data_history = QLabel("")
+        _data_row("data.history", "data.history.hint", self._data_history,
+                  self._on_clear_history)
+
+        self._history_limit = QSpinBox()
+        self._history_limit.setRange(0, 100)
+        self._history_limit.setValue(
+            int(self._settings.get("history_limit", 20)))
+        self._history_limit.valueChanged.connect(
+            lambda v: self._save("history_limit", v))
+        data.addRow(_t("data.history.limit"), self._history_limit)
+
+        # Storing recordings is gone: what it wrote was the audio plus
+        # Whisper's OWN output, which teaches a model nothing, and the switch
+        # for it had been lost in 49ee0b3 while the writing carried on.  Only
+        # the clean-up is left – shown while a leftover folder from an older
+        # version still exists, and gone for good once it is emptied.
+        self._data_training = QLabel("")
+        if self._module.training_stats()[0]:
+            _data_row("data.training", "data.training.hint",
+                      self._data_training, self._on_clear_training)
+
+        self._data_dict = QLabel("")
+        self._data_dict.setStyleSheet(_hint_style())
+        data.addRow(label_with_hint(_t("data.dictionary"),
+                                    _t("data.dictionary.hint")),
+                   self._data_dict)
+
+        self._data_key = QLabel("")
+        _data_row("data.key", "data.key.hint", self._data_key,
+                  self._on_clear_api_key)
+
+        self._refresh_data_stats()
 
         layout.addStretch()
         scroll.setWidget(content)
@@ -1860,6 +2683,7 @@ class DictationSettingsWidget(QWidget):
         outer.addWidget(scroll)
 
         self._on_backend_changed(self._backend.currentIndex())
+        self._refresh_setup_note()
         self._update_ai_rows()
         self._update_enabled_state(self._module.enabled)
 
@@ -1869,12 +2693,40 @@ class DictationSettingsWidget(QWidget):
         self._settings[key] = value
         self._module.on_settings_changed()
 
-    def _on_chip_scale_changed(self, index: int) -> None:
-        scale = float(self._chip_size.itemData(index))
+    def _on_chip_size_px_changed(self, px: int) -> None:
+        scale = px / _CHIP_DEFAULT_H
         self._save("chip_scale", scale)
         ind = getattr(self._module, "_indicator", None)
         if ind is not None:                      # live-preview the new size
             ind.set_chip_scale(scale)
+
+    def _update_chip_sync_btn(self) -> None:
+        """Colour the sync button only while it would actually change the value.
+
+        A permanently blue action icon reads as "press me"; if pressing it does
+        nothing because the size already matches the Allgemein page, that is a
+        promise the button cannot keep.  Greyed out and disabled it says
+        "already in sync" without needing a word of explanation."""
+        from withease.core import config as app_config
+        from withease.gui.ui_utils import wrap_tooltip
+        btn = getattr(self, "_chip_sync_btn", None)
+        if btn is None:
+            return
+        central = int(app_config.load_app_config().get("overlay_chip_size", 28))
+        differs = self._chip_size.value() != central
+        btn.setIcon(_core_theme.refresh_icon(
+            _core_theme.action_color() if differs else _core_theme.hint_color()))
+        btn.setEnabled(differs)
+        btn.setToolTip(wrap_tooltip(
+            _t("chip_size.sync") if differs else _t("chip_size.sync.same")))
+
+    def _on_chip_size_sync(self) -> None:
+        """Copy the shared Sticky-Keys/macro chip size from the Allgemein
+        page – QSpinBox.setValue clamps to our own (narrower) range and
+        fires valueChanged, so this reuses the normal save/preview path."""
+        from withease.core import config as app_config
+        central = int(app_config.load_app_config().get("overlay_chip_size", 28))
+        self._chip_size.setValue(central)
 
     def _reveal_section(self, section: QWidget, opened: bool) -> None:
         """When a collapsible section (KI/Erweitert) is opened, scroll it into
@@ -1948,8 +2800,217 @@ class DictationSettingsWidget(QWidget):
             self._ai_model.addItem(name)
         self._ai_model.setEditText(current)  # keep the user's choice/typed value
         self._ai_model.blockSignals(False)
-        self._ai_model.setToolTip(
-            _t("ai.model.hint") if models else _t("ai.model.none"))
+        self._ai_model.setToolTip(_wrap_tip(
+            _t("ai.model.hint") if models else _t("ai.model.none")))
+
+    # -- "what is still missing" -----------------------------------------
+
+    def _missing_steps(self) -> list[str]:
+        """The steps left before dictation can work at all, in order."""
+        steps: list[str] = []
+        if not (self._settings.get("hotkey") or "").strip():
+            steps.append(_t("setup.hotkey"))
+        backend = self._backend.currentData() if hasattr(self, "_backend")             else self._settings.get("backend", "local")
+        if backend == "local":
+            if not local_recognition_ready():
+                steps.append(_t("setup.local"))
+        else:
+            # The key of the PROVIDER that is actually selected – see
+            # DictationModule.stored_api_keys() for why not _settings.
+            provider = (self._provider.currentData()
+                        if hasattr(self, "_provider") else "")
+            if not self._module.get_api_key(provider).strip():
+                steps.append(_t("setup.key"))
+            if (self._provider.currentData() == "custom"
+                    and not (self._settings.get("base_url") or "").strip()):
+                steps.append(_t("setup.url"))
+        return steps
+
+    def _refresh_setup_note(self) -> None:
+        """Show the remaining steps – and nothing once there are none."""
+        note = getattr(self, "_setup_note", None)
+        if note is None:
+            return
+        steps = self._missing_steps()
+        if not steps:
+            note.setVisible(False)
+            return
+        numbered = "  ".join(f"{i}. {t}" for i, t in enumerate(steps, 1))
+        # The test button is always the last step: it is the only way to find
+        # out whether the setup actually took.
+        numbered += f"  {len(steps) + 1}. {_t('setup.test')}"
+        note.setText(f"{_t('setup.todo')}  {numbered}")
+        note.setStyleSheet(_warn_style())
+        note.setVisible(True)
+
+    # -- "your data" section ---------------------------------------------
+
+    @staticmethod
+    def _human_size(num: int) -> str:
+        for unit in ("B", "KB", "MB", "GB"):
+            if num < 1024 or unit == "GB":
+                return f"{num:.0f} {unit}" if unit == "B" else f"{num:.1f} {unit}"
+            num /= 1024.0
+        return f"{num:.1f} GB"
+
+    def _refresh_data_stats(self) -> None:
+        """Fill in how much of each kind of data is currently stored."""
+        if not hasattr(self, "_data_history"):
+            return
+        self._data_history.setText(
+            _t("data.history.value", n=str(self._module.history_count())))
+        count, size = self._module.training_stats()
+        self._data_training.setText(
+            _t("data.training.value", n=str(count),
+               size=self._human_size(size)))
+        self._data_dict.setText(
+            _t("data.dictionary.value", n=str(self._dict_entry_count())))
+        self._data_key.setText(_t("data.key.set") if self._module.has_api_key()
+                               else _t("data.key.unset"))
+
+    def _dict_entry_count(self) -> int:
+        try:
+            return self._module.dictionary_count()
+        except Exception:
+            return 0
+
+    def _confirm(self, text: str) -> bool:
+        return QMessageBox.question(
+            self, _t("group.data").lstrip("▸▾ "), text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+
+    # Delete first, offer to undo – see widgets/undo_bar.py for why that is
+    # kinder than asking first.  Where the core is too old to have the bar,
+    # _show_undo returns False and the old confirmation is used instead: no
+    # path may ever delete with no way back.
+
+    def _on_clear_history(self) -> None:
+        n = self._module.history_count()
+        if not n:
+            self._data_history.setText(_t("data.nothing"))
+            return
+        if not _undo_possible():
+            if not self._confirm(_t("data.confirm.history", n=str(n))):
+                return
+        removed = self._module.clear_history()
+        self._refresh_data_stats()
+
+        def undo() -> None:
+            self._module.restore_history(removed)
+            self._refresh_data_stats()
+
+        _show_undo(self, _t("undo.history", n=str(n)), undo)
+
+    def _on_clear_training(self) -> None:
+        count, size = self._module.training_stats()
+        if not count:
+            self._data_training.setText(_t("data.nothing"))
+            return
+        if not _undo_possible():
+            if not self._confirm(_t("data.confirm.training", n=str(count),
+                                    size=self._human_size(size))):
+                return
+        moved = self._module.clear_training_data()
+        self._refresh_data_stats()
+        if not moved:
+            return                       # nothing was moved – nothing to undo
+
+        def undo(path: str = moved) -> None:
+            if self._module.restore_training_data(path):
+                self._refresh_data_stats()
+
+        if _show_undo(self, _t("undo.recordings", n=str(count)), undo):
+            # Only once the offer has expired do the files really go.
+            QTimer.singleShot(
+                _UNDO_PURGE_MS,
+                lambda p=moved: self._module.purge_training_data(p))
+        else:
+            self._module.purge_training_data(moved)
+
+    def _on_clear_api_key(self) -> None:
+        if not self._module.has_api_key():
+            self._data_key.setText(_t("data.nothing"))
+            return
+        if not _undo_possible():
+            if not self._confirm(_t("data.confirm.key")):
+                return
+        old = self._module.clear_api_key()
+        self._api_key.setText("")
+        self._refresh_data_stats()
+        self._refresh_setup_note()
+
+        def undo() -> None:
+            self._module.restore_api_keys(old)
+            provider = self._provider.currentData()
+            self._api_key.setText(self._module.get_api_key(provider))
+            self._refresh_data_stats()
+            self._refresh_setup_note()
+
+        _show_undo(self, _t("undo.api_key"), undo)
+
+    def _note_model_change(self) -> None:
+        self._model_status.setText(_t("local_model.changed"))
+        self._model_status.setStyleSheet(_hint_style())
+        self._model_status.setVisible(True)
+
+    def _on_load_model(self) -> None:
+        self._model_load_btn.setEnabled(False)
+        self._model_status.setText(_t("local_model.loading"))
+        self._model_status.setStyleSheet(_hint_style())
+        self._model_status.setVisible(True)
+        self._module.load_model_now(self._model_bridge.finished.emit)
+
+    def _on_model_loaded(self, ok: bool, err: str) -> None:
+        self._model_load_btn.setEnabled(True)
+        if ok:
+            self._model_status.setText(_t("local_model.ready"))
+            self._model_status.setStyleSheet(_hint_style())
+        else:
+            self._model_status.setText(_t("local_model.failed", err=err))
+            self._model_status.setStyleSheet(_warn_style())
+
+    def _update_snippet_row(self) -> None:
+        """Show the "move them over" button only while there is still an old
+        list to move – afterwards there is one place and nothing to explain."""
+        left = len(self._module.snippets_raw())
+        self._snip_move.setVisible(bool(left))
+        if left:
+            self._snip_move.setText(_t("snippets.move", n=str(left)))
+
+    def _open_macros(self) -> None:
+        """Send the user to the macros page – where text blocks are edited."""
+        bus.publish("app.open_settings", module_id="macros")
+
+    def _move_snippets_to_macros(self) -> None:
+        """Hand this module's remaining text blocks to the macros module.
+
+        Over the bus, like the read side: neither module imports the other, and
+        if the macros module is not running nothing happens and the old entries
+        simply stay where they are."""
+        items = self._module.snippets_raw()
+        if not items:
+            return
+        moved = []
+        for item in items:
+            name = str(item.get("name", "")).strip()
+            text = str(item.get("prompt", ""))
+            if not name or not text:
+                continue
+            out: list = []
+            try:
+                bus.publish("macros.add_text_block", name=name, text=text,
+                            out=out)
+            except Exception:
+                break
+            moved.append(item)
+        if not moved:
+            self._snip_move.setText(_t("snippets.move.failed"))
+            return
+        rest = [i for i in items if i not in moved]
+        self._module.save_snippets(rest)
+        self._update_snippet_row()
+        self._open_macros()
 
     def _open_ai_actions(self) -> None:
         from settings_dialogs import AiActionsDialog
@@ -1981,15 +3042,6 @@ class DictationSettingsWidget(QWidget):
             title=_t("vocab"), intro=_t("vocab.hint"), parent=self)
         dlg.exec()
         self._dict_summary.setText(self._dict_summary_text())
-
-    def _open_enrollment(self) -> None:
-        from enrollment import PROMPTS
-        from settings_dialogs import EnrollmentDialog
-        dlg = EnrollmentDialog(
-            PROMPTS, on_start=self._module.enroll_start,
-            on_stop=self._module.enroll_stop,
-            on_discard=self._module.enroll_discard, parent=self)
-        dlg.exec()
 
     def _open_learn_text(self) -> None:
         from settings_dialogs import LearnFromTextDialog
@@ -2025,11 +3077,13 @@ class DictationSettingsWidget(QWidget):
         backend = self._backend.itemData(index)
         self._save("backend", backend)
         cloud = backend == "cloud"
-        for widget in (self._provider, self._api_key, self._model,
-                       self._key_hint):
+        for widget in (self._provider, self._api_key, self._api_key_note,
+                       self._model):
             self._form_rec.setRowVisible(widget, cloud)
+        # The model row's field is a layout (combo + "Jetzt laden"), so the
+        # row is addressed through the combo; its note is its own row.
         self._form_rec.setRowVisible(self._local_model, not cloud)
-        self._form_rec.setRowVisible(self._local_hint, not cloud)
+        self._form_rec.setRowVisible(self._local_model_note, not cloud)
         # The setup box stays visible for the whole local backend – so the
         # "Automatisch installieren" button is always reachable (also to set up
         # GPU acceleration), not only when faster-whisper is still missing.
@@ -2067,10 +3121,17 @@ class DictationSettingsWidget(QWidget):
             self._install_note.setText(_t("local.not_installed"))
             self._install_btn.setText(_t("local.install"))
 
+    def _set_install_status(self, text: str, style: str | None = None) -> None:
+        """Set the install-progress note, hiding it entirely when empty so it
+        doesn't reserve a blank line of height above the Test button."""
+        if style is not None:
+            self._install_status.setStyleSheet(style)
+        self._install_status.setText(text)
+        self._install_status.setVisible(bool(text))
+
     def _on_install_local(self) -> None:
         self._install_btn.setEnabled(False)
-        self._install_status.setStyleSheet(_hint_style())
-        self._install_status.setText(_t("local.install.running"))
+        self._set_install_status(_t("local.install.running"), _hint_style())
 
         import subprocess
         import sys
@@ -2128,21 +3189,20 @@ class DictationSettingsWidget(QWidget):
                "python": "local.setup.python",
                "packages": "local.setup.packages"}.get(stage)
         if key:
-            self._install_status.setStyleSheet(_hint_style())
-            self._install_status.setText(_t(key))
+            self._set_install_status(_t(key), _hint_style())
 
     def _on_install_finished(self, ok: bool, err: str) -> None:
         self._install_btn.setEnabled(True)
         if ok and local_recognition_ready():
-            self._install_status.setText("")
+            self._set_install_status("")
             self._backend.setItemText(1, _t("backend.local"))
             self._update_install_note()          # box stays visible
             QMessageBox.information(self, _t("local.install"),
                                     _t("local.install.done"))
         else:
-            self._install_status.setStyleSheet(_warn_style())
-            self._install_status.setText(
-                _t("local.install.failed", err=err))
+            self._set_install_status(
+                _t("local.install.failed", err=err), _warn_style())
+        self._refresh_setup_note()      # a finished install clears a step
 
     def _on_show_howto(self) -> None:
         QMessageBox.information(self, _t("local.howto"),
@@ -2171,8 +3231,14 @@ class DictationSettingsWidget(QWidget):
         btns = QHBoxLayout()
         self._deps_install_btn = QPushButton(_t("deps.install"))
         self._deps_install_btn.clicked.connect(self._on_install_deps)
-        self._deps_install_btn.setVisible(not getattr(_sys, "frozen", False))
         btns.addWidget(self._deps_install_btn)
+        # Only ever HIDE explicitly.  setVisible(True) here would pop the
+        # button up as its own top-level window for a moment: addWidget on a
+        # layout that is not itself attached to a widget yet does not reparent,
+        # so the button is still parentless at this point.  Left alone it
+        # simply becomes visible together with its parent.
+        if getattr(_sys, "frozen", False):
+            self._deps_install_btn.setVisible(False)
         deps_howto = QPushButton(_t("local.howto"))
         deps_howto.clicked.connect(self._on_show_deps_howto)
         btns.addWidget(deps_howto)
@@ -2325,6 +3391,10 @@ class DictationModule(BaseModule):
         self._trigger = ""
         self._command_trigger = ""      # optional 2nd key: force command mode
         self._active_mode = "auto"      # mode of the recording in progress
+        # One-shot "capture" requests from the core (e.g. the settings
+        # search box): the result is published on the bus instead of
+        # being typed into the focused application.
+        self._capture_token = ""
         self._active_trigger = ""       # which key started it (for hold mode)
         self._state = "idle"            # idle | recording | transcribing
         self._state_lock = threading.Lock()
@@ -2345,7 +3415,6 @@ class DictationModule(BaseModule):
         # (concurrent native inference in one process crashes hard on Windows).
         self._asr_lock = threading.Lock()
         self._last_low_words: list[str] = []   # low-confidence words (heatmap)
-        self._enroll_active = False            # guided-reading recording active
         self._live_active = False              # Vosk live streaming active
         self._vosk: Any = None
         self._live_stream: Any = None
@@ -2361,6 +3430,13 @@ class DictationModule(BaseModule):
         self._window: Any = None         # DictationWindow (created on the GUI thread)
         self._window_hwnd: int = 0       # our window's native handle (to exclude)
         self._target_hwnd: int | None = None   # app to paste into on "einfügen"
+        # What THIS module last typed straight into another app, and
+        # where.  Used to continue a sentence correctly (see
+        # _insert_text): in direct mode we cannot read the target's
+        # text, but we do know what we ourselves put there last.
+        self._last_direct_text: str = ""
+        self._last_direct_hwnd: int = 0
+        self._last_direct_at: float = 0.0
         self._reselecting = False        # waiting for the user to pick a target
         self._reselect_timer: Any = None  # QTimer restoring the UI after a pick
         self._error_memory: Any = None   # ErrorMemory (lazy, from settings)
@@ -2368,6 +3444,8 @@ class DictationModule(BaseModule):
         # Re-theme the dictation window when the app switches light<->dark while
         # it is open (Qt caches palette() colours baked into stylesheet strings).
         bus.subscribe("theme.changed", self._on_theme_changed)
+        bus.subscribe("dictation.capture_request", self._on_capture_request)
+        bus.subscribe("dictation.capture_stop", self._on_capture_stop)
 
         # Listed in the actions table / favourites / conflict checks; the key
         # itself is handled by our own hook subscription below.
@@ -2398,7 +3476,7 @@ class DictationModule(BaseModule):
         # wait while the model loads).  The local backend honours the opt-in
         # preload checkbox.  (Live is retired; its "live" value is migrated to
         # "local" on load, so it never reaches here.)
-        backend = self._settings.get("backend", "cloud")
+        backend = self._settings.get("backend", "local")
         if backend == "live":                       # safety net if not migrated
             backend = "local"
         if self._settings.get("preload_model") and backend == "local":
@@ -2446,6 +3524,7 @@ class DictationModule(BaseModule):
         # overlay window.  It subscribes to dictation.state on creation.
         if self._indicator is None:
             self._indicator = DictationIndicator()
+            self._indicator.register_with_coordinator()
             self._indicator.set_chip_scale(
                 float(self._settings.get("chip_scale", 1.0)))
 
@@ -2454,7 +3533,54 @@ class DictationModule(BaseModule):
     # ------------------------------------------------------------------
 
     def _window_mode(self) -> bool:
+        # A one-shot capture (settings search) never uses the dictation
+        # window: the text goes straight back to whoever asked for it, so
+        # popping the window open would be pure noise.  Guarding here covers
+        # every window path at once (open on record, route the transcript,
+        # live mode) instead of one guard per call site.
+        if self._capture_token:
+            return False
         return self._settings.get("output_mode", "window") == "window"
+
+    def _on_capture_request(self, token: str = "", **_kw: Any) -> None:
+        """Record once and hand the text back over the bus (see
+        `dictation.capture_result`).  Used by the settings search so the user
+        can speak the term instead of typing it."""
+        if not self.enabled or not token:
+            return
+        if self._state != "idle" or self._live_active:
+            bus.publish("dictation.capture_result", token=token, text="")
+            return
+        self._capture_token = token
+        self._active_mode = "capture"
+        threading.Thread(target=self._start_recording, daemon=True).start()
+
+    def _on_capture_stop(self, token: str = "", **_kw: Any) -> None:
+        """Stop a running capture (the search's microphone button was pressed
+        a second time).  Same path the hotkey takes, so the transcript still
+        goes back over the bus."""
+        if not token or token != self._capture_token:
+            return
+        if self._state == "recording":
+            threading.Thread(target=self._stop_and_transcribe,
+                             daemon=True).start()
+
+    def _finish_capture(self, text: str) -> str:
+        """Answer a pending capture request (see _on_capture_request).
+
+        Always called on every path out of _stop_and_transcribe, including the
+        "too short" and error paths – otherwise the requester would wait for a
+        reply that never comes."""
+        if not self._capture_token:
+            return ""
+        token, self._capture_token = self._capture_token, ""
+        self._active_mode = "auto"
+        # A search term is not a sentence: the recogniser (and our own
+        # sentence post-processing) ends it with "." / "?" / "!", which would
+        # be searched for literally and match nothing.
+        text = (text or "").strip().rstrip(".!?,;: ").strip()
+        bus.publish("dictation.capture_result", token=token, text=text)
+        return token
 
     def _on_theme_changed(self, **_kw: Any) -> None:
         """Live light<->dark switch: re-resolve the window's palette stylesheets
@@ -2485,12 +3611,14 @@ class DictationModule(BaseModule):
                     on_history_toggle=self._save_history_visible,
                     on_ai_toggle=self._save_ai_visible,
                     ai_actions=self.ai_actions(),
+                    on_lookup_snippet=self.lookup_snippet,
                     history_visible=bool(
                         self._settings.get("history_visible", False)),
                     ai_visible=bool(
                         self._settings.get("ai_panel_visible", True)),
                     geometry=self._settings.get("win_geo"),
-                    history=list(self._settings.get("history", [])),
+                    history=list(self._settings.get("history", []))[
+                        :max(0, int(self._settings.get("history_limit", 20)))],
                     t=_t)
                 # Cache our native handle (on the GUI thread) so target capture
                 # can exclude our own window.
@@ -2503,10 +3631,13 @@ class DictationModule(BaseModule):
         return self._window
 
     def _save_history(self, items: list[str]) -> None:
-        """Persist the dictation history across sessions (newest first, capped
-        by the window).  Stored in the module's settings, which the core writes
-        to disk on settings change."""
-        self._settings["history"] = list(items)
+        """Persist the dictation history across sessions (newest first).
+
+        Capped by the user's own limit: dictated text is kept in plain text in
+        the profile, so "how much of it is kept" has to be their decision – 0
+        means nothing is stored at all."""
+        limit = int(self._settings.get("history_limit", 20))
+        self._settings["history"] = list(items)[:max(0, limit)]
         self.on_settings_changed()
 
     # ------------------------------------------------------------------
@@ -2519,12 +3650,25 @@ class DictationModule(BaseModule):
             self._error_memory = ErrorMemory(self._settings.get("error_memory"))
         return self._error_memory
 
-    def _learn_correction(self, old: str, new: str) -> None:
-        """Called by the window whenever a word was corrected."""
+    def _learn_correction(self, old: str, new: str) -> str:
+        """Called by the window whenever a word was corrected.
+
+        Returns which stage the correction reached, so the window can say so
+        instead of leaving the rule invisible:
+
+        ``"always"``     – confirmed twice, applied from now on in every case
+        ``"uncertain"``  – noted; applied where recognition is unsure
+        ``""``           – not learnable (a phrase, or a word under 3 letters)
+        """
         mem = self._memory()
+        before = mem.strength(old)
         mem.learn(old, new)
+        after = mem.strength(old)
         self._settings["error_memory"] = mem.to_dict()
         self.on_settings_changed()
+        if after <= before:
+            return ""                    # the memory refused it
+        return "always" if after >= 2 else "uncertain"
 
     def remove_correction(self, key: str) -> None:
         mem = self._memory()
@@ -2690,8 +3834,6 @@ class DictationModule(BaseModule):
         """Hook-thread callback – must return fast, never block."""
         if injected or (not self._trigger and not self._command_trigger):
             return False
-        if self._enroll_active:      # guided reading owns the microphone
-            return False
         if is_altgr_fake_lctrl(vk, scan):
             return False
 
@@ -2841,10 +3983,17 @@ class DictationModule(BaseModule):
         threading.Thread(target=work, daemon=True,
                          name="dictation-media-resume").start()
 
-    def _error(self, detail: str) -> None:
+    def _error(self, detail: str, fixable: bool = False) -> None:
+        """Report a failure.  ``fixable`` marks a CONFIGURATION problem.
+
+        A missing API key or an uninstalled recogniser is not a passing glitch
+        – it stays broken until someone changes a setting.  Such a message
+        must therefore not delete itself after a few seconds, and clicking it
+        opens the page where it can be fixed."""
         _log.error("dictation error: %s", detail)
         self._set_state("idle")
-        bus.publish("dictation.state", state="error", detail=detail)
+        bus.publish("dictation.state", state="error", detail=detail,
+                    fixable=fixable)
         if self._window is not None:
             self._window.set_state("error")
 
@@ -2855,21 +4004,53 @@ class DictationModule(BaseModule):
     def _start_recording(self) -> None:
         if self._window_mode():
             self._capture_target()          # remember the app to paste into
+            selected = ""
+            if bool(self._settings.get("take_selection", False)):
+                # Bring a selection from the target app into the window, so an
+                # existing sentence can be edited or continued by voice instead
+                # of being retyped.  Off by default on purpose – see the
+                # setting's own explanation.
+                try:
+                    selected = self._copy_selection_from_target()
+                except Exception:
+                    _log.exception("could not read the target's selection")
+                    selected = ""
             if self._window is not None:
                 self._window.request_open()  # show the window (thread-safe)
+                if selected:
+                    self._window.take_selected_text(selected)
         with self._state_lock:
             if self._state != "idle":
                 return
             try:
                 import sounddevice as sd
             except Exception:
-                self._error(_t("err.no_audio_lib"))
+                self._error(_t("err.no_audio_lib"), fixable=True)
                 return
 
             self._audio_chunks = []
 
+            self._live_level = 0.0
+            self._level_sent = 0.0
+
             def callback(indata, _frames, _time, _status) -> None:
-                self._audio_chunks.append(bytes(indata))
+                block = bytes(indata)
+                self._audio_chunks.append(block)
+                # Publish the input level a few times a second.  Seeing that
+                # the microphone actually picks you up WHILE you speak is the
+                # thing a distant microphone makes impossible to judge – and
+                # far more useful than finding out afterwards.
+                if audioop is None:
+                    return
+                try:
+                    peak = audioop.max(block, 2) / 32768.0
+                except Exception:
+                    return
+                self._live_level = max(self._live_level * 0.6, peak)
+                now = time.monotonic()
+                if now - self._level_sent >= 0.1:
+                    self._level_sent = now
+                    bus.publish("dictation.level", level=self._live_level)
 
             try:
                 device = resolve_input_device(
@@ -2894,6 +4075,24 @@ class DictationModule(BaseModule):
                 self._max_timer.daemon = True
                 self._max_timer.start()
 
+    # The stop key is pressed AFTER the last word, so the tail of every
+    # recording holds the click of that very key press – exactly the kind of
+    # short noise burst Whisper turns into an invented word.  Cutting it is
+    # cheap and removes the cause instead of filtering the symptom.
+    _TAIL_TRIM_S = 0.25
+
+    def _measure_level(self, raw: bytes, width: int = 2) -> float:
+        """Peak level of the recording as a 0..1 fraction of full scale.
+
+        Used only for the "microphone very quiet" hint – a quiet, far-field
+        recording is the situation in which Whisper hallucinates most."""
+        if audioop is None or not raw:
+            return -1.0
+        try:
+            return audioop.max(raw, width) / 32768.0
+        except Exception:
+            return -1.0
+
     def _close_stream(self) -> bytes:
         """Stop the stream and return the recorded WAV bytes."""
         if self._max_timer:
@@ -2908,11 +4107,20 @@ class DictationModule(BaseModule):
             self._stream = None
         raw = b"".join(self._audio_chunks)
         self._audio_chunks = []
+        rate = getattr(self, "_rec_rate", _SAMPLE_RATE)
+        channels = getattr(self, "_rec_channels", _CHANNELS)
+        self._last_level = self._measure_level(raw)
+        # Drop the final quarter second (the stop key's own click).  Never cut
+        # into a recording that is barely longer than the trim itself.
+        frame = 2 * channels
+        cut = int(self._TAIL_TRIM_S * rate) * frame
+        if cut and len(raw) > cut * 3:
+            raw = raw[:-cut]
         buf = io.BytesIO()
         with wave.open(buf, "wb") as w:
-            w.setnchannels(getattr(self, "_rec_channels", _CHANNELS))
+            w.setnchannels(channels)
             w.setsampwidth(2)
-            w.setframerate(getattr(self, "_rec_rate", _SAMPLE_RATE))
+            w.setframerate(rate)
             w.writeframes(raw)
         return buf.getvalue()
 
@@ -2923,6 +4131,30 @@ class DictationModule(BaseModule):
             self._close_stream()
             self._set_state("idle")
 
+    # Below this peak level a recording is quiet enough that Whisper starts
+    # inventing text; measured as a fraction of full scale.
+    _QUIET_LEVEL = 0.12
+
+    def _maybe_warn_quiet_mic(self) -> None:
+        """Say ONCE that the microphone is very quiet.
+
+        A far-field microphone (webcam, notebook lid) is the single biggest
+        cause of invented words, and it is invisible from the settings: nothing
+        looks wrong, the text is just occasionally made up.  Saying it once,
+        with what to do about it, saves guessing.  Never repeated – the flag is
+        stored with the settings."""
+        level = getattr(self, "_last_level", -1.0)
+        if level < 0 or level >= self._QUIET_LEVEL:
+            return
+        if self._settings.get("quiet_mic_warned"):
+            return
+        self._settings["quiet_mic_warned"] = True
+        self.on_settings_changed()
+        # Shown through the status chip the module already owns, not through a
+        # dialog: the recognition is still running and must not be interrupted.
+        _log.info("dictation: quiet microphone (peak %.2f)", level)
+        bus.publish("dictation.state", state="warn", detail=_t("mic.quiet"))
+
     def _stop_and_transcribe(self) -> None:
         with self._state_lock:
             if self._state != "recording":
@@ -2931,16 +4163,18 @@ class DictationModule(BaseModule):
             duration = time.monotonic() - self._record_started
             if duration < 0.4 or len(wav) < 8000:
                 self._set_state("idle")  # too short to contain speech
+                self._say_nothing_heard("short")
+                self._finish_capture("")
                 return
             self._set_state("transcribing")
+        self._maybe_warn_quiet_mic()
         try:
             text = self.transcribe(wav)
         except Exception as exc:
-            self._error(str(exc)[:120])
+            self._error(str(exc)[:120], fixable=isinstance(exc, ConfigError))
+            self._finish_capture("")
             return
         text = (text or "").strip()
-        if text and self._settings.get("collect_training"):
-            self._save_training_sample(wav, text)   # opt-in data for later
         if text and not self._settings.get("raw_recognition"):
             # „reine Erkennung“ off → apply the normal refinements.
             # User dictionary (spoken → written) is deterministic user intent.
@@ -2961,10 +4195,20 @@ class DictationModule(BaseModule):
             # Restore the „?" on polite questions Whisper ended with a period
             # („Können Sie …") – only on real dictation, not commands.
             if self._active_mode != "command":
-                from postprocess import fix_casing, fix_question_marks
+                from postprocess import (fix_casing, fix_dates,
+                                         fix_question_marks)
                 text = fix_casing(text)          # undo stray capitalisation
                 text = fix_question_marks(text)
+                if self._settings.get("numeric_dates", True):
+                    # "20. August 2026" → "20.08.2026": people SAY a date the
+                    # long way and want to READ it short.
+                    text = fix_dates(text)
         self._set_state("idle")
+        if self._capture_token:
+            # One-shot capture (settings search): answer the requester and
+            # never type into whatever app happens to be focused.
+            self._finish_capture(text)
+            return
         if text:
             if self._window_mode() and self._window is not None:
                 # Route into the dictation window with the key's mode
@@ -2976,89 +4220,144 @@ class DictationModule(BaseModule):
                 self._window.handle_transcript(text, self._active_mode, low)
             else:
                 self._insert_text(text)
+        else:
+            # Never end in silence.  An empty result is indistinguishable from
+            # "the program is broken" unless it says something, and with a
+            # far-field microphone it is the most common outcome of all.
+            self._say_nothing_heard("empty")
+
+    def _say_nothing_heard(self, why: str) -> None:
+        """Tell the user that nothing came of that recording, and why."""
+        if self._capture_token:
+            return                      # the requester handles its own feedback
+        if why == "short":
+            detail = _t("nothing.short")
+        elif getattr(self, "_last_level", 1.0) < self._QUIET_LEVEL:
+            detail = _t("nothing.quiet")
+        else:
+            detail = _t("nothing.heard")
+        bus.publish("dictation.state", state="warn", detail=detail)
+
+    # -- what this module stores about the user --------------------------
+
+    def training_stats(self) -> tuple[int, int]:
+        """``(recordings, bytes)`` currently stored as training data.
+
+        Written for every dictation while the option is on, with no limit and –
+        until now – no way to see or remove them.  1 868 recordings / 1.4 GB is
+        not a hypothetical number."""
+        folder = self._training_dir()
+        count = total = 0
+        for root, _dirs, files in os.walk(folder):
+            for name in files:
+                try:
+                    total += os.path.getsize(os.path.join(root, name))
+                except OSError:
+                    continue
+                if name.lower().endswith(".wav"):
+                    count += 1
+        return count, total
+
+    def clear_training_data(self) -> str:
+        """Put every stored recording aside.  Returns the folder it was moved
+        to, or "" if there was nothing (or the move failed).
+
+        Moved, not deleted: renaming a folder is instant even for gigabytes,
+        and it is what makes "Rückgängig" possible at all.  purge_training_
+        data() is what finally removes it, once the undo offer has expired."""
+        import datetime
+        folder = self._training_dir()
+        if not os.path.isdir(folder):
+            return ""
+        aside = f"{folder}.geloescht-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+        try:
+            os.rename(folder, aside)
+        except OSError:
+            _log.exception("could not move the recordings aside")
+            return ""
+        return aside
+
+    def restore_training_data(self, aside: str) -> bool:
+        """Move a set-aside recordings folder back."""
+        folder = self._training_dir()
+        if not aside or not os.path.isdir(aside) or os.path.exists(folder):
+            return False
+        try:
+            os.rename(aside, folder)
+            return True
+        except OSError:
+            _log.exception("could not move the recordings back")
+            return False
+
+    def purge_training_data(self, aside: str) -> None:
+        """Finally remove a set-aside folder (the undo offer has expired)."""
+        import shutil
+        if aside and os.path.isdir(aside):
+            shutil.rmtree(aside, ignore_errors=True)
+
+    def history_count(self) -> int:
+        return len(self._settings.get("history", []) or [])
+
+    def clear_history(self) -> list:
+        """Forget every stored dictation (they are plain text in the profile).
+
+        Returns the removed entries so they can be put back – deleting first
+        and offering to undo beats asking first (see widgets/undo_bar.py)."""
+        old = list(self._settings.get("history", []) or [])
+        self._settings["history"] = []
+        self.on_settings_changed()
+        if self._window is not None:
+            try:
+                self._window.clear_history_now()
+            except Exception:
+                pass
+        return old
+
+    def restore_history(self, entries: list) -> None:
+        self._settings["history"] = list(entries)
+        self.on_settings_changed()
+        if self._window is not None:
+            try:
+                self._window.reload_history(list(entries))
+            except Exception:
+                pass
+
+    def stored_api_keys(self) -> dict:
+        """Every provider key currently on this device.
+
+        The keys live in the app config (``dictation_api_keys``), written by
+        set_api_key() – NOT in ``self._settings["api_key"]``, which nothing has
+        written since the cloud fields were reworked.  Reading the wrong place
+        made "Deine Daten" report "keiner gespeichert" while a key sat in
+        app.json, and made its delete button a no-op."""
+        cfg = app_config.load_app_config()
+        return {p: k for p, k in (cfg.get("dictation_api_keys", {}) or {}).items()
+                if (k or "").strip()}
+
+    def has_api_key(self) -> bool:
+        return bool(self.stored_api_keys())
+
+    def clear_api_key(self) -> dict:
+        """Remove every stored provider key.  Returns them so the caller can
+        put them back (see the undo bar)."""
+        old = self.stored_api_keys()
+        cfg = app_config.load_app_config()
+        cfg["dictation_api_keys"] = {}
+        app_config.save_app_config(cfg)
+        self._settings["api_key"] = ""       # retire the stale legacy field
+        self.on_settings_changed()
+        return old
+
+    def restore_api_keys(self, keys: dict) -> None:
+        if not keys:
+            return
+        cfg = app_config.load_app_config()
+        cfg.setdefault("dictation_api_keys", {}).update(keys)
+        app_config.save_app_config(cfg)
+        self.on_settings_changed()
 
     def _training_dir(self) -> str:
         return os.path.join(str(app_config.CONFIG_DIR), "dictation_training")
-
-    # -- guided reading / enrollment (gold training pairs) ---------------
-
-    def enroll_start(self) -> bool:
-        if self._state != "idle" or self._enroll_active:
-            return False
-        try:
-            import sounddevice as sd
-        except Exception:
-            return False
-        self._audio_chunks = []
-        try:
-            device = resolve_input_device(self._settings.get("input_device"))
-        except Exception:
-            device = None
-        try:
-            self._stream, self._rec_rate, self._rec_channels = open_input_stream(
-                sd, device,
-                lambda indata, *a: self._audio_chunks.append(bytes(indata)))
-        except Exception:
-            self._stream = None
-            return False
-        self._enroll_active = True
-        self._set_state("recording")
-        return True
-
-    def enroll_stop(self, prompt: str) -> str:
-        """Stop the recording and save it.  Returns the saved sample's id (so a
-        re-take can replace it), or "" on failure/too-short."""
-        if not self._enroll_active:
-            return ""
-        self._enroll_active = False
-        wav = self._close_stream()
-        self._set_state("idle")
-        if len(wav) < 8000:
-            return ""        # too short to be useful
-        return self._save_enrollment(wav, prompt)
-
-    def _save_enrollment(self, wav_bytes: bytes, prompt: str) -> str:
-        try:
-            import datetime
-            folder = os.path.join(self._training_dir(), "enrollment")
-            os.makedirs(folder, exist_ok=True)
-            stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-            with open(os.path.join(folder, stamp + ".wav"), "wb") as f:
-                f.write(wav_bytes)
-            with open(os.path.join(folder, stamp + ".txt"), "w",
-                      encoding="utf-8") as f:
-                f.write(prompt)
-            return stamp
-        except Exception:
-            _log.exception("could not save enrollment sample")
-            return ""
-
-    def enroll_discard(self, stamp: str) -> None:
-        """Delete a saved enrollment take (used when re-recording a sentence)."""
-        if not stamp:
-            return
-        folder = os.path.join(self._training_dir(), "enrollment")
-        for ext in (".wav", ".txt"):
-            try:
-                os.remove(os.path.join(folder, stamp + ext))
-            except OSError:
-                pass
-
-    def _save_training_sample(self, wav_bytes: bytes, text: str) -> None:
-        """Opt-in: store (audio, recognised text) pairs locally so a personal
-        fine-tuning (voice adaptation) becomes possible later, e.g. on a GPU."""
-        try:
-            import datetime
-            folder = self._training_dir()
-            os.makedirs(folder, exist_ok=True)
-            stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-            with open(os.path.join(folder, stamp + ".wav"), "wb") as f:
-                f.write(wav_bytes)
-            with open(os.path.join(folder, stamp + ".txt"), "w",
-                      encoding="utf-8") as f:
-                f.write(text)
-        except Exception:
-            _log.exception("could not save training sample")
 
     # ------------------------------------------------------------------
     # Live dictation (Vosk stream + Whisper polish)
@@ -3163,7 +4462,7 @@ class DictationModule(BaseModule):
         try:
             import sounddevice as sd
         except Exception:
-            self._error(_t("err.no_audio_lib"))
+            self._error(_t("err.no_audio_lib"), fixable=True)
             return
         use_vosk = bool(self._settings.get("live_use_vosk", False))
         if use_vosk:
@@ -3466,7 +4765,7 @@ class DictationModule(BaseModule):
     def transcribe(self, wav_bytes: bytes) -> str:
         """Transcribe WAV audio using the configured backend (blocking)."""
         self._last_low_words = []
-        if self._settings.get("backend", "cloud") == "local":
+        if self._settings.get("backend", "local") == "local":
             return self._transcribe_local(wav_bytes)
         return self._transcribe_cloud(wav_bytes)
 
@@ -3732,6 +5031,11 @@ class DictationModule(BaseModule):
         """Words to bias recognition toward, so the user's terms come out right
         immediately: the glossary + confirmed words + learned corrections."""
         words = list(self.glossary_words())
+        # The NAMES of the text blocks, so Whisper hears "Grußformel" instead
+        # of the far more common word "Großformel".  Biasing the recogniser is
+        # the real cure; the fuzzy match in lookup_snippet is only the net
+        # underneath it.
+        words += [name for name, _text in self._all_text_blocks()]
         words += list(self._settings.get("confirmed_words", []))[-40:]
         words += list(self._memory().substitutions().values())
         words += [w for _s, w in self.spoken_forms()]     # written forms
@@ -3775,9 +5079,9 @@ class DictationModule(BaseModule):
 
         base_url, style, model, api_key = self._cloud_config()
         if not base_url:
-            raise RuntimeError(_t("err.no_url"))
+            raise ConfigError(_t("err.no_url"))
         if not api_key:
-            raise RuntimeError(_t("err.no_key"))
+            raise ConfigError(_t("err.no_key"))
 
         url = f"{base_url}/audio/transcriptions"
         headers = {"Authorization": f"Bearer {api_key}"}
@@ -3840,7 +5144,7 @@ class DictationModule(BaseModule):
             try:
                 from faster_whisper import WhisperModel
             except ImportError:
-                raise RuntimeError(_t("err.no_local"))
+                raise ConfigError(_t("err.no_local"))
             if self._local_model is None or self._local_model_name != model_name:
                 device, compute_type = self._whisper_device()
                 threads = max(1, (os.cpu_count() or 4) // 2)
@@ -3851,6 +5155,24 @@ class DictationModule(BaseModule):
                     cpu_threads=threads)
                 self._local_model_name = model_name
         return self._local_model
+
+    def load_model_now(self, on_done) -> None:
+        """Download/load the configured local model in the background.
+
+        Switching the model in the dropdown only stores a name – the multi-
+        hundred-megabyte file is fetched lazily on the next dictation, where
+        the only feedback is the chip saying "Erkenne Text …" for minutes.
+        This makes that step explicit and visible instead.
+        ``on_done(ok, error)`` is called from the worker thread."""
+        def run() -> None:
+            try:
+                self._ensure_model_loaded()
+                on_done(True, "")
+            except Exception as exc:
+                _log.exception("model load failed")
+                on_done(False, str(exc)[:200])
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _preload_model(self) -> None:
         """Load the model ahead of time so the first dictation is fast."""
@@ -3891,7 +5213,7 @@ class DictationModule(BaseModule):
         because the frozen interpreter has no faster-whisper of its own."""
         import local_runtime
         if not local_runtime.runtime_ready():
-            raise RuntimeError(_t("err.no_local"))
+            raise ConfigError(_t("err.no_local"))
         model = (self._live_model_name() if live
                  else self._settings.get("local_model", "base"))
         threads = max(1, (os.cpu_count() or 4) // 2)
@@ -3899,13 +5221,23 @@ class DictationModule(BaseModule):
         prompt = (None if live
                   else (self._initial_prompt() if language == "de" else None))
         hotwords = self._hotwords() or None
-        hall = _hallucination_params(
-            self._settings.get("hallucination_filter", "normal"))
+        hall = self._hall_params(wav_bytes, live=live)
         text, low = self._whisper_proc.transcribe(
             wav_bytes, model=model, threads=threads, language=language,
             hotwords=hotwords, initial_prompt=prompt, live=live, hall=hall)
         self._last_low_words = low
         return self._postprocess_asr(text)
+
+    def _hall_params(self, wav_bytes: bytes, *, live: bool = False) -> dict:
+        """Hallucination-filter settings for THIS recording.
+
+        See _effective_hall_level: a short command must not be judged by rules
+        written for the tail of a long dictation."""
+        level = _effective_hall_level(
+            self._settings.get("hallucination_filter", "strong"),
+            is_command=(self._active_mode == "command" and not live),
+            seconds=_clip_seconds(wav_bytes))
+        return _hallucination_params(level)
 
     def _transcribe_local(self, wav_bytes: bytes, *, live: bool = False) -> str:
         # Packaged .exe (no in-process faster-whisper): use the local runtime.
@@ -3927,8 +5259,7 @@ class DictationModule(BaseModule):
         # Native ASR must never run concurrently (see _asr_lock): a second
         # decode – or a live Vosk chunk – running at the same time crashes the
         # whole process.  Serialise every Whisper decode here.
-        params = _hallucination_params(
-            self._settings.get("hallucination_filter", "normal"))
+        params = self._hall_params(wav_bytes, live=live)
         # hallucination_silence_threshold skips silent gaps where Whisper invents
         # text; only used for the batch path (the live polish keeps its own).
         hall_sil = None if live else params.get("hall_sil")
@@ -4158,6 +5489,88 @@ class DictationModule(BaseModule):
                 out.append((str(a["name"]).strip(), str(a["prompt"]).strip()))
         return out
 
+    def snippets_raw(self) -> list[dict]:
+        """The saved text blocks as editable dicts (for the settings editor)."""
+        return [dict(a) for a in self._settings.get("snippets", [])]
+
+    def save_snippets(self, items: list[dict]) -> None:
+        self._settings["snippets"] = [
+            {"name": str(a.get("name", "")).strip(),
+             "prompt": str(a.get("prompt", "")).strip()}
+            for a in items
+            if str(a.get("name", "")).strip() and str(a.get("prompt", "")).strip()]
+        self.on_settings_changed()
+
+    def macro_text_blocks(self) -> list[tuple[str, str]]:
+        """Text macros from the macros module, asked for over the bus.
+
+        A named piece of text is the same thing whether it is fired by a key in
+        macro mode or spoken while dictating, so it should only have to be
+        entered once.  The bus is synchronous: publish with an empty list, read
+        the answer.  If the macros module is not running the list simply stays
+        empty – no import, no dependency."""
+        out: list[tuple[str, str]] = []
+        try:
+            bus.publish("macros.collect_text_blocks", out=out)
+        except Exception:
+            return []
+        return out
+
+    def _all_text_blocks(self) -> list[tuple[str, str]]:
+        """Every named text: the macros first, then this module's own list."""
+        items = list(self.macro_text_blocks())
+        items += [(str(a.get("name", "")), str(a.get("prompt", "")))
+                  for a in (self._settings.get("snippets", []) or [])]
+        return [(n, t) for n, t in items if n and t]
+
+    def lookup_snippet(self, spoken: str) -> tuple[str | None, list[str]]:
+        """Find a text block by its spoken name.
+
+        Looks in the MACROS first (that is where most people already have their
+        greeting formula) and then in this module's own list, so the same name
+        works in macro mode and while dictating.  Returns ``(text, known
+        names)``.  Matched case-, space- and „ß"-insensitively because the name
+        arrives from speech recognition, not from typing; a prefix match is
+        accepted so "füge Gruß ein" also finds "Grußformel".
+        """
+        blocks = self._all_text_blocks()
+        items = [{"name": n, "prompt": t} for n, t in blocks]
+        names = [n for n, _t in blocks]
+
+        def norm(x: str) -> str:
+            # Fold everything speech recognition writes inconsistently, so the
+            # NAME still matches however it came out: case, „ß“ vs „ss“, and
+            # any separator at all.  A hyphen is the important one – a macro
+            # called "E-Mail Proton" arrives from Whisper as "E-Mail Proton"
+            # but reaches us as "e mail proton", because the command grammar
+            # turns punctuation into spaces.  Comparing only letters and
+            # digits makes both spellings the same name.
+            x = str(x).lower().replace("ß", "ss")
+            return "".join(ch for ch in x if ch.isalnum())
+
+        want = norm(spoken)
+        if not want:
+            return None, names
+        for a in items:
+            if norm(a.get("name", "")) == want:
+                return str(a.get("prompt", "")), names
+        for a in items:
+            n = norm(a.get("name", ""))
+            if n.startswith(want) or want.startswith(n):
+                return str(a.get("prompt", "")), names
+        # Last resort: allow a couple of wrong letters.  "Grußformel" and
+        # "Großformel" differ by ONE character and sound nearly identical, so
+        # the recogniser gets it wrong often.  Only accepted when exactly one
+        # name is that close – with two near-misses guessing would be worse
+        # than saying so.
+        from editor_actions import _levenshtein
+        tol = 1 if len(want) <= 6 else 2
+        close = [a for a in items
+                 if _levenshtein(norm(a.get("name", "")), want) <= tol]
+        if len(close) == 1:
+            return str(close[0].get("prompt", "")), names
+        return None, names
+
     def ai_actions_raw(self) -> list[dict]:
         """The configured actions as editable dicts (for the settings editor)."""
         self.ai_actions()      # ensure the defaults are seeded once
@@ -4236,17 +5649,52 @@ class DictationModule(BaseModule):
     # Text insertion
     # ------------------------------------------------------------------
 
+    _DIRECT_JOIN_MAX_AGE = 15 * 60      # seconds; after that, assume a new text
+
+    def _foreground_hwnd(self) -> int:
+        try:
+            import ctypes
+            return int(ctypes.windll.user32.GetForegroundWindow())
+        except Exception:
+            return 0
+
+    def _join_direct(self, text: str) -> str:
+        """Prepare `text` to continue what we last typed into THIS window.
+
+        Direct mode cannot read the target application's text, so the previous
+        utterance we inserted ourselves is the best available evidence.  Only
+        used while the same window is still in front and the last insert was
+        recent – otherwise the text is left exactly as spoken."""
+        if not bool(self._settings.get("join_dictations", True)):
+            return text
+        if not self._last_direct_text:
+            return text
+        if self._foreground_hwnd() != self._last_direct_hwnd:
+            return text                     # a different app: start fresh
+        if time.monotonic() - self._last_direct_at > self._DIRECT_JOIN_MAX_AGE:
+            return text
+        from postprocess import join_dictation
+        return join_dictation(self._last_direct_text, text)
+
+    def _remember_direct(self, text: str) -> None:
+        self._last_direct_text = text
+        self._last_direct_hwnd = self._foreground_hwnd()
+        self._last_direct_at = time.monotonic()
+
     def _insert_text(self, text: str) -> None:
         if not PYNPUT_AVAILABLE:
             return
+        text = self._join_direct(text)
         method = self._settings.get("insert_method", "clipboard")
         keep = bool(self._settings.get("keep_in_clipboard", False))
         if method == "type":
             KeyController().type(text)
             if keep:
                 self._set_clipboard(text)
+            self._remember_direct(text)
             return
         self._paste_via_clipboard(text, keep=keep)
+        self._remember_direct(text)
 
     @staticmethod
     def _clipboard_funcs():
@@ -4307,6 +5755,40 @@ class DictationModule(BaseModule):
             set_text(text)
         except Exception:
             pass
+
+    @classmethod
+    def _copy_selection_from_target(cls) -> str:
+        """Fetch whatever is selected in the foreground app, via Ctrl+C.
+
+        Returns the selected text, or "" when nothing was selected.  The
+        clipboard is put back exactly as it was: an unrelated copy the user
+        made earlier must not be destroyed just because a dictation started.
+
+        "Nothing was selected" is detected by the clipboard NOT changing –
+        Ctrl+C on an empty selection leaves it alone in every app we care
+        about.  Not perfect, but it never invents text.
+        """
+        get_text, set_text = cls._clipboard_funcs()
+        before = get_text()
+        # An unlikely marker, NOT a control character: some clipboard
+        # consumers truncate at a NUL byte, which would make the probe
+        # look like an empty clipboard every time.
+        marker = "\u200bwithease-probe\u200b"
+        # A marker first, so an unchanged clipboard really means "nothing was
+        # copied" instead of "the same text was copied again".
+        if not set_text(marker):
+            return ""
+        ctrl = KeyController()
+        ctrl.press(PynputKey.ctrl)
+        ctrl.press("c")
+        ctrl.release("c")
+        ctrl.release(PynputKey.ctrl)
+        time.sleep(0.12)
+        got = get_text()
+        set_text(before if before is not None else "")
+        if not got or got == marker:
+            return ""
+        return got
 
     @classmethod
     def _paste_via_clipboard(cls, text: str, keep: bool = False) -> None:

@@ -50,10 +50,10 @@ class _KeyChip(QWidget):
         layout.setSpacing(4)
         layout.addWidget(QLabel(label))
 
-        from withease.gui.ui_utils import em
         btn = QPushButton("✕")
-        btn.setFixedSize(em(1.4), em(1.4))
+        # Size comes from the central QSS (accessible click target).
         btn.setProperty("iconBtn", True)      # tight padding so ✕ fits
+        btn.setProperty("dangerIcon", True)   # red ✕ (theme QSS)
         btn.clicked.connect(lambda: self.removed.emit(self._key))
         layout.addWidget(btn)
 

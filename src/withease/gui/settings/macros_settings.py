@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QKeyEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -31,7 +31,11 @@ from PySide6.QtWidgets import (
 
 from withease.core.event_bus import bus
 from withease.core.i18n import tr
+from withease.gui.widgets.undo_bar import show_undo
+from withease.gui.ui_utils import (label_with_hint, mark_danger,
+                                  set_option_hint)
 from withease.gui import theme
+from withease.gui.widgets.resize_strip import ResizeStrip
 
 if TYPE_CHECKING:
     from withease.modules.macros import Macro, MacrosModule
@@ -128,7 +132,8 @@ class _KeyRecorder(QWidget):
 
         self._clear_btn = QPushButton("✕")
         self._clear_btn.setProperty("iconBtn", True)   # tight padding so ✕ fits
-        self._clear_btn.setFixedWidth(max(34, em(2.0)))
+        self._clear_btn.setProperty("dangerIcon", True)   # red ✕ (theme QSS)
+        # Size comes from the central QSS (accessible click target).
         self._clear_btn.setToolTip(tr("module.macros.dialog.key.clear"))
         self._clear_btn.clicked.connect(self._clear)
         self._clear_btn.setVisible(False)
@@ -420,7 +425,9 @@ class _StepDialog(QDialog):
         wnl = QVBoxLayout(win_page)
         wnl.setContentsMargins(0, 0, 0, 0)
         wnl.setSpacing(4)
-        wnl.addWidget(QLabel(tr("module.macros.step.window.title_label")))
+        wnl.addWidget(label_with_hint(
+            tr("module.macros.step.window.title_label"),
+            tr("module.macros.step.window.title_label.hint")))
         win_row = QHBoxLayout()
         win_row.setSpacing(4)
         self._window_combo = QComboBox()
@@ -634,7 +641,10 @@ class _MacroDialog(QDialog):
 
         self._key_rec = _KeyRecorder()
         self._key_rec.key_changed.connect(self._check_duplicate)
-        form.addRow(tr("module.macros.dialog.key"), self._key_rec)
+        form.addRow(
+            label_with_hint(tr("module.macros.dialog.key"),
+                            tr("module.macros.dialog.key.hint")),
+            self._key_rec)
 
         self._dup_warning = QLabel()
         self._dup_warning.setStyleSheet(theme.warn_style())
@@ -645,6 +655,11 @@ class _MacroDialog(QDialog):
         self._type_box = QComboBox()
         for t in _TYPES:
             self._type_box.addItem(tr(f"module.macros.type.{t}"), t)
+            if t == "text":
+                # Text macros double as spoken text blocks in the dictation
+                # add-on, so the same greeting formula only has to exist once.
+                set_option_hint(self._type_box, self._type_box.count() - 1,
+                                tr("module.macros.type.text.hint"))
         self._type_box.currentIndexChanged.connect(self._on_type_changed)
         form.addRow(tr("module.macros.dialog.type"), self._type_box)
 
@@ -671,7 +686,9 @@ class _MacroDialog(QDialog):
         kl = QVBoxLayout(keys_page)
         kl.setContentsMargins(0, 0, 0, 0)
         kl.setSpacing(4)
-        kl.addWidget(QLabel(tr("module.macros.dialog.combination")))
+        kl.addWidget(label_with_hint(
+            tr("module.macros.dialog.combination"),
+            tr("module.macros.dialog.combination.hint")))
         self._keys_rec = _KeyRecorder()
         kl.addWidget(self._keys_rec)
         kl.addStretch()
@@ -706,7 +723,9 @@ class _MacroDialog(QDialog):
         sl = QVBoxLayout(seq_page)
         sl.setContentsMargins(0, 0, 0, 0)
         sl.setSpacing(4)
-        sl.addWidget(QLabel(tr("module.macros.dialog.sequence")))
+        sl.addWidget(label_with_hint(
+            tr("module.macros.dialog.sequence"),
+            tr("module.macros.dialog.sequence.hint")))
         self._steps: list[dict[str, Any]] = []
         self._step_list = QListWidget()
         self._step_list.setMinimumHeight(120)
@@ -860,72 +879,6 @@ class _MacroDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
-# Resize handle for the macro-list table
-# ---------------------------------------------------------------------------
-
-class _ResizeStrip(QWidget):
-    """Drag handle below the macro table.
-
-    Shows a row of dots (⠿-style grip) so it is immediately obvious that the
-    area can be resized.  Dragging it down/up sets the table's fixed height."""
-
-    _MIN_H = 80
-    _DOT_R = 2      # dot radius px
-    _DOT_COLS = 6   # dots per row
-    _DOT_ROWS = 2   # rows of dots
-    _DOT_GAP = 5    # gap between dot centres
-
-    def __init__(self, target: QTableWidget,
-                 parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._target = target
-        self._drag_start: QPoint | None = None
-        self._start_h: int = 0
-        total_h = self._DOT_ROWS * self._DOT_R * 2 + (self._DOT_ROWS - 1) * self._DOT_GAP
-        self.setFixedHeight(total_h + 10)   # 10 px vertical padding
-        self.setCursor(Qt.CursorShape.SizeVerCursor)
-        self.setToolTip("Ziehen, um die Liste zu vergrößern")
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        from PySide6.QtGui import QPainter
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        col = self.palette().color(self.foregroundRole())
-        col.setAlphaF(0.35)
-        painter.setBrush(col)
-        painter.setPen(Qt.PenStyle.NoPen)
-        r = self._DOT_R
-        cols, rows, gap = self._DOT_COLS, self._DOT_ROWS, self._DOT_GAP
-        grid_w = cols * r * 2 + (cols - 1) * (gap - r * 2)
-        grid_h = rows * r * 2 + (rows - 1) * (gap - r * 2)
-        ox = (self.width() - grid_w) // 2
-        oy = (self.height() - grid_h) // 2
-        for row in range(rows):
-            for col in range(cols):
-                x = ox + col * gap
-                y = oy + row * gap
-                painter.drawEllipse(x - r, y - r, r * 2, r * 2)
-        painter.end()
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start = event.globalPosition().toPoint()
-            self._start_h = self._target.height()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event) -> None:  # noqa: N802
-        if self._drag_start is not None:
-            delta = event.globalPosition().toPoint().y() - self._drag_start.y()
-            new_h = max(self._MIN_H, self._start_h + delta)
-            self._target.setFixedHeight(new_h)
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        self._drag_start = None
-        super().mouseReleaseEvent(event)
-
-
-# ---------------------------------------------------------------------------
 # Settings page
 # ---------------------------------------------------------------------------
 
@@ -965,6 +918,10 @@ class MacrosSettingsWidget(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        # Never scroll sideways (see MainWindow._scrollable): a page scrolled
+        # right hid the cards' left edge behind the sidebar.
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -985,59 +942,59 @@ class MacrosSettingsWidget(QWidget):
 
         from withease.gui.ui_utils import card as _card
         # All options in one white card, with a bold heading like the General page.
-        settings_card, settings_body = _card(tr("module.macros.card.settings"))
+        settings_card, settings_body = _card(
+            tr("module.macros.card.settings"), "⚙️")
+
+        # ONE form for the whole card, not one per topic: two separate
+        # QFormLayouts each size their own label column, so the trigger row's
+        # field started ~70px further right than the dropdowns below it.  With
+        # a single form every field in the card lines up in one column.
+        form = QFormLayout()
+        form.setSpacing(10)
 
         # ── Trigger key ────────────────────────────────────────────
-        trigger_form = QFormLayout()
-        trigger_form.setSpacing(10)
 
         self._trigger_edit = _KeyRecorder()
         self._trigger_edit.blockSignals(True)
         self._trigger_edit.set_key(self._module._settings.get("trigger_key", ""))
         self._trigger_edit.blockSignals(False)
         self._trigger_edit.key_changed.connect(self._on_trigger_changed)
-        trigger_form.addRow(tr("module.macros.trigger_key"), self._trigger_edit)
+        form.addRow(
+            label_with_hint(tr("module.macros.trigger_key"),
+                            tr("module.macros.trigger_key.hint")),
+            self._trigger_edit)
 
-        # ── Indicator chip size + preview ──────────────────────────
-        size_row = QHBoxLayout()
-        self._chip_size = QSpinBox()
-        self._chip_size.setRange(16, 64)
-        self._chip_size.setSuffix(" px")
-        self._chip_size.setValue(self._module._settings.get("chip_size", 28))
-        self._chip_size.valueChanged.connect(self._on_chip_size_changed)
-        size_row.addWidget(self._chip_size)
-
-        self._preview_cb = QCheckBox(tr("module.macros.chip_size.preview"))
-        self._preview_cb.toggled.connect(self._on_preview_toggled)
-        size_row.addWidget(self._preview_cb)
-        size_row.addStretch()
-        trigger_form.addRow(tr("module.macros.chip_size"), size_row)
-
-        settings_body.addLayout(trigger_form)
+        # Chip size (indicator + preview) moved to Allgemein – it's shared
+        # with the sticky-keys chip, not specific to macros.
 
         # ── Command overlay (the in-macro-mode command list) ───────
-        ov_form = QFormLayout()
-        ov_form.setSpacing(10)
         cfg = self._module.cmd_overlay_config()
 
         self._ov_enabled = QCheckBox(tr("module.macros.overlay.enabled"))
         self._ov_enabled.setChecked(bool(cfg.get("enabled", True)))
         self._ov_enabled.toggled.connect(
             lambda v: self._module.set_cmd_overlay_option("enabled", v))
-        ov_form.addRow(tr("module.macros.overlay.title"), self._ov_enabled)
+        self._ov_enabled.toggled.connect(self._on_overlay_toggled)
+        form.addRow(tr("module.macros.overlay.title"), self._ov_enabled)
 
         self._ov_sort = QComboBox()
         for val, key in (("manual", "module.macros.overlay.sort.manual"),
                          ("alpha", "module.macros.overlay.sort.alpha"),
                          ("usage", "module.macros.overlay.sort.usage")):
             self._ov_sort.addItem(tr(key), val)
+        for i, key in enumerate(("manual", "alpha", "usage")):
+            set_option_hint(self._ov_sort, i,
+                            tr(f"module.macros.overlay.sort.{key}.hint"))
         si = self._ov_sort.findData(cfg.get("sort", "manual"))
         if si >= 0:
             self._ov_sort.setCurrentIndex(si)
         self._ov_sort.currentIndexChanged.connect(
             lambda i: self._module.set_cmd_overlay_option(
                 "sort", self._ov_sort.itemData(i)))
-        ov_form.addRow(tr("module.macros.overlay.sort"), self._ov_sort)
+        form.addRow(
+            label_with_hint(tr("module.macros.overlay.sort"),
+                            tr("module.macros.overlay.sort.hint")),
+            self._ov_sort)
 
         self._ov_pos = QComboBox()
         for val in ("top-center", "top-left", "top-right", "center",
@@ -1049,16 +1006,18 @@ class MacrosSettingsWidget(QWidget):
         self._ov_pos.currentIndexChanged.connect(
             lambda i: self._module.set_cmd_overlay_option(
                 "position", self._ov_pos.itemData(i)))
-        ov_form.addRow(tr("module.macros.overlay.position"), self._ov_pos)
+        form.addRow(tr("module.macros.overlay.position"), self._ov_pos)
 
-        settings_body.addLayout(ov_form)
+        # Sort order and position only describe the overlay – with the overlay
+        # off they are dead controls, so the whole rows go away.
+        self._overlay_form = form
+        self._on_overlay_toggled(self._ov_enabled.isChecked())
+
+        settings_body.addLayout(form)
         layout.addWidget(settings_card)
 
         # ── Macro list (its own card) ──────────────────────────────
-        list_card, list_body = _card()
-        list_label = QLabel(tr("module.macros.list"))
-        list_label.setObjectName("cardTitle")
-        list_body.addWidget(list_label)
+        list_card, list_body = _card(tr("module.macros.list"), "🗒️")
 
         self._table = QTableWidget(0, 6)
         self._table.setHorizontalHeaderLabels([
@@ -1093,7 +1052,7 @@ class MacrosSettingsWidget(QWidget):
         # _refresh_table); the header follows below.
         self._table.setFixedHeight(220)
         list_body.addWidget(self._table)
-        self._resize_strip = _ResizeStrip(self._table)
+        self._resize_strip = ResizeStrip(self._table)
         list_body.addWidget(self._resize_strip)
 
         # ── Buttons ────────────────────────────────────────────────
@@ -1112,6 +1071,7 @@ class MacrosSettingsWidget(QWidget):
         btn_row.addWidget(self._edit_btn)
 
         self._del_btn = QPushButton(tr("module.macros.delete"))
+        mark_danger(self._del_btn)
         self._del_btn.clicked.connect(self._on_delete)
         btn_row.addWidget(self._del_btn)
 
@@ -1151,19 +1111,6 @@ class MacrosSettingsWidget(QWidget):
         self._update_enabled_state(self._module.enabled)
 
     # ------------------------------------------------------------------
-
-    def _on_chip_size_changed(self, value: int) -> None:
-        self._module._settings["chip_size"] = value
-        self._module.on_settings_changed()
-        bus.publish("macros.chip_size", size=value)
-
-    def _on_preview_toggled(self, active: bool) -> None:
-        bus.publish("macros.preview", active=active)
-
-    def hideEvent(self, event: object) -> None:
-        if self._preview_cb.isChecked():
-            self._preview_cb.setChecked(False)
-        super().hideEvent(event)  # type: ignore[arg-type]
 
     def _refresh_table(self) -> None:
         macros = self._module._macros
@@ -1239,10 +1186,23 @@ class MacrosSettingsWidget(QWidget):
         idx = self._selected_index()
         if idx < 0 and self._module._macros:
             idx = len(self._module._macros) - 1
-        if idx >= 0:
-            self._module._macros.pop(idx)
+        if idx < 0:
+            return
+        macro = self._module._macros.pop(idx)
+        self._module.on_settings_changed()
+        self._refresh_table()
+
+        # This button sits right next to "Bearbeiten" and used to delete with
+        # no confirmation and no way back – one slip and a macro the user had
+        # built was simply gone.
+        def undo(index: int = idx, item=macro) -> None:
+            self._module._macros.insert(min(index, len(self._module._macros)),
+                                        item)
             self._module.on_settings_changed()
             self._refresh_table()
+
+        show_undo(self, tr("undo.macro",
+                           name=getattr(macro, "label", "") or "?"), undo)
 
     # -- Import / export -------------------------------------------------
 
@@ -1404,6 +1364,13 @@ class MacrosSettingsWidget(QWidget):
         self._refresh_table()
         self._table.selectRow(new)
 
+    def _on_overlay_toggled(self, enabled: bool) -> None:
+        form = getattr(self, "_overlay_form", None)
+        if form is None:
+            return
+        for widget in (self._ov_sort, self._ov_pos):
+            form.setRowVisible(widget, enabled)
+
     def _on_trigger_changed(self, key: str) -> None:
         self._module._settings["trigger_key"] = key
         self._module.on_settings_changed()
@@ -1416,7 +1383,7 @@ class MacrosSettingsWidget(QWidget):
         self._update_enabled_state(enabled)
 
     def _update_enabled_state(self, enabled: bool) -> None:
-        for w in (self._trigger_edit, self._chip_size, self._preview_cb,
+        for w in (self._trigger_edit,
                   self._ov_enabled, self._ov_sort, self._ov_pos,
                   self._table, self._add_btn, self._edit_btn, self._del_btn,
                   self._up_btn, self._down_btn,

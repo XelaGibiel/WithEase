@@ -361,12 +361,26 @@ def test_target_label_updates(app):
 
 # --- live dictation: auto-space between sentences ---------------------------
 
-def test_needs_sep_after_sentence_punctuation():
-    ns = dw.DictationWindow._needs_sep
-    assert ns("a") and ns("1")
-    assert ns(".") and ns("!") and ns("?") and ns("…")
-    assert ns(",") and ns(":") and ns(";")
-    assert not ns(" ")
+def test_join_dictation_spacing_and_casing():
+    """A new utterance is joined onto what is already there.
+
+    Replaces the old ``_needs_sep`` check: spacing alone was not enough, because
+    Whisper capitalises every utterance like a sentence of its own, so
+    continuing mid-sentence produced „…und dann Das war gut."."""
+    from postprocess import join_dictation as j
+    # a separating space where one is needed
+    assert j("Ich gehe heim", "Weiter.").startswith(" ")
+    assert j("Satz eins.", "Satz zwei.").startswith(" ")
+    assert not j("Ich gehe heim ", "weiter.").startswith(" ")
+    assert not j("Text (", "Klammer.").startswith(" ")
+    # capital after a sentence end, lower case while a sentence continues …
+    assert j("Satz eins.", "Das war gut.") == " Das war gut."
+    assert j("Ich gehe heim", "Das war gut.") == " das war gut."
+    # … but only for words German never capitalises mid-sentence
+    assert j("Ich gehe heim", "Haus und Hof.") == " Haus und Hof."
+    assert j("Ich gehe heim", "Berlin ruft.") == " Berlin ruft."
+    # nothing before: exactly as spoken
+    assert j("", "Das war gut.") == "Das war gut."
 
 
 def test_live_second_sentence_gets_leading_space(app):

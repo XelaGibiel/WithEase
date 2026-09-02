@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer
+from PySide6.QtCore import (QEasingCurve, QEvent, QObject,
+                            QPropertyAnimation, Qt, QTimer)
 from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
+    QCheckBox,
     QComboBox,
     QFormLayout,
     QFrame,
@@ -31,6 +33,10 @@ from withease.core.event_bus import bus
 from withease.core.i18n import tr, SUPPORTED_LANGUAGES
 from withease.core import i18n as i18n_module
 from withease.gui import theme
+from withease.gui.ui_utils import mark_danger
+from withease.gui.widgets.support_hint import (
+    forced as forced_support_hint,
+)
 
 if TYPE_CHECKING:
     from withease.app import WithEaseApp
@@ -106,6 +112,59 @@ class _SaveToast(QLabel):
             self.hide()
 
 
+class _FavouriteCell(QWidget):
+    """Table cell holding the favourite checkbox – the whole cell toggles it."""
+
+    def __init__(self, checkbox: QCheckBox) -> None:
+        super().__init__()
+        self._checkbox = checkbox
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(checkbox)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # The CELL is the target, not the box (see the caller's comment):
+        # stretching the box would push its indicator off-centre again.
+        self.setProperty("clickTarget", True)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        self._checkbox.toggle()
+        event.accept()
+
+
+class _SupportStripFitter(QObject):
+    """Keeps the support strip exactly as tall as its wrapped text needs.
+
+    A QScrollArea reports a tiny size hint of its own, so the strip's height
+    has to be pinned with setMaximumHeight – but the right value only exists
+    once the strip has a real width, because the text wraps.  Pinned at build
+    time it came out too small and the note was cut off mid sentence.
+    """
+
+    def __init__(self, holder, hint) -> None:
+        super().__init__(holder)
+        self._holder = holder
+        self._hint = hint
+
+    def refit(self) -> None:
+        import shiboken6
+        if not (shiboken6.isValid(self._holder) and shiboken6.isValid(self._hint)):
+            return
+        width = self._holder.viewport().width() or self._holder.width()
+        if width <= 0:
+            return
+        needed = self._hint.heightForWidth(width) if (
+            self._hint.hasHeightForWidth()) else self._hint.sizeHint().height()
+        needed = max(needed, self._hint.sizeHint().height())
+        if needed != self._holder.maximumHeight():
+            self._holder.setMaximumHeight(needed)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
+        if event.type() == QEvent.Type.Resize:
+            self.refit()
+        return False
+
+
 class MainWindow(QMainWindow):
     # Always resolves to the newest published release – the link to share.
     RELEASE_URL = "https://github.com/XelaGibiel/WithEase/releases/latest"
@@ -154,7 +213,10 @@ class MainWindow(QMainWindow):
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
         self._sidebar = sidebar
-        sidebar.setFixedWidth(max(224, em(13)))
+        # ~25% narrower: the nav labels are short, and the width it used to
+        # reserve was taken away from the settings cards (which then had to
+        # scroll horizontally on a smaller window).
+        sidebar.setFixedWidth(max(170, em(10)))
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(12, 18, 12, 12)
         sidebar_layout.setSpacing(4)
@@ -211,9 +273,38 @@ class MainWindow(QMainWindow):
 
         root.addWidget(sidebar)
 
-        # ---- Content area ----
+        # ---- Content area: search bar above the pages ----
+        from withease.gui.settings_search import SettingsSearchBar
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        self._search_bar = SettingsSearchBar(self)
+        content_layout.addWidget(self._search_bar)
         self._stack = QStackedWidget()
-        root.addWidget(self._stack, 1)
+        content_layout.addWidget(self._stack, 1)
+
+        # One-off support note – a strip UNDER the pages, so it never covers
+        # or interrupts anything (see widgets/support_hint.py for the rules).
+        self._content_layout = content_layout
+        self._install_support_hint()
+        # The threshold can be reached WHILE the window is open, and that is
+        # not a rare case for a window people leave open.  Re-checking on a
+        # slow timer means the note appears when it is due instead of only at
+        # the next window build.
+        self._support_timer = QTimer(self)
+        # Matches the usage clock's own tick: with a shortened test threshold
+        # a 15s re-check would sit idle long after the moment it is waiting
+        # for (see gui/widgets/support_hint.py).
+        from withease.gui.widgets.support_hint import _override_seconds
+        _ov = _override_seconds()
+        self._support_timer.setInterval(
+            3000 if (_ov is not None and _ov < 300) else 15000)
+        self._support_timer.timeout.connect(self._install_support_hint)
+        self._support_timer.start()
+        # The hit list floats over the pages instead of pushing them down.
+        self._search_bar.set_overlay_host(content)
+        root.addWidget(content, 1)
 
         # ---- Footer: active profile (left), version/update (right) ----
         footer_frame = QWidget()
@@ -243,8 +334,100 @@ class MainWindow(QMainWindow):
         self._populate_nav()
         from withease.gui.ui_utils import compact_fields
         compact_fields(self._stack)
+        self._refresh_search_index()
         self._nav.currentItemChanged.connect(self._on_nav_changed)
         self._select_nav_row(0)
+
+    def _refresh_search_index(self) -> None:
+        """Re-index every page after a (re)build – covers add-on modules too."""
+        bar = getattr(self, "_search_bar", None)
+        if bar is None:
+            return
+        from withease.gui.settings_search import build_index
+        names: dict[int, str] = {}
+        for i in range(self._nav.count()):
+            item = self._nav.item(i)
+            page = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if isinstance(page, int):
+                names[page] = item.text()
+        bar.clear_query()
+        bar.set_entries(build_index(self._stack, names))
+
+    def _install_support_hint(self) -> None:
+        """Add the one-off support note when it is due (and not already up)."""
+        from withease.gui.widgets.support_hint import SupportHint, should_show
+        if getattr(self, "_support_holder", None) is not None:
+            return
+        if not should_show(self._app):
+            return
+        hint = SupportHint(self._app)
+        # In a scroll holder, NOT straight into the layout: as a fixed part
+        # of the window the strip nearly doubled the window's minimum
+        # height (485 -> 903px at 16pt), which on a small laptop screen
+        # would put its own buttons out of reach.  With a low minimum the
+        # window stays as free as before; the strip still takes its full
+        # natural height whenever there is room, and only scrolls when
+        # there genuinely is not.
+        from PySide6.QtWidgets import QScrollArea, QSizePolicy
+        from withease.gui.ui_utils import em as _em
+        holder = QScrollArea()
+        holder.setWidgetResizable(True)
+        holder.setFrameShape(QScrollArea.Shape.NoFrame)
+        holder.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        holder.setWidget(hint)
+        holder.setSizePolicy(QSizePolicy.Policy.Preferred,
+                             QSizePolicy.Policy.Maximum)
+        holder.setMinimumHeight(_em(5))
+        holder.setMaximumHeight(hint.sizeHint().height())
+        hint.closed.connect(holder.deleteLater)
+        self._content_layout.addWidget(holder)
+        self._support_holder = holder
+        hint.closed.connect(self._forget_support_hint)
+        # The height above is a first guess made BEFORE the strip has a width,
+        # and the text wraps – so it is refitted once the layout has run, and
+        # again on every resize.  Without that the note was cut off mid
+        # sentence at the default window size, with its own buttons out of
+        # view: an appeal nobody can read, and no way to say "no thanks".
+        self._support_fitter = _SupportStripFitter(holder, hint)
+        holder.installEventFilter(self._support_fitter)
+        QTimer.singleShot(0, lambda: self._fit_support_hint(holder, hint))
+
+    def _fit_support_hint(self, holder, hint) -> None:
+        """Give the strip the height it needs – growing the WINDOW if that is
+        what it takes.
+
+        Raising the window's minimum height instead would make the whole
+        window unshrinkable for as long as the note is up, and on a small
+        laptop screen that is worse than a note one has to scroll.  Growing
+        once, only when there is room on screen, fixes the default case and
+        leaves the window as free as before."""
+        import shiboken6
+        if not (shiboken6.isValid(holder) and shiboken6.isValid(hint)):
+            return
+        self._support_fitter.refit()
+        missing = holder.maximumHeight() - holder.height()
+        if missing <= 0:
+            return
+        screen = self.screen()
+        available = screen.availableGeometry() if screen is not None else None
+        if available is None:
+            return
+        room = available.height() - self.frameGeometry().height()
+        if room <= 0:
+            return                       # already as tall as the screen allows
+        self.resize(self.width(), self.height() + min(missing, room))
+
+    def _forget_support_hint(self) -> None:
+        self._support_holder = None
+        timer = getattr(self, "_support_timer", None)
+        if timer is None or forced_support_hint():
+            return
+        # Only "Nicht mehr anzeigen" (and "Ansehen") end it.  After "Später"
+        # the timer has to keep running – postponing means it comes back, and
+        # stopping the check here is exactly what stopped it coming back.
+        if self._app.support_hint_state() == "done":
+            timer.stop()
 
     def _on_nav_changed(self, current, _previous) -> None:
         if current is None:
@@ -252,6 +435,33 @@ class MainWindow(QMainWindow):
         page_index = current.data(Qt.ItemDataRole.UserRole)
         if page_index is not None:
             self._stack.setCurrentIndex(page_index)
+            # A dropdown can only be measured reliably once its page has been
+            # laid out; a page never shown yet has not been.  Only ever widens,
+            # so repeating it on each visit is harmless.
+            from withease.gui.ui_utils import align_form_labels, fix_combo_widths
+            page = self._stack.currentWidget()
+
+            def _tidy(p=page) -> None:
+                fix_combo_widths(p)
+                align_form_labels(p)   # one caption column for all its cards
+
+            QTimer.singleShot(0, _tidy)
+
+    def goto_module_page(self, module_id: str) -> bool:
+        """Show the settings page of the module with this id.
+
+        Used when a module asks to send the user where its problem can be
+        fixed (see WithEaseApp.show_settings)."""
+        for module in self._app.get_modules():
+            if getattr(module, "MODULE_ID", "") != module_id:
+                continue
+            name = getattr(module, "DISPLAY_NAME", "")
+            for i in range(self._nav.count()):
+                item = self._nav.item(i)
+                if item is not None and item.text() == name:
+                    self._select_nav_row(i)
+                    return True
+        return False
 
     def _goto_page(self, page_index: int) -> None:
         """Navigate the sidebar to the entry showing the given stack page."""
@@ -402,6 +612,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtGui import QDesktopServices
         from PySide6.QtCore import QUrl
         from withease import __version__
+        from withease.gui.ui_utils import WrappingLabel, card, em
 
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -429,7 +640,15 @@ class MainWindow(QMainWindow):
         # at any window width or font size.
         layout.addWidget(self._page_title("WithEase"))
 
-        desc = QLabel(tr("about.description"))
+        # Same heading-then-separator convention as every module page
+        # (enable-checkbox followed immediately by an HLine) – this page's
+        # title had none, which read as inconsistent with the rest of the app.
+        title_sep = QFrame()
+        title_sep.setFrameShape(QFrame.Shape.HLine)
+        title_sep.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(title_sep)
+
+        desc = WrappingLabel(tr("about.description"))
         desc.setWordWrap(True)
         desc.setMaximumWidth(_MAXW)
         layout.addWidget(desc)
@@ -439,26 +658,21 @@ class MainWindow(QMainWindow):
         meta.setStyleSheet(theme.hint_style())
         layout.addWidget(meta)
 
-        vibe = QLabel(tr("about.vibe"))
+        vibe = WrappingLabel(tr("about.vibe"))
         vibe.setWordWrap(True)
         vibe.setMaximumWidth(_MAXW)
         vibe.setStyleSheet(theme.hint_style())
         layout.addWidget(vibe)
 
-        layout.addWidget(self._hline())
-
         # --- Share the project ----------------------------------------------
         # The "/releases/latest" link always resolves to the newest release, so
         # anyone the user shares it with lands on the current download.
-        share_heading = QLabel(tr("about.share.heading"))
-        share_heading.setStyleSheet(
-            f"color: {theme.accent()}; font-weight: 600;")
-        layout.addWidget(share_heading)
+        share_card, share_body = card(tr("about.share.heading"), "🔗")
 
-        share_hint = QLabel(tr("about.share.hint"))
+        share_hint = WrappingLabel(tr("about.share.hint"))
         share_hint.setWordWrap(True)
         share_hint.setMaximumWidth(_MAXW)
-        layout.addWidget(share_hint)
+        share_body.addWidget(share_hint)
 
         # Real, clickable hyperlink (opens in the browser); still selectable.
         link = QLabel(
@@ -469,8 +683,9 @@ class MainWindow(QMainWindow):
         link.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextBrowserInteraction)
         link.setCursor(Qt.CursorShape.PointingHandCursor)
-        layout.addWidget(link)
+        share_body.addWidget(link)
 
+        share_body.addSpacing(em(0.7))  # a bit of air before the buttons
         share_row = QHBoxLayout()
         self._copy_link_btn = _btn("about.share.copy")
         self._copy_link_btn.clicked.connect(self._copy_release_link)
@@ -481,21 +696,18 @@ class MainWindow(QMainWindow):
             lambda: QDesktopServices.openUrl(QUrl(self.RELEASE_URL)))
         share_row.addWidget(open_release)
         share_row.addStretch()
-        layout.addLayout(share_row)
-
-        layout.addWidget(self._hline())
+        share_body.addLayout(share_row)
+        layout.addWidget(share_card)
 
         # --- Support / Ko-fi -------------------------------------------------
         # A friendly, entirely optional donation nudge – the program stays free.
-        support_heading = QLabel(tr("about.support.heading"))
-        support_heading.setStyleSheet(
-            f"color: {theme.accent()}; font-weight: 600;")
-        layout.addWidget(support_heading)
+        support_card, support_body = card(tr("about.support.heading"), "☕")
 
-        support_text = QLabel(tr("about.support.text"))
+        support_text = WrappingLabel(tr("about.support.text"))
         support_text.setWordWrap(True)
         support_text.setMaximumWidth(_MAXW)
-        layout.addWidget(support_text)
+        support_body.addWidget(support_text)
+        support_body.addSpacing(em(0.7))  # a bit of air before the button
 
         kofi_url = "https://ko-fi.com/xelagibiel"
         kofi = _btn("about.support.button")
@@ -503,16 +715,17 @@ class MainWindow(QMainWindow):
         support_row = QHBoxLayout()
         support_row.addWidget(kofi)
         support_row.addStretch()
-        layout.addLayout(support_row)
-
-        layout.addWidget(self._hline())
+        support_body.addLayout(support_row)
+        layout.addWidget(support_card)
 
         # --- More links ------------------------------------------------------
-        feedback_hint = QLabel(tr("about.feedback.hint"))
+        feedback_card, feedback_body = card(tr("about.feedback.heading"), "💬")
+
+        feedback_hint = WrappingLabel(tr("about.feedback.hint"))
         feedback_hint.setWordWrap(True)
         feedback_hint.setMaximumWidth(_MAXW)
-        feedback_hint.setStyleSheet(theme.hint_style())
-        layout.addWidget(feedback_hint)
+        feedback_body.addWidget(feedback_hint)
+        feedback_body.addSpacing(em(0.7))  # a bit of air before the buttons
 
         links_row = QHBoxLayout()
         gh_url = "https://github.com/XelaGibiel/WithEase"
@@ -524,21 +737,11 @@ class MainWindow(QMainWindow):
         feedback.clicked.connect(self._open_feedback)
         links_row.addWidget(feedback)
         links_row.addStretch()
-        layout.addLayout(links_row)
+        feedback_body.addLayout(links_row)
+        layout.addWidget(feedback_card)
 
         layout.addStretch()
         return self._scrollable(widget)
-
-    @staticmethod
-    def _hline() -> QFrame:
-        """A subtle horizontal separator between About sections."""
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setFrameShadow(QFrame.Shadow.Plain)
-        line.setFixedHeight(1)
-        line.setMaximumWidth(640)
-        line.setStyleSheet(f"color: {theme.hint_color()};")
-        return line
 
     def _copy_release_link(self) -> None:
         """Copy the latest-release link to the clipboard and confirm briefly."""
@@ -570,7 +773,7 @@ class MainWindow(QMainWindow):
     def _add_page(self, label: str, widget: QWidget) -> None:
         from withease.gui.ui_utils import em
         item = QListWidgetItem(label)
-        item.setSizeHint(item.sizeHint().__class__(160, max(36, em(2))))
+        item.setSizeHint(item.sizeHint().__class__(140, max(36, em(2))))
         item.setData(Qt.ItemDataRole.UserRole, self._stack.count())
         self._nav.addItem(item)
         self._stack.addWidget(widget)
@@ -581,7 +784,7 @@ class MainWindow(QMainWindow):
         from withease.gui.ui_utils import em
         item = QListWidgetItem()
         item.setFlags(Qt.ItemFlag.NoItemFlags)  # not selectable, no page
-        item.setSizeHint(item.sizeHint().__class__(160, max(11, em(0.6))))
+        item.setSizeHint(item.sizeHint().__class__(140, max(11, em(0.6))))
         self._nav.addItem(item)
 
     def _fit_nav_height(self) -> None:
@@ -617,9 +820,13 @@ class MainWindow(QMainWindow):
         return label
 
     def _build_general_page(self) -> QWidget:
-        from PySide6.QtWidgets import QCheckBox, QScrollArea, QSpinBox
-        from withease.core import autostart
-        from withease.gui.ui_utils import card, em
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QIcon
+        from PySide6.QtWidgets import (
+            QButtonGroup, QCheckBox, QScrollArea, QSpinBox,
+        )
+        from withease.core import autostart, resources
+        from withease.gui.ui_utils import card, em, label_with_hint
         from withease.gui.widgets.hotkey_edit import HotkeyEdit
 
         page = QWidget()
@@ -628,6 +835,10 @@ class MainWindow(QMainWindow):
         outer.setSpacing(18)
 
         outer.addWidget(self._page_title(tr("settings.general.title")))
+        general_sep = QFrame()
+        general_sep.setFrameShape(QFrame.Shape.HLine)
+        general_sep.setFrameShadow(QFrame.Shadow.Sunken)
+        outer.addWidget(general_sep)
         outer.addSpacing(2)
 
         def _form() -> QFormLayout:
@@ -644,73 +855,155 @@ class MainWindow(QMainWindow):
             tr("settings.general.card.appearance"), "🎨")
         form = _form()
 
+        # Flag PNGs (not emoji – flag emoji don't reliably render as an actual
+        # flag glyph in every Qt/Windows font-fallback combination).
+        _LANG_COUNTRY = {"de": "de", "en": "gb"}
         self._lang_combo = QComboBox()
-        self._lang_combo.setMinimumWidth(em(10))
+        # No minimum width: compact_fields() sets AdjustToContents, so the box
+        # ends up exactly as wide as its longest entry instead of reserving a
+        # fixed slab of space.
+        self._lang_combo.setIconSize(QSize(em(1.1), round(em(1.1) * 2 / 3)))
         current_lang = self._app._app_config.get("language", "de")
         for code, display_name in SUPPORTED_LANGUAGES.items():
-            self._lang_combo.addItem(display_name, userData=code)
+            icon = QIcon()
+            country = _LANG_COUNTRY.get(code)
+            if country:
+                path = resources.flag_icon_path(country)
+                if path.exists():
+                    icon = QIcon(str(path))
+            self._lang_combo.addItem(icon, display_name, userData=code)
             if code == current_lang:
                 self._lang_combo.setCurrentIndex(self._lang_combo.count() - 1)
         self._lang_combo.currentIndexChanged.connect(self._on_language_changed)
         form.addRow(tr("settings.general.language"), self._lang_combo)
 
-        self._theme_combo = QComboBox()
-        self._theme_combo.setMinimumWidth(em(10))
+        # Theme as a small exclusive button group (not a dropdown) – all three
+        # options are visible and recognisable by icon at a glance, matching
+        # the "as simple/obvious as possible" goal from the UX review.
+        theme_row = QHBoxLayout()
+        theme_row.setSpacing(6)
+        self._theme_group = QButtonGroup(self)
+        self._theme_group.setExclusive(True)
         current_theme = self._app._app_config.get("theme", "system")
-        for key in ("system", "light", "dark"):
-            self._theme_combo.addItem(tr(f"settings.general.theme.{key}"), key)
-            if key == current_theme:
-                self._theme_combo.setCurrentIndex(self._theme_combo.count() - 1)
-        self._theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        form.addRow(tr("settings.general.theme"), self._theme_combo)
+        for key, icon in (("system", "🖥"), ("light", "☀"), ("dark", "🌙")):
+            btn = QPushButton(f"{icon}  {tr(f'settings.general.theme.{key}')}")
+            btn.setCheckable(True)
+            btn.setChecked(key == current_theme)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(
+                lambda _checked, k=key: self._apply_appearance("theme", k))
+            self._theme_group.addButton(btn)
+            theme_row.addWidget(btn)
+        theme_row.addStretch()
 
-        self._contrast_combo = QComboBox()
-        self._contrast_combo.setMinimumWidth(em(10))
-        self._contrast_combo.addItem(tr("settings.general.contrast.normal"),
-                                     "normal")
-        self._contrast_combo.addItem(tr("settings.general.contrast.high"),
-                                     "high")
-        if self._app._app_config.get("contrast", "normal") == "high":
-            self._contrast_combo.setCurrentIndex(1)
-        self._contrast_combo.currentIndexChanged.connect(
-            self._on_contrast_changed)
-        form.addRow(tr("settings.general.contrast"), self._contrast_combo)
+        # High contrast is independent of the light/dark/system choice (any
+        # of the three can also run with boosted contrast), so it is a
+        # separate toggle button – visually grouped with Design, but not
+        # part of the exclusive group above.  On its own row underneath
+        # (not appended to theme_row) so it never gets pushed past the card
+        # edge at larger font sizes, where the three theme buttons alone
+        # already fill most of the row width.
+        contrast_row = QHBoxLayout()
+        contrast_row.setSpacing(6)
+        self._contrast_btn = QPushButton(
+            f"◐  {tr('settings.general.contrast')}")
+        self._contrast_btn.setCheckable(True)
+        self._contrast_btn.setChecked(
+            self._app._app_config.get("contrast", "normal") == "high")
+        self._contrast_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._contrast_btn.setToolTip(tr("settings.general.contrast.hint"))
+        self._contrast_btn.toggled.connect(self._on_contrast_toggled)
+        contrast_row.addWidget(self._contrast_btn)
+        contrast_row.addStretch()
 
-        # 8–16 pt, or "system default".  The minimum (7) is never a real
-        # size – it shows the special text and is stored as 0 (= system).
-        self._font_spin = QSpinBox()
-        self._font_spin.setRange(7, 16)
-        self._font_spin.setSpecialValueText(
-            tr("settings.general.font_size.system"))
-        self._font_spin.setSuffix(" pt")
+        theme_col = QVBoxLayout()
+        theme_col.setSpacing(6)
+        theme_col.addLayout(theme_row)
+        theme_col.addLayout(contrast_row)
+        form.addRow(tr("settings.general.theme"), theme_col)
+
+        # 8–16 pt, or "system default" (stored as 0).
+        self._font_combo = QComboBox()
+        self._font_combo.addItem(tr("settings.general.font_size.system"), 0)
+        for pt in range(8, 17):
+            self._font_combo.addItem(f"{pt} pt", pt)
         saved_pt = int(self._app._app_config.get("font_size", 0))
-        self._font_spin.setValue(saved_pt if 8 <= saved_pt <= 16 else 7)
+        idx = self._font_combo.findData(saved_pt if 8 <= saved_pt <= 16 else 0)
+        self._font_combo.setCurrentIndex(idx if idx >= 0 else 0)
         # Deliberately NOT applied live: changing the font rebuilds every page,
-        # which recreates this very spinbox and makes its up/down arrows jump
-        # around under the cursor while adjusting.  Instead the change only
-        # takes effect when the "Apply" button next to it is pressed.
-        self._font_spin.valueChanged.connect(self._on_font_size_pending)
-        self._font_apply_btn = QPushButton(
+        # which recreates this very combo box – so the change only takes
+        # effect once the "Apply" button next to it is pressed.
+        self._font_combo.currentIndexChanged.connect(self._on_font_size_pending)
+        self._font_apply_btn = QPushButton()
+        # Slim self-drawn arrow in the action blue – the stock QStyle reload
+        # icon was a heavy filled glyph that looked bold next to the text.
+        self._font_apply_btn.setIcon(theme.refresh_icon(theme.action_color()))
+        self._font_apply_btn.setFixedSize(em(2), em(2))
+        # The icon itself has its own pixel size independent of the button
+        # box – without this it stays at Qt's small default and barely grows
+        # when the box does, at larger font sizes it looked stuck tiny.
+        self._font_apply_btn.setIconSize(QSize(em(1.2), em(1.2)))
+        self._font_apply_btn.setToolTip(tr("settings.general.font_size.apply"))
+        self._font_apply_btn.setAccessibleName(
             tr("settings.general.font_size.apply"))
         self._font_apply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._font_apply_btn.setEnabled(False)     # nothing pending yet
         self._font_apply_btn.clicked.connect(self._on_font_size_apply)
         font_row = QHBoxLayout()
         font_row.setSpacing(8)
-        font_row.addWidget(self._font_spin)
+        font_row.addWidget(self._font_combo)
         font_row.addWidget(self._font_apply_btn)
         font_row.addStretch()
         form.addRow(tr("settings.general.font_size"), font_row)
+
+        self._hints_cb = QCheckBox(tr("settings.general.hints_enabled"))
+        self._hints_cb.setChecked(
+            bool(self._app._app_config.get("hints_enabled", True)))
+        self._hints_cb.toggled.connect(self._on_hints_toggled)
+        form.addRow("", self._hints_cb)
+
+        # Central chip size for the Sticky-Keys and macro-mode overlay chips
+        # (they used to be two separate per-module settings – consolidated
+        # here since both control the same kind of thing app-wide).
+        self._chip_size_spin = QSpinBox()
+        self._chip_size_spin.setRange(16, 64)
+        self._chip_size_spin.setSuffix(" px")
+        self._chip_size_spin.setValue(
+            int(self._app._app_config.get("overlay_chip_size", 28)))
+        self._chip_size_spin.valueChanged.connect(
+            self._on_overlay_chip_size_changed)
+        self._chip_preview_cb = QCheckBox(
+            tr("settings.general.overlay_chip_size.preview"))
+        self._chip_preview_cb.toggled.connect(
+            self._on_overlay_chip_preview_toggled)
+        chip_row = QHBoxLayout()
+        chip_row.setSpacing(8)
+        chip_row.addWidget(self._chip_size_spin)
+        chip_row.addWidget(self._chip_preview_cb)
+        chip_row.addStretch()
+        form.addRow(
+            label_with_hint(tr("settings.general.overlay_chip_size"),
+                            tr("settings.general.overlay_chip_size.hint")),
+            chip_row)
+
         appearance_body.addLayout(form)
         outer.addWidget(appearance)
 
         # ---- Card 2: System ---------------------------------------------
         system, system_body = card(tr("settings.general.card.system"), "🖥")
         sys_form = _form()
+        from withease.gui.widgets.hint_icon import HintIcon
         self._autostart_cb = QCheckBox(tr("settings.general.autostart"))
         self._autostart_cb.setChecked(autostart.is_enabled())
         self._autostart_cb.toggled.connect(self._on_autostart_toggled)
-        sys_form.addRow("", self._autostart_cb)
+        autostart_row = QHBoxLayout()
+        autostart_row.setContentsMargins(0, 0, 0, 0)
+        autostart_row.setSpacing(6)
+        autostart_row.addWidget(self._autostart_cb)
+        autostart_row.addWidget(
+            HintIcon(tr("settings.general.autostart.hint")))
+        autostart_row.addStretch(1)
+        sys_form.addRow("", autostart_row)
         system_body.addLayout(sys_form)
         outer.addWidget(system)
 
@@ -747,7 +1040,20 @@ class MainWindow(QMainWindow):
         outer.addStretch()
 
         # Wrap in a scroll area so the cards never clip at large font sizes.
-        scroll = QScrollArea()
+        # Small subclass so leaving this page always clears the chip preview
+        # (matches the reset the old per-module pages did in their own
+        # hideEvent) – a stray preview chip left visible after navigating
+        # away would otherwise look like a bug.
+        win = self
+
+        class _GeneralScrollArea(QScrollArea):
+            def hideEvent(self, event: object) -> None:  # noqa: N802
+                cb = getattr(win, "_chip_preview_cb", None)
+                if cb is not None and cb.isChecked():
+                    cb.setChecked(False)
+                super().hideEvent(event)  # type: ignore[arg-type]
+
+        scroll = _GeneralScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(
@@ -768,21 +1074,16 @@ class MainWindow(QMainWindow):
                     cfg.get("contrast", "normal"),
                     int(cfg.get("font_size", 0)))
 
-    def _on_theme_changed(self, index: int) -> None:
-        self._apply_appearance("theme", self._theme_combo.itemData(index))
-
-    def _on_contrast_changed(self, index: int) -> None:
-        self._apply_appearance(
-            "contrast", self._contrast_combo.itemData(index))
+    def _on_contrast_toggled(self, on: bool) -> None:
+        self._apply_appearance("contrast", "high" if on else "normal")
 
     def _pending_font_size(self) -> int:
-        """The spinbox value normalised to a stored font size (0 = system)."""
-        value = int(self._font_spin.value())
-        return value if value >= 8 else 0     # minimum shows "system" = 0
+        """The combo box's stored font size (0 = system)."""
+        return int(self._font_combo.currentData() or 0)
 
-    def _on_font_size_pending(self, _value: int) -> None:
+    def _on_font_size_pending(self, _index: int) -> None:
         # Don't apply yet – just enable "Apply" while the value differs from
-        # what's active, so the spinbox stays put until the user confirms.
+        # what's active, so the combo box stays put until the user confirms.
         changed = (self._pending_font_size()
                    != int(self._app._app_config.get("font_size", 0)))
         self._font_apply_btn.setEnabled(changed)
@@ -792,10 +1093,33 @@ class MainWindow(QMainWindow):
         if value == int(self._app._app_config.get("font_size", 0)):
             self._font_apply_btn.setEnabled(False)
             return  # unchanged – no rebuild needed
-        # Give the recreated spinbox focus again so arrow clicks / typing
-        # can simply continue after the pages were rebuilt.
-        self._refocus_font_spin = self._font_spin.hasFocus()
+        # Give the recreated combo box focus again so it stays reachable via
+        # keyboard after the pages were rebuilt.
+        self._refocus_font_combo = self._font_combo.hasFocus()
         self._apply_appearance("font_size", value)
+
+    def _on_hints_toggled(self, enabled: bool) -> None:
+        # Deliberately NOT routed through _apply_appearance – that triggers a
+        # full apply_theme()+page rebuild, overkill for a pure show/hide.
+        from withease.core import config
+        from withease.gui.widgets.hint_icon import set_hints_visible
+        self._app._app_config["hints_enabled"] = enabled
+        config.save_app_config(self._app._app_config)
+        set_hints_visible(enabled)
+
+    def _on_overlay_chip_size_changed(self, size: int) -> None:
+        from withease.core import config
+        self._app._app_config["overlay_chip_size"] = size
+        config.save_app_config(self._app._app_config)
+        # The sticky-keys and macro-mode indicators already subscribe to
+        # these two topics (unrelated to this page) – publishing to both
+        # keeps them fully unchanged while the setting's source moves here.
+        bus.publish("macros.chip_size", size=size)
+        bus.publish("keyboard.chip_size", size=size)
+
+    def _on_overlay_chip_preview_toggled(self, active: bool) -> None:
+        bus.publish("macros.preview", active=active)
+        bus.publish("keyboard.preview", active=active)
 
     def _on_emergency_key_changed(self, key: str) -> None:
         self._app.set_emergency_key(key)
@@ -829,9 +1153,14 @@ class MainWindow(QMainWindow):
     def _rebuild_ui(self) -> None:
         """Rebuild the entire window content (language or profile change)."""
         self._rebuilding = True
+        # Paint once at the end instead of after every page that is torn down
+        # and rebuilt – without this the window visibly flickers through a
+        # half-built state on a theme switch.
+        self.setUpdatesEnabled(False)
         try:
             self._do_rebuild_ui()
         finally:
+            self.setUpdatesEnabled(True)
             self._rebuilding = False
 
     def _do_rebuild_ui(self) -> None:
@@ -854,10 +1183,11 @@ class MainWindow(QMainWindow):
         if _app is not None:
             self._nav.setFont(_app.font())
         from withease.gui.ui_utils import em
-        self._sidebar.setFixedWidth(max(224, em(13)))
+        self._sidebar.setFixedWidth(max(170, em(10)))
         self._populate_nav()
         from withease.gui.ui_utils import compact_fields
         compact_fields(self._stack)
+        self._refresh_search_index()
 
         # Update sidebar/footer widgets that are outside the stack
         self._update_emergency_btn()
@@ -871,24 +1201,34 @@ class MainWindow(QMainWindow):
         # Restore selected page (or go back to General), skipping separators
         self._select_nav_row(max(0, current_row))
 
-        if getattr(self, "_refocus_font_spin", False):
-            self._refocus_font_spin = False
-            self._font_spin.setFocus()
-            self._font_spin.selectAll()
+        if getattr(self, "_refocus_font_combo", False):
+            self._refocus_font_combo = False
+            self._font_combo.setFocus()
 
     def _build_profiles_page(self) -> QWidget:
         from PySide6.QtWidgets import QListWidget
+        from withease.gui.ui_utils import card
 
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(12)
         layout.addWidget(self._page_title(tr("settings.profiles.title")))
+        profiles_sep = QFrame()
+        profiles_sep.setFrameShape(QFrame.Shape.HLine)
+        profiles_sep.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(profiles_sep)
 
-        desc = QLabel(tr("settings.profiles.description"))
+        desc = QLabel(tr("settings.profiles.description") + " "
+                      + tr("settings.profiles.tray_hint"))
         desc.setStyleSheet(theme.hint_style())
         desc.setWordWrap(True)
         layout.addWidget(desc)
+
+        # Same card() frame every other page uses – a bare list+buttons block
+        # looked out of place next to Allgemein/Maus/etc.
+        profiles_card, profiles_body = card(
+            tr("settings.profiles.card"), "👤")
 
         self._profiles_list = QListWidget()
         self._profiles_list.setMinimumHeight(160)
@@ -897,7 +1237,7 @@ class MainWindow(QMainWindow):
             lambda _: self._on_profile_activate())
         self._profiles_list.currentRowChanged.connect(
             lambda _: self._update_profile_buttons())
-        layout.addWidget(self._profiles_list)
+        profiles_body.addWidget(self._profiles_list)
 
         btn_row = QHBoxLayout()
         self._profile_activate_btn = QPushButton(tr("settings.profiles.activate"))
@@ -910,11 +1250,13 @@ class MainWindow(QMainWindow):
         self._profile_rename_btn.clicked.connect(self._on_profile_rename)
         btn_row.addWidget(self._profile_rename_btn)
         self._profile_delete_btn = QPushButton(tr("settings.profiles.delete"))
+        mark_danger(self._profile_delete_btn)
         self._profile_delete_btn.clicked.connect(self._on_profile_delete)
         btn_row.addWidget(self._profile_delete_btn)
         btn_row.addStretch()
-        layout.addLayout(btn_row)
+        profiles_body.addLayout(btn_row)
 
+        layout.addWidget(profiles_card)
         layout.addStretch()
         self._refresh_profiles_list()
         return self._scrollable(widget)
@@ -993,28 +1335,51 @@ class MainWindow(QMainWindow):
         sel = self._selected_profile()
         if not sel or sel == self._app.active_profile:
             return
-        from PySide6.QtWidgets import QMessageBox
-        answer = QMessageBox.question(
-            self, tr("settings.profiles.delete"),
-            tr("settings.profiles.delete.confirm", name=sel))
-        if answer == QMessageBox.StandardButton.Yes:
-            self._app.delete_profile(sel)
+        # Snapshot before deleting: the file is what makes undo possible, and
+        # taking it back must not need a second precise click first.
+        from withease.core import config as _config
+        from withease.gui.widgets.undo_bar import show_undo
+        try:
+            snapshot = _config.load_profile(sel)
+        except Exception:
+            snapshot = None
+        if not self._app.delete_profile(sel):
+            return
+        self._refresh_profiles_list()
+
+        def undo(name: str = sel, data=snapshot) -> None:
+            if data is None:
+                return
+            _config.save_profile(name, data)
+            bus.publish("profiles.changed", switched=False)
             self._refresh_profiles_list()
+
+        show_undo(self, tr("undo.profile", name=sel), undo)
 
     def _build_actions_page(self) -> QWidget:
         from PySide6.QtWidgets import QCheckBox, QTableWidget, QTableWidgetItem
+        from withease.gui.ui_utils import card
+        from withease.gui.widgets.collapsible_section import CollapsibleSection
         from withease.gui.widgets.hotkey_edit import HotkeyEdit
+        from withease.gui.widgets.resize_strip import ResizeStrip
 
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(12)
         layout.addWidget(self._page_title(tr("settings.actions.title")))
+        actions_sep = QFrame()
+        actions_sep.setFrameShape(QFrame.Shape.HLine)
+        actions_sep.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(actions_sep)
 
         desc = QLabel(tr("settings.actions.overview_hint"))
         desc.setStyleSheet(theme.hint_style())
         desc.setWordWrap(True)
         layout.addWidget(desc)
+
+        _TARGET_PX = theme.target_px()
+        actions_card, actions_body = card(tr("settings.actions.card"), "⚡")
 
         table = QTableWidget(0, 3)
         table.setHorizontalHeaderLabels([
@@ -1023,12 +1388,16 @@ class MainWindow(QMainWindow):
             tr("settings.actions.trigger_col"),
         ])
         table.horizontalHeader().setStretchLastSection(True)
-        table.setColumnWidth(0, 60)
+        # At least one full click target wide, so the star column can
+        # centre its checkbox instead of the box overflowing to the right.
+        table.setColumnWidth(0, max(60, _TARGET_PX))
         table.setColumnWidth(1, 260)
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.verticalHeader().setVisible(False)
-        table.setMinimumHeight(220)
+        # Rows tall enough for a full-size favourite checkbox (see _TARGET_PX).
+        table.verticalHeader().setDefaultSectionSize(_TARGET_PX)
+        # Height is pinned (and made draggable) further down via ResizeStrip.
         from PySide6.QtWidgets import QStyleFactory
         style = QStyleFactory.create("Fusion")
         if style is not None:
@@ -1044,7 +1413,7 @@ class MainWindow(QMainWindow):
         search = QLineEdit()
         search.setPlaceholderText(tr("settings.actions.search"))
         search.setClearButtonEnabled(True)
-        layout.addWidget(search)
+        actions_body.addWidget(search)
 
         def collect_entries() -> list[tuple[str, str, str]]:
             favorites = self._app.get_favorites()
@@ -1114,11 +1483,13 @@ class MainWindow(QMainWindow):
                         QTimer.singleShot(0, resort)
 
                 cb.toggled.connect(on_toggled)
-                cell = QWidget()
-                cell_layout = QHBoxLayout(cell)
-                cell_layout.setContentsMargins(0, 0, 0, 0)
-                cell_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                cell_layout.addWidget(cb)
+                # A text-less checkbox draws its indicator at its LEFT edge, so
+                # stretching the checkbox itself to the accessible target size
+                # pushed the box off-centre (and out of the 60px column).
+                # Instead the CELL is the click target: it is a full row high
+                # and a full target wide, forwards its clicks to the checkbox,
+                # and the indicator sits exactly in the middle of the column.
+                cell = _FavouriteCell(cb)
                 table.setCellWidget(row, 0, cell)
                 row_tip = tr("settings.actions.row_tooltip")
                 label_item = QTableWidgetItem(label)
@@ -1181,18 +1552,55 @@ class MainWindow(QMainWindow):
             menu.exec(table.viewport().mapToGlobal(pos))
 
         table.customContextMenuRequested.connect(on_context_menu)
-        layout.addWidget(table)
+
+        # A plain, always-visible button doing the same thing as the context
+        # menu.  The jump used to be reachable ONLY by right-click, which is
+        # the hardest mouse action for the people this app is for – and is not
+        # reachable at all by keyboard or a switch.
+        goto_btn = QPushButton(tr("settings.actions.goto.button"))
+        goto_btn.setToolTip(tr("settings.actions.goto"))
+        goto_btn.setEnabled(False)
+
+        def target_page_for_selection() -> int | None:
+            fid = selected_fid()
+            return page_for_fid(fid) if fid else None
+
+        def sync_goto_btn() -> None:
+            goto_btn.setEnabled(target_page_for_selection() is not None)
+
+        def on_goto_clicked() -> None:
+            page = target_page_for_selection()
+            if page is not None:
+                self._goto_page(page)
+
+        goto_btn.clicked.connect(on_goto_clicked)
+        table.itemSelectionChanged.connect(sync_goto_btn)
+        # Double-click a row does the same (mirrors the macro table), so both
+        # the pointer-light and the pointer-heavy path lead to the same place.
+        table.doubleClicked.connect(lambda _idx: on_goto_clicked())
+
+        actions_body.addWidget(table)
+        # Same drag handle the macro table has, so a long action list can be
+        # pulled taller instead of scrolling inside a fixed-height box.
+        # setMinimumHeight above is a floor, not a fixed size – the strip needs
+        # a fixed height to drag against, so pin it to the current one first.
+        table.setFixedHeight(220)
+        actions_body.addWidget(ResizeStrip(table))
 
         # ▲▼ reorder the favourite block at the top of the table.
+        from withease.gui.widgets.hint_icon import HintIcon
         move_row = QHBoxLayout()
-        move_hint = QLabel(tr("settings.actions.order_hint"))
-        move_hint.setStyleSheet(theme.hint_style())
-        move_row.addWidget(move_hint)
+        move_row.addWidget(QLabel(tr("settings.actions.order_label")))
+        move_row.addWidget(HintIcon(tr("settings.actions.order_hint")))
         move_row.addStretch()
-        for arrow, delta in (("▲", -1), ("▼", 1)):
+        for arrow, delta, tip_key in (
+                ("▲", -1, "settings.actions.order.up"),
+                ("▼", 1, "settings.actions.order.down")):
             # Plain buttons at their natural size – same look as the Makros
             # reorder arrows (no fixed width / iconBtn styling).
             btn = QPushButton(arrow)
+            btn.setToolTip(tr(tip_key))
+            btn.setAccessibleName(tr(tip_key))
 
             def on_move(_checked: bool = False, d: int = delta) -> None:
                 fid = selected_fid()
@@ -1202,38 +1610,38 @@ class MainWindow(QMainWindow):
 
             btn.clicked.connect(on_move)
             move_row.addWidget(btn)
-        layout.addLayout(move_row)
+        move_row.addWidget(goto_btn)
+        actions_body.addLayout(move_row)
+        layout.addWidget(actions_card)
 
         # ── Overlay settings ─────────────────────────────────────────
+        # Same CollapsibleSection every module page uses for an optional
+        # feature (see mouse_settings.py) – was a bespoke bold-checkbox +
+        # bare-widget block before, now framed like everything else.
         cfg = self._app.get_overlay_config()
 
-        # The section title itself is the on/off checkbox.
-        overlay_cb = QCheckBox(tr("settings.actions.overlay"))
-        overlay_cb.setStyleSheet("font-weight: bold;")
-        overlay_cb.setChecked(bool(cfg.get("enabled", False)))
-        layout.addWidget(overlay_cb)
-
-        overlay_desc = QLabel(tr("settings.actions.overlay.description"))
-        overlay_desc.setStyleSheet(theme.hint_style())
-        overlay_desc.setWordWrap(True)
-        layout.addWidget(overlay_desc)
-
-        # All further options live in one container that is only shown while
-        # the overlay is enabled – they are meaningless otherwise.
-        opts = QWidget()
-        opts_layout = QVBoxLayout(opts)
-        opts_layout.setContentsMargins(0, 0, 0, 0)
-        opts_layout.setSpacing(8)
+        overlay_section = CollapsibleSection(
+            tr("settings.actions.overlay"),
+            checked=bool(cfg.get("enabled", False)),
+            description=tr("settings.actions.overlay.description"),
+            icon="📌")
+        overlay_section.toggled.connect(
+            lambda v: self._app.set_overlay_option("enabled", v))
 
         form = QFormLayout()
         form.setSpacing(8)
 
         from withease.gui.widgets.actions_overlay import POSITIONS
+        from withease.gui.ui_utils import (label_with_hint,
+                                          set_option_hint)
         pos_combo = QComboBox()
         for pos in POSITIONS:
             label = (tr("settings.actions.overlay.pos.custom")
                      if pos == "custom" else tr(f"keyboard.indicator.pos.{pos}"))
             pos_combo.addItem(label, pos)
+            if pos == "custom":
+                set_option_hint(pos_combo, pos_combo.count() - 1,
+                                tr("settings.actions.overlay.pos.custom.hint"))
         current = cfg.get("position", "bottom-right")
         idx = POSITIONS.index(current) if current in POSITIONS else 5
         pos_combo.setCurrentIndex(idx)
@@ -1246,7 +1654,14 @@ class MainWindow(QMainWindow):
         hover_cb.setChecked(bool(cfg.get("hover_hide", False)))
         hover_cb.toggled.connect(
             lambda v: self._app.set_overlay_option("hover_hide", v))
-        form.addRow("", hover_cb)
+        hover_row = QHBoxLayout()
+        hover_row.setContentsMargins(0, 0, 0, 0)
+        hover_row.setSpacing(6)
+        hover_row.addWidget(hover_cb)
+        hover_row.addWidget(
+            HintIcon(tr("settings.actions.overlay.hover_hide.hint")))
+        hover_row.addStretch(1)
+        form.addRow("", hover_row)
 
         from PySide6.QtWidgets import QSpinBox
         font_spin = QSpinBox()
@@ -1255,18 +1670,13 @@ class MainWindow(QMainWindow):
         font_spin.setValue(int(cfg.get("font_size", 12)))
         font_spin.valueChanged.connect(
             lambda v: self._app.set_overlay_option("font_size", v))
-        form.addRow(tr("settings.actions.overlay.font_size"), font_spin)
-        opts_layout.addLayout(form)
+        form.addRow(
+            label_with_hint(tr("settings.actions.overlay.font_size"),
+                            tr("settings.actions.overlay.font_size.hint")),
+            font_spin)
+        overlay_section.content_layout.addLayout(form)
 
-        opts.setVisible(overlay_cb.isChecked())
-
-        def on_overlay_toggled(enabled: bool) -> None:
-            self._app.set_overlay_option("enabled", enabled)
-            opts.setVisible(enabled)
-
-        overlay_cb.toggled.connect(on_overlay_toggled)
-
-        layout.addWidget(opts)
+        layout.addWidget(overlay_section)
         layout.addStretch()
         return self._scrollable(widget)
 
@@ -1289,4 +1699,22 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         event.accept()
+        # A preview is a "while I'm adjusting this" aid – it must never survive
+        # the settings window.  Relying on each page's hideEvent alone is
+        # fragile (it depends on which page happened to be open, and on Qt's
+        # hide-order during teardown), so force every preview off explicitly
+        # here as well; the publishes are harmless when nothing is showing.
+        self._reset_previews()
         bus.publish("gui.settings_closed")
+
+    def _reset_previews(self) -> None:
+        """Turn every preview overlay off (see closeEvent)."""
+        cb = getattr(self, "_chip_preview_cb", None)
+        if cb is not None:
+            try:
+                if cb.isChecked():
+                    cb.setChecked(False)
+            except RuntimeError:
+                pass          # widget already destroyed by a rebuild
+        bus.publish("macros.preview", active=False)
+        bus.publish("keyboard.preview", active=False)
