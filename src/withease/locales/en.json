@@ -423,5 +423,9 @@
   "undo.recordings": "{n} voice recordings deleted.",
   "undo.api_key": "API key removed.",
   "undo.macro": "Macro „{name}“ deleted.",
-  "undo.profile": "Profile „{name}“ deleted."
+  "undo.profile": "Profile „{name}“ deleted.",
+  "feedback.fallback": "The message could not be sent – but it is still here.  Copy it and send it another way, or open the issue tracker on GitHub.",
+  "feedback.copy": "Copy the message",
+  "feedback.open_issues": "Report on GitHub",
+  "feedback.copied": "✓ Copied – you can paste it somewhere else now."
 }

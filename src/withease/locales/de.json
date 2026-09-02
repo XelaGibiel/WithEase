@@ -423,5 +423,9 @@
   "undo.recordings": "{n} Sprachaufnahmen gelöscht.",
   "undo.api_key": "API-Schlüssel entfernt.",
   "undo.macro": "Makro „{name}“ gelöscht.",
-  "undo.profile": "Profil „{name}“ gelöscht."
+  "undo.profile": "Profil „{name}“ gelöscht.",
+  "feedback.fallback": "Die Nachricht konnte nicht gesendet werden – sie ist aber noch da. Kopiere sie und schicke sie auf einem anderen Weg, oder öffne den Fehler-Melder auf GitHub.",
+  "feedback.copy": "Nachricht kopieren",
+  "feedback.open_issues": "Auf GitHub melden",
+  "feedback.copied": "✓ Kopiert – du kannst sie jetzt woanders einfügen."
 }

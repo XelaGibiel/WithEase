@@ -18,6 +18,21 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def _german():
+    """These tests read the window's texts, so the language has to be pinned.
+
+    It used to be implicit: the strings were hard-coded German.  Now they come
+    from dict_i18n, so an English machine (or a CI runner with an empty config)
+    would fail every one of these for the wrong reason."""
+    from withease.core.event_bus import bus
+    import dict_i18n
+    before = dict_i18n._lang.code
+    bus.publish("i18n.language_changed", lang="de")
+    yield
+    bus.publish("i18n.language_changed", lang=before)
+
+
 def make(app, history=None, hist_sink=None):
     inserted, copied = [], []
     win = dw.DictationWindow(

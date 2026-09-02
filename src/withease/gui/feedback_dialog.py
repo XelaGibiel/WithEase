@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
@@ -36,6 +37,11 @@ from withease.gui import theme
 # not configured yet.
 FEEDBACK_ENDPOINT = "https://formspree.io/f/xwvdgrob"
 
+# Where the fallback sends people when the form is unreachable.
+# Deliberately NOT an email address: one written into a public,
+# distributed program is harvested and spammed within weeks.
+ISSUES_URL = "https://github.com/XelaGibiel/WithEase/issues/new"
+
 _TIMEOUT = 20
 
 # Simple, permissive email check – only used to decide whether the optional
@@ -43,6 +49,34 @@ _TIMEOUT = 20
 # the whole submission (HTTP 422) if its reserved "email" field is not a valid
 # address, so anything that is not clearly an email is sent as a plain field.
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _accepted(status: int, body: str) -> tuple[bool, str]:
+    """Whether the server really TOOK the message – not just answered.
+
+    The status code alone is not enough: a hosted form service answers 200 for
+    a submission it merely queued (an unconfirmed form, for instance) and mails
+    the owner a confirmation request instead of the message.  The app then said
+    "✓ sent" while nothing ever arrived, which is the worst possible outcome:
+    the user believes they have been heard.
+
+    So the body decides where it says anything, and only a clear yes counts.
+    A 2xx with a body we cannot read is still treated as success – being
+    over-strict would push people to the fallback for no reason.
+    """
+    if not 200 <= status < 300:
+        return False, f"HTTP {status}"
+    try:
+        answer = json.loads(body) if body.strip() else {}
+    except ValueError:
+        return True, ""                     # not JSON – take the 2xx at face value
+    if not isinstance(answer, dict):
+        return True, ""
+    if answer.get("ok") is False or answer.get("error") or answer.get("errors"):
+        problem = (answer.get("error")
+                   or answer.get("errors") or "abgelehnt")
+        return False, str(problem)[:120]
+    return True, ""
 
 
 class _Bridge(QObject):
@@ -88,6 +122,27 @@ class FeedbackDialog(QDialog):
         self._status = QLabel("")
         self._status.setWordWrap(True)
         layout.addWidget(self._status)
+
+        # Shown only when sending failed.  Without it a failed send simply
+        # threw the typed message away – the one outcome that must never
+        # happen, because the person has already done all the work.
+        self._fallback_hint = QLabel(tr("feedback.fallback"))
+        self._fallback_hint.setWordWrap(True)
+        self._fallback_hint.setStyleSheet(theme.hint_style())
+        layout.addWidget(self._fallback_hint)
+
+        fallback_row = QHBoxLayout()
+        self._copy_btn = QPushButton(tr("feedback.copy"))
+        self._copy_btn.setMinimumHeight(theme.target_px())
+        self._copy_btn.clicked.connect(self._on_copy)
+        fallback_row.addWidget(self._copy_btn)
+        self._issue_btn = QPushButton(tr("feedback.open_issues"))
+        self._issue_btn.setMinimumHeight(theme.target_px())
+        self._issue_btn.clicked.connect(self._on_open_issue)
+        fallback_row.addWidget(self._issue_btn)
+        fallback_row.addStretch(1)
+        layout.addLayout(fallback_row)
+        self._set_fallback_visible(False)
 
         buttons = QDialogButtonBox()
         self._send_btn = QPushButton(tr("feedback.send"))
@@ -146,9 +201,11 @@ class FeedbackDialog(QDialog):
                              "Accept": "application/json",
                              "User-Agent": "WithEase"})
                 with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-                    ok = 200 <= resp.status < 300
+                    status = resp.status
+                    body = resp.read(2000).decode("utf-8", "replace")
+                ok, detail = _accepted(status, body)
                 self._bridge.finished.emit(ok, "" if ok else "server",
-                                           f"HTTP {resp.status}")
+                                           detail or f"HTTP {status}")
             except urllib.error.HTTPError as exc:
                 # The server answered but refused the submission (e.g. 422).
                 # This is NOT a connection problem, so don't blame the network.
@@ -167,6 +224,7 @@ class FeedbackDialog(QDialog):
             self._status.setStyleSheet(f"color: {theme.ok_color()};")
             self._status.setText(tr("feedback.sent"))
             self._message.clear()
+            self._set_fallback_visible(False)
             return
         self._status.setStyleSheet(theme.warn_style())
         if kind == "network":
@@ -175,3 +233,42 @@ class FeedbackDialog(QDialog):
             self._status.setText(tr("feedback.failed_server", err=detail))
         else:
             self._status.setText(tr("feedback.failed", err=detail))
+        # Whatever went wrong, the typed message must not be lost.
+        self._set_fallback_visible(True)
+
+    # -- when sending fails --------------------------------------------
+
+    def _set_fallback_visible(self, visible: bool) -> None:
+        self._fallback_hint.setVisible(visible)
+        self._copy_btn.setVisible(visible)
+        self._issue_btn.setVisible(visible)
+
+    def _formatted_message(self) -> str:
+        """The whole submission as plain text – what the copy button hands over
+        and what a bug report should contain anyway."""
+        lines = [
+            f"WithEase {__version__} · {platform.system()} {platform.release()}",
+            f"{tr('feedback.category')}: {self._category.currentText()}",
+        ]
+        name = self._name.text().strip()
+        contact = self._contact.text().strip()
+        if name:
+            lines.append(f"{tr('feedback.name')}: {name}")
+        if contact:
+            lines.append(f"{tr('feedback.contact')}: {contact}")
+        lines.append("")
+        lines.append(self._message.toPlainText().strip())
+        return "\n".join(lines)
+
+    def _on_copy(self) -> None:
+        from PySide6.QtWidgets import QApplication
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(self._formatted_message())
+            self._status.setStyleSheet(f"color: {theme.ok_color()};")
+            self._status.setText(tr("feedback.copied"))
+
+    def _on_open_issue(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl(ISSUES_URL))
