@@ -43,8 +43,17 @@ _fallback: dict[str, str] = {}
 _current_lang: str = _DEFAULT_LANG
 
 
-def load(lang_code: str) -> None:
-    """Load a language. Falls back to English for missing keys."""
+def load(lang_code: str, announce: bool = True) -> None:
+    """Load a language. Falls back to English for missing keys.
+
+    ``announce=False`` loads without telling anyone.  Used for the bootstrap
+    load at the bottom of this file: that one runs whenever this module is
+    first imported – which, because most imports here are lazy, can happen in
+    the MIDDLE of building a window.  Announcing it then told every subscriber
+    "the language is now English" and add-ons that keep their own string table
+    (the dictation module does) switched to English mid-build.  It is an
+    initialisation, not a change; only a real switch is worth announcing.
+    """
     global _strings, _fallback, _current_lang
 
     _fallback = _load_file(_DEFAULT_LANG)
@@ -55,7 +64,8 @@ def load(lang_code: str) -> None:
         _strings = {**_fallback, **_load_file(lang_code)}
 
     _current_lang = lang_code
-    bus.publish("i18n.language_changed", lang=lang_code)
+    if announce:
+        bus.publish("i18n.language_changed", lang=lang_code)
 
 
 def current_language() -> str:
@@ -83,5 +93,7 @@ def tr(key: str, **kwargs: str) -> str:
     return text
 
 
-# Load English by default so tr() works even before settings are read.
-load(_DEFAULT_LANG)
+# Load English by default so tr() works even before settings are read.  Silent
+# on purpose – see load(): this runs on first import, which can fall in the
+# middle of someone else's window build.
+load(_DEFAULT_LANG, announce=False)
