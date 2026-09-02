@@ -83,8 +83,10 @@ By decoupling "what" from "how," WithEase allows users to integrate specialized 
 ## Download & Run (no installation needed)
 
 Open the [**Releases**](https://github.com/XelaGibiel/WithEase/releases) page
-and download the archive for your system. See
-[CHANGELOG.md](CHANGELOG.md) for what's new in each version.
+and download the archive for your system. What is new in each version is
+written up per release under
+[`website/src/content/changelog/`](website/src/content/changelog) (German and
+English); [CHANGELOG.md](CHANGELOG.md) keeps the archive up to 0.5.0.
 
 ### Windows
 

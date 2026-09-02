@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 import vocabulary as vocab
+from dict_i18n import t as _t
 
 _READABLE = "color: palette(windowText);"
 
@@ -75,26 +76,24 @@ class LearnFromTextDialog(QDialog):
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._on_accept = on_accept
-        self.setWindowTitle("Aus Text lernen")
+        self.setWindowTitle(_t("learn.title"))
         self.resize(520, 560)
 
         layout = QVBoxLayout(self)
-        intro = QLabel("Füge einen Text ein (oder lade eine Datei) – WithEase "
-                       "schlägt daraus deine Fachbegriffe/Namen vor. Häkchen "
-                       "setzen und übernehmen; sie landen in „Eigene Wörter“.")
+        intro = QLabel(_t("learn.intro"))
         intro.setWordWrap(True)
         intro.setStyleSheet(_READABLE)
         layout.addWidget(intro)
 
         self._text = QPlainTextEdit()
-        self._text.setPlaceholderText("Text hier einfügen …")
+        self._text.setPlaceholderText(_t("learn.placeholder"))
         layout.addWidget(self._text, 1)
 
         top = QHBoxLayout()
-        file_btn = QPushButton("Datei laden …")
+        file_btn = QPushButton(_t("dlg.learn.file"))
         file_btn.clicked.connect(self._load_file)
         top.addWidget(file_btn)
-        analyse_btn = QPushButton("Analysieren")
+        analyse_btn = QPushButton(_t("dlg.analyse"))
         analyse_btn.clicked.connect(self._analyse)
         top.addWidget(analyse_btn)
         top.addStretch()
@@ -105,17 +104,17 @@ class LearnFromTextDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch()
-        cancel = QPushButton("Abbrechen")
+        cancel = QPushButton(_t("learn.cancel"))
         cancel.clicked.connect(self.reject)
         footer.addWidget(cancel)
-        take = QPushButton("Ausgewählte übernehmen")
+        take = QPushButton(_t("learn.accept"))
         take.clicked.connect(self._accept)
         footer.addWidget(take)
         layout.addLayout(footer)
 
     def _load_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Textdatei wählen", "", "Text (*.txt *.md *.csv);;Alle (*.*)")
+            self, _t("dlg.learn.choose"), "", _t("dlg.filter.learn"))
         if path:
             try:
                 with open(path, encoding="utf-8", errors="replace") as f:
@@ -136,13 +135,11 @@ class LearnFromTextDialog(QDialog):
                                else Qt.CheckState.Unchecked)
             self._list.addItem(item)
         if self._list.count() == 0:
-            item = QListWidgetItem("Keine Begriffe gefunden.")
+            item = QListWidgetItem(_t("learn.none"))
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             self._list.addItem(item)
         else:
-            hint = QListWidgetItem(
-                "Tipp: angehakt = wird übernommen. Namen/Fachbegriffe anhaken, "
-                "gewöhnliche Wörter weglassen.")
+            hint = QListWidgetItem(_t("dlg.learn.tip"))
             hint.setFlags(Qt.ItemFlag.NoItemFlags)
             self._list.insertItem(0, hint)
 
@@ -166,7 +163,7 @@ class ListEditorDialog(QDialog):
         on_edit: Callable[[str, str], None] | None = None,
         add_placeholder: str = "",
         add_placeholder2: str = "",
-        add_label: str = "Hinzufügen",
+        add_label: str = _t("dlg.add"),
         intro: str = "",
         empty_text: str = "",
         clear_label: str = "",
@@ -240,24 +237,22 @@ class ListEditorDialog(QDialog):
 
         footer = QHBoxLayout()
         if on_clear is not None:
-            clear_btn = QPushButton(clear_label or "Alle löschen")
+            clear_btn = QPushButton(clear_label or _t("dlg.clear_all"))
             _mark_danger(clear_btn)
             clear_btn.clicked.connect(self._clear_all)
             footer.addWidget(clear_btn)
         if on_import is not None:
             import_btn = QPushButton("Import …")
-            import_btn.setToolTip(_wrap_tip("Wörterbuch aus einer Textdatei importieren "
-                                  "(eine Zeile je Eintrag: gesprochen = "
-                                  "geschrieben)"))
+            import_btn.setToolTip(_wrap_tip(_t("dlg.import.hint.long")))
             import_btn.clicked.connect(self._import)
             footer.addWidget(import_btn)
         if on_export is not None:
             export_btn = QPushButton("Export …")
-            export_btn.setToolTip(_wrap_tip("Wörterbuch als Textdatei speichern"))
+            export_btn.setToolTip(_wrap_tip(_t("dlg.export.hint")))
             export_btn.clicked.connect(self._export)
             footer.addWidget(export_btn)
         footer.addStretch()
-        close_btn = QPushButton("Schließen")
+        close_btn = QPushButton(_t("dlg.close"))
         close_btn.clicked.connect(self.accept)
         footer.addWidget(close_btn)
         layout.addLayout(footer)
@@ -284,14 +279,14 @@ class ListEditorDialog(QDialog):
         if existing is not None:
             self._exists_label.setText(f"✓ existiert bereits  →  {existing}")
         else:
-            self._exists_label.setText("neu – noch nicht im Wörterbuch")
+            self._exists_label.setText(_t("dlg.vocab.new"))
 
     def _export(self) -> None:
         if self._on_export is None:
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Wörterbuch exportieren", "woerterbuch.txt",
-            "Text (*.txt);;Alle (*.*)")
+            self, _t("dlg.export"), "woerterbuch.txt",
+            _t("dlg.filter.text"))
         if path:
             try:
                 self._on_export(path)
@@ -302,8 +297,8 @@ class ListEditorDialog(QDialog):
         if self._on_import is None:
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "Wörterbuch importieren", "",
-            "Text (*.txt *.csv *.tsv);;Alle (*.*)")
+            self, _t("dlg.import"), "",
+            _t("dlg.filter.import"))
         if path:
             try:
                 self._on_import(path)
@@ -373,7 +368,7 @@ class ListEditorDialog(QDialog):
             row.addWidget(text, 1)
         remove = QPushButton("✕")
         remove.setFixedWidth(30)
-        remove.setToolTip(_wrap_tip("Entfernen"))
+        remove.setToolTip(_wrap_tip(_t("dlg.remove")))
         remove.setProperty("dangerIcon", True)      # red ✕ (theme QSS)
         remove.clicked.connect(lambda _=False, k=key: self._remove(k))
         row.addWidget(remove)
@@ -417,28 +412,26 @@ class AiActionsDialog(QDialog):
     The four class attributes below are the only wording differences to the
     text-snippet editor, which subclasses this instead of copying it."""
 
-    TITLE = "KI-Aktionen"
-    INTRO = ("Belegen Sie Buttons für das Diktierfenster. Jeder Button schickt "
-             "seinen Prompt zusammen mit dem Fensterinhalt an die eingestellte "
-             "KI und ersetzt den Text durch das Ergebnis. Beispiel-Prompt: "
-             "„Formuliere den folgenden Text als höfliche E-Mail.“")
-    NAME_LABEL = "Button-Name:"
-    BODY_LABEL = "Prompt (Anweisung an die KI):"
-    BODY_PLACEHOLDER = ("z. B. Formuliere den folgenden Text als höfliche, gut "
-                        "strukturierte E-Mail. Gib nur die E-Mail zurück.")
+    # Keys, not texts: a class body runs at IMPORT time, so a translated
+    # string here would freeze the language of that moment.
+    TITLE_KEY = "dlg.ai.title"
+    INTRO_KEY = "dlg.ai.intro.long"
+    NAME_KEY = "dlg.ai.name"
+    BODY_KEY = "dlg.ai.body"
+    BODY_PLACEHOLDER_KEY = "dlg.ai.body.placeholder"
 
     def __init__(self, actions: list, on_save: Callable[[list], None],
                  select_index: int | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle(self.TITLE)
+        self.setWindowTitle(_t(self.TITLE_KEY))
         self.resize(640, 460)
         self._actions = [dict(a) for a in actions]     # working copy
         self._on_save = on_save
         self._cur = -1
 
         layout = QVBoxLayout(self)
-        intro = QLabel(self.INTRO)
+        intro = QLabel(_t(self.INTRO_KEY))
         intro.setWordWrap(True)
         intro.setStyleSheet(_READABLE)
         layout.addWidget(intro)
@@ -454,20 +447,20 @@ class AiActionsDialog(QDialog):
         self._list.currentRowChanged.connect(self._select)
         left.addWidget(self._list, 1)
         lbtn = QHBoxLayout()
-        addb = QPushButton("Neu")
+        addb = QPushButton(_t("dlg.new"))
         addb.clicked.connect(self._add)
         lbtn.addWidget(addb)
-        self._delb = _mark_danger(QPushButton("Entfernen"))
+        self._delb = _mark_danger(QPushButton(_t("dlg.remove")))
         self._delb.clicked.connect(self._remove)
         lbtn.addWidget(self._delb)
         left.addLayout(lbtn)
         mbtn = QHBoxLayout()          # reorder → the window buttons follow suit
-        self._upb = QPushButton("▲ Hoch")
-        self._upb.setToolTip(_wrap_tip("Ausgewählte Aktion nach oben"))
+        self._upb = QPushButton(_t("dlg.up"))
+        self._upb.setToolTip(_wrap_tip(_t("dlg.up.hint")))
         self._upb.clicked.connect(lambda: self._move(-1))
         mbtn.addWidget(self._upb)
-        self._downb = QPushButton("▼ Runter")
-        self._downb.setToolTip(_wrap_tip("Ausgewählte Aktion nach unten"))
+        self._downb = QPushButton(_t("dlg.down"))
+        self._downb.setToolTip(_wrap_tip(_t("dlg.down.hint")))
         self._downb.clicked.connect(lambda: self._move(1))
         mbtn.addWidget(self._downb)
         left.addLayout(mbtn)
@@ -477,14 +470,14 @@ class AiActionsDialog(QDialog):
         body.addWidget(lw)
 
         right = QVBoxLayout()
-        right.addWidget(QLabel(self.NAME_LABEL))
+        right.addWidget(QLabel(_t(self.NAME_KEY)))
         self._name = QLineEdit()
         self._name.setMaxLength(24)
         self._name.textChanged.connect(self._name_changed)
         right.addWidget(self._name)
-        right.addWidget(QLabel(self.BODY_LABEL))
+        right.addWidget(QLabel(_t(self.BODY_KEY)))
         self._prompt = QPlainTextEdit()
-        self._prompt.setPlaceholderText(self.BODY_PLACEHOLDER)
+        self._prompt.setPlaceholderText(_t(self.BODY_PLACEHOLDER_KEY))
         self._prompt.textChanged.connect(self._prompt_changed)
         right.addWidget(self._prompt, 1)
         rw = QWidget()
@@ -494,7 +487,7 @@ class AiActionsDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch()
-        close = QPushButton("Schließen")
+        close = QPushButton(_t("dlg.close"))
         close.clicked.connect(self.accept)
         footer.addWidget(close)
         layout.addLayout(footer)
@@ -562,7 +555,7 @@ class AiActionsDialog(QDialog):
             self._actions[self._cur]["prompt"] = self._prompt.toPlainText()
 
     def _add(self) -> None:
-        self._actions.append({"name": "Neue Aktion", "prompt": ""})
+        self._actions.append({"name": _t("dlg.new_action"), "prompt": ""})
         self._reload_list()
         self._list.setCurrentRow(len(self._actions) - 1)
         self._name.setFocus()
@@ -602,7 +595,7 @@ class DictionaryDialog(QDialog):
         on_import: Callable[[str], int] | None = None,
         on_learn: Callable[[], None] | None = None,
         on_clear_category: Callable[[str], int] | None = None,
-        title: str = "Wörterbuch",
+        title: str = _t("dlg.vocab.title"),
         intro: str = "",
         parent: QWidget | None = None,
     ) -> None:
@@ -628,7 +621,7 @@ class DictionaryDialog(QDialog):
         # add / search row: written (also live-search) + spoken + Add
         add_row = QHBoxLayout()
         self._written = QLineEdit()
-        self._written.setPlaceholderText("Wort (geschrieben) — suchen & hinzufügen")
+        self._written.setPlaceholderText(_t("dlg.vocab.search"))
         self._written.setClearButtonEnabled(True)
         self._written.textChanged.connect(self._on_written_changed)
         self._written.returnPressed.connect(self._add)
@@ -637,7 +630,7 @@ class DictionaryDialog(QDialog):
         self._spoken.setPlaceholderText("wie gesprochen (optional)")
         self._spoken.returnPressed.connect(self._add)
         add_row.addWidget(self._spoken, 2)
-        add_btn = QPushButton("Hinzufügen")
+        add_btn = QPushButton(_t("dlg.add"))
         add_btn.clicked.connect(self._add)
         add_row.addWidget(add_btn)
         layout.addLayout(add_row)
@@ -657,7 +650,7 @@ class DictionaryDialog(QDialog):
         self._category.currentIndexChanged.connect(lambda *_: self._reload())
         cat_row.addWidget(self._category, 1)
         if on_learn is not None:
-            learn_btn = QPushButton("Aus Text lernen …")
+            learn_btn = QPushButton(_t("dlg.learn.open"))
             learn_btn.clicked.connect(lambda: (on_learn(), self._reload()))
             cat_row.addWidget(learn_btn)
         layout.addLayout(cat_row)
@@ -668,7 +661,7 @@ class DictionaryDialog(QDialog):
         self._row_meta: list[tuple] = []
         self._table = QTableWidget(0, 4)
         self._table.setHorizontalHeaderLabels(
-            ["Wort (geschrieben)", "Gesprochen / erkannt als", "Herkunft", ""])
+            [_t("dlg.vocab.word"), "Gesprochen / erkannt als", "Herkunft", ""])
         self._table.verticalHeader().setVisible(False)
         self._table.setAlternatingRowColors(True)
         self._table.setSelectionBehavior(
@@ -696,23 +689,22 @@ class DictionaryDialog(QDialog):
 
         footer = QHBoxLayout()
         if on_clear_category is not None:
-            b = QPushButton("Kategorie leeren")
-            b.setToolTip(_wrap_tip("Alle aktuell angezeigten Einträge entfernen "
-                         "(z. B. alle „gelernten“ auf einmal)."))
+            b = QPushButton(_t("dlg.clear_category"))
+            b.setToolTip(_wrap_tip(_t("dlg.clear_category.hint.long")))
             b.clicked.connect(self._clear_category)
             footer.addWidget(b)
         if on_import is not None:
             b = QPushButton("Import …")
-            b.setToolTip(_wrap_tip("Wörterbuch aus einer Textdatei importieren"))
+            b.setToolTip(_wrap_tip(_t("dlg.import.hint")))
             b.clicked.connect(self._import)
             footer.addWidget(b)
         if on_export is not None:
             b = QPushButton("Export …")
-            b.setToolTip(_wrap_tip("Wörterbuch als Textdatei speichern"))
+            b.setToolTip(_wrap_tip(_t("dlg.export.hint")))
             b.clicked.connect(self._export)
             footer.addWidget(b)
         footer.addStretch()
-        close = QPushButton("Schließen")
+        close = QPushButton(_t("dlg.close"))
         close.clicked.connect(self.accept)
         footer.addWidget(close)
         layout.addLayout(footer)
@@ -738,14 +730,14 @@ class DictionaryDialog(QDialog):
             spoken = QTableWidgetItem(trigger)
             if kind == "mem":     # the misheard text is history – not editable
                 spoken.setFlags(noedit)
-                spoken.setToolTip(_wrap_tip("Automatisch erkannt – nicht editierbar"))
+                spoken.setToolTip(_wrap_tip(_t("dlg.vocab.auto")))
             self._table.setItem(r, 1, spoken)
             origin = QTableWidgetItem(src)
             origin.setFlags(noedit)      # read-only; no grey foreground so it
             self._table.setItem(r, 2, origin)   # stays readable when selected
             btn = QPushButton("✕")
             btn.setFixedWidth(28)
-            btn.setToolTip(_wrap_tip("Entfernen"))
+            btn.setToolTip(_wrap_tip(_t("dlg.remove")))
             btn.clicked.connect(
                 lambda _=False, kd=kind, k=key: self._remove(kd, k))
             self._table.setCellWidget(r, 3, btn)
@@ -789,7 +781,7 @@ class DictionaryDialog(QDialog):
             extra = f"  (gesprochen: {found})" if found else ""
             self._exists.setText("✓ existiert bereits" + extra)
         else:
-            self._exists.setText("neu — noch nicht im Wörterbuch")
+            self._exists.setText(_t("dlg.vocab.new"))
 
     def _add(self) -> None:
         written = self._written.text().strip()
@@ -813,9 +805,8 @@ class DictionaryDialog(QDialog):
             return
         label = self._category.currentText()
         ok = QMessageBox.question(
-            self, "Kategorie leeren",
-            f"„{label}“ – {n} Einträge wirklich entfernen?\n"
-            "(Das kann nicht rückgängig gemacht werden.)")
+            self, _t("dlg.clear_category"),
+            _t("dlg.clear_category.confirm", name=label, n=str(n)))
         if ok == QMessageBox.StandardButton.Yes:
             self._on_clear_category(cat)
             self._written.clear()
@@ -823,8 +814,8 @@ class DictionaryDialog(QDialog):
 
     def _export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, "Wörterbuch exportieren", "woerterbuch.txt",
-            "Text (*.txt);;Alle (*.*)")
+            self, _t("dlg.export"), "woerterbuch.txt",
+            _t("dlg.filter.text"))
         if path and self._on_export is not None:
             try:
                 self._on_export(path)
@@ -833,8 +824,8 @@ class DictionaryDialog(QDialog):
 
     def _import(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Wörterbuch importieren", "",
-            "Text (*.txt *.csv *.tsv);;Alle (*.*)")
+            self, _t("dlg.import"), "",
+            _t("dlg.filter.import"))
         if path and self._on_import is not None:
             try:
                 self._on_import(path)
@@ -842,25 +833,3 @@ class DictionaryDialog(QDialog):
                 pass
             self._written.clear()
             self._reload()
-
-
-class SnippetsDialog(AiActionsDialog):
-    """Manage reusable text blocks that can be inserted by voice.
-
-    Same editor as the AI actions – a named list with a long text field – so
-    there is one list editor in this add-on, not two that drift apart.  Stored
-    under the same ``name``/``prompt`` keys; only the wording differs.
-    """
-
-    TITLE = "Textbausteine"
-    INTRO = ("Wiederkehrende Texte, die du per Sprache einfügen kannst: sage "
-             "im Diktierfenster „füge <Name> ein“ oder „Baustein <Name>“. "
-             "Der Name sollte gut sprechbar sein – „Grußformel“ ist leichter "
-             "zu treffen als „Vorlage 3“.\n\n"
-             "Makros vom Typ „Text“ funktionieren bereits genauso: Was dort "
-             "steht, musst du hier NICHT noch einmal anlegen. Diese Liste ist "
-             "für Texte, die kein Makro sein sollen.")
-    NAME_LABEL = "Name (so sprichst du ihn):"
-    BODY_LABEL = "Text, der eingefügt wird:"
-    BODY_PLACEHOLDER = ("z. B. Mit freundlichen Grüßen\n"
-                        "Alexander Leibig")

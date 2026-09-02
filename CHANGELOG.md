@@ -1,7 +1,37 @@
 # Changelog
 
-All notable changes to WithEase are documented in this file. The format is based
-on [Keep a Changelog](https://keepachangelog.com/).
+**Release notes have moved to the WithEase website.**
+
+They are written there for the people who use the program rather than for
+developers, in German and English, one page per version:
+
+    website/src/content/changelog/{de,en}/<version>.md
+
+Rendered, that is the "Änderungen" / "Changes" page of the site. Until the site
+is published, read those files directly - they are plain Markdown.
+
+Why the move: this file was English-only, written in developer language, and had
+fallen four releases behind (0.6.0, 0.6.1, 0.6.2 and 0.7.0 were never added).
+Keeping two change logs in step is exactly the kind of duplicate bookkeeping
+that stops happening after a while, so there is now one.
+
+## Adding a release
+
+1. Write the release commit message as before - that text is the raw material.
+2. Add `website/src/content/changelog/de/<version>.md` and the English twin.
+   Front matter: `version`, `date`, `lang`, `summary`, and `current: true` on
+   the newest one.
+3. `npm --prefix website run data` picks up the new version number from
+   `pyproject.toml`; the "Aktuell" badge follows it on its own.
+
+---
+
+# Archive (up to 0.5.0)
+
+Everything below is the historical record from before the move. It is kept
+because 0.3.0 and 0.4.0 are documented nowhere else. Nothing new is added here.
+
+The format was based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Dictation module 1.5.0 - 2026-08-16
 
