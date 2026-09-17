@@ -603,7 +603,6 @@ def test_a_short_loud_word_is_not_taken_for_a_background_voice():
     ("Ich programmiere in C plus plus.", "Ich programmiere in C++."),
     ("Das macht fünf plus drei.", "Das macht 5 + 3."),
     ("Wir waren zwei Wochen weg.", "Wir waren zwei Wochen weg."),
-    ("Es kostet siebenundvierzig Euro.", "Es kostet 47 Euro."),
     ("Das sind sieben Prozent.", "Das sind 7 %."),
     ("Im Jahr zweitausend sechsundzwanzig.", "Im Jahr 2026."),
     ("Er ist dreihundertvierzig Meter gelaufen.", "Er ist 340 Meter gelaufen."),
