@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 import sys
 import uuid
-from typing import Callable
+from typing import Any, Callable
 
 from PySide6.QtCore import QEvent, QRectF, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -40,7 +40,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -761,6 +760,7 @@ class DictationWindow(QWidget):
                  on_reselect_target: Callable[[], None] | None = None,
                  on_confirm_words: Callable[[list], None] | None = None,
                  on_add_vocab: Callable[[str, str], None] | None = None,
+                 on_pronounce: Callable[[str, Any], None] | None = None,
                  on_ai_action: Callable[[str], None] | None = None,
                  on_lookup_snippet: Callable | None = None,
                  on_edit_ai_action: Callable[[int], None] | None = None,
@@ -782,6 +782,7 @@ class DictationWindow(QWidget):
         self._on_reselect_target = on_reselect_target or (lambda: None)
         self._on_confirm_words = on_confirm_words or (lambda _words: None)
         self._on_add_vocab = on_add_vocab or (lambda _s, _w: None)
+        self._on_pronounce = on_pronounce
         self._on_ai_action = on_ai_action or (lambda _prompt: None)
         # Voice-inserted text blocks: the module owns the list, the
         # editor only asks for one by its spoken name.
@@ -2119,13 +2120,54 @@ class DictationWindow(QWidget):
         if not written:
             self._set_hint(_t("msg.mark_word_first"))
             return
-        spoken, ok = QInputDialog.getText(
-            self, _t("vocab.add"),
-            _t("vocab.ask", word=written), text=written.lower())
-        if ok and spoken.strip():
-            self._on_add_vocab(spoken.strip(), written)
-            self._set_hint(_t("vocab.added", spoken=spoken.strip(),
-                              written=written))
+        action, spoken = self._ask_vocab(written)
+        spoken = (spoken or "").strip()
+        if action is None:
+            return
+        if spoken or action == "pronounce":
+            # without a spoken form the word still goes in, written only
+            self._on_add_vocab(spoken, written)
+        if action == "pronounce" and self._on_pronounce is not None:
+            self._on_pronounce(written, self)
+            self._set_hint(_t("vocab.added.word", written=written))
+        elif spoken:
+            self._set_hint(_t("vocab.added", spoken=spoken, written=written))
+
+    def _ask_vocab(self, written: str) -> tuple[str | None, str]:
+        """Ask how the word is spoken - or offer to teach it by voice.
+        Returns ``(action, spoken)``; action is "add", "pronounce" or None."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(_t("vocab.add"))
+        layout = QVBoxLayout(dlg)
+        question = QLabel(_t("vocab.ask", word=written))
+        question.setWordWrap(True)
+        layout.addWidget(question)
+        field = QLineEdit(written.lower())
+        field.selectAll()
+        layout.addWidget(field)
+        buttons = QHBoxLayout()
+        chosen: dict[str, str | None] = {"action": None}
+
+        def pick(action: str) -> None:
+            chosen["action"] = action
+            dlg.accept()
+        if self._on_pronounce is not None:
+            teach = QPushButton(_t("vocab.pronounce"))
+            teach.setToolTip(_wrap_tip(_t("vocab.pronounce.hint")))
+            teach.clicked.connect(lambda: pick("pronounce"))
+            buttons.addWidget(teach)
+        buttons.addStretch()
+        add = QPushButton(_t("vocab.add.ok"))
+        add.setDefault(True)
+        add.clicked.connect(lambda: pick("add"))
+        buttons.addWidget(add)
+        cancel = QPushButton(_t("corr.cancel"))
+        cancel.clicked.connect(dlg.reject)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+        field.returnPressed.connect(lambda: pick("add"))
+        dlg.exec()
+        return chosen["action"], field.text()
 
     def _load_history(self, item: QListWidgetItem) -> None:
         text = item.data(Qt.ItemDataRole.UserRole)

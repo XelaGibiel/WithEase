@@ -4833,6 +4833,7 @@ class DictationModule(BaseModule):
                     on_reselect_target=self.reselect_target,
                     on_confirm_words=self.confirm_words,
                     on_add_vocab=self.add_spoken_form,
+                    on_pronounce=self._open_pronunciation_for,
                     on_ai_action=self.run_ai_action,
                     on_edit_ai_action=self.edit_ai_action,
                     on_geometry_changed=self._save_geometry,
@@ -6115,6 +6116,10 @@ class DictationModule(BaseModule):
                 session.stop(timeout=5)
 
         return _Capture()
+
+    def _open_pronunciation_for(self, word: str, parent: Any) -> None:
+        from pronunciation import PronunciationDialog
+        PronunciationDialog(word, self, parent=parent).exec()
 
     def dictated_texts(self) -> list[str]:
         """What was dictated before (the window's history), to spot a

@@ -538,10 +538,58 @@ def test_add_selection_to_vocab(app, monkeypatch):
     cur.setPosition(9)
     cur.setPosition(17, dw.QTextCursor.MoveMode.KeepAnchor)   # "WithEase"
     win._edit.setTextCursor(cur)
-    monkeypatch.setattr(dw.QInputDialog, "getText",
-                        staticmethod(lambda *a, **k: ("with ease", True)))
+    monkeypatch.setattr(win, "_ask_vocab", lambda _w: ("add", "with ease"))
     win._add_selection_to_vocab()
     assert added == [("with ease", "WithEase")]
+
+
+def test_add_selection_to_vocab_can_teach_the_pronunciation(app, monkeypatch):
+    added, taught = [], []
+    win = dw.DictationWindow(on_add_vocab=lambda s, w: added.append((s, w)),
+                             on_pronounce=lambda w, _p: taught.append(w))
+    win.handle_transcript("Ich sehe WithEase", "text")
+    app.processEvents()
+    cur = win._edit.textCursor()
+    cur.setPosition(9)
+    cur.setPosition(17, dw.QTextCursor.MoveMode.KeepAnchor)
+    win._edit.setTextCursor(cur)
+    monkeypatch.setattr(win, "_ask_vocab", lambda _w: ("pronounce", ""))
+    win._add_selection_to_vocab()
+    assert added == [("", "WithEase")], "the word goes in first"
+    assert taught == ["WithEase"]
+
+
+def test_cancelling_the_vocab_question_adds_nothing(app, monkeypatch):
+    added = []
+    win = dw.DictationWindow(on_add_vocab=lambda s, w: added.append((s, w)))
+    win.handle_transcript("Ich sehe WithEase", "text")
+    app.processEvents()
+    cur = win._edit.textCursor()
+    cur.setPosition(9)
+    cur.setPosition(17, dw.QTextCursor.MoveMode.KeepAnchor)
+    win._edit.setTextCursor(cur)
+    monkeypatch.setattr(win, "_ask_vocab", lambda _w: (None, "with ease"))
+    win._add_selection_to_vocab()
+    assert added == []
+
+
+def test_the_vocab_question_offers_the_teach_button(app, monkeypatch):
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QPushButton
+    win = dw.DictationWindow(on_pronounce=lambda w, _p: None)
+    seen = {}
+
+    def inspect():
+        dlg = QApplication.activeModalWidget()
+        if dlg is None:
+            QTimer.singleShot(20, inspect)
+            return
+        seen["buttons"] = [b.text() for b in dlg.findChildren(QPushButton)]
+        dlg.reject()
+    QTimer.singleShot(20, inspect)
+    action, _spoken = win._ask_vocab("WithEase")
+    assert action is None
+    assert any("Aussprache" in text for text in seen["buttons"])
 
 
 def test_add_selection_to_vocab_needs_selection(app):
