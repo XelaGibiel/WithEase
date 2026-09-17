@@ -668,3 +668,77 @@ def test_the_misheard_quotation_word_works():
 ])
 def test_euro_degrees_minus_and_paragraph_signs(text, want):
     assert st.spoken_numbers(text) == want
+
+
+# -- the dictionary without hotwords ----------------------------------------------------
+
+_WORDS = ["MediaMarkt", "WithEase", "Rechnung", "Deutsche Rentenversicherung",
+          "Parakeet", "OpenWhispr", "Schreiben", "Beginn", "Grüßen"]
+
+
+@pytest.mark.parametrize("text, want", [
+    ("Bei Media Markt gekauft.", "Bei MediaMarkt gekauft."),
+    ("Bei Mediamark gekauft.", "Bei MediaMarkt gekauft."),
+    ("Ich nutze withease täglich.", "Ich nutze WithEase täglich."),
+    ("Die Deutsche Renten Versicherung schreibt.",
+     "Die Deutsche Rentenversicherung schreibt."),
+    ("Parakit ist schnell.", "Parakeet ist schnell."),
+    ("Open Whisper ist ein Programm.", "OpenWhispr ist ein Programm."),
+])
+def test_dictionary_words_come_back(text, want):
+    assert st.match_dictionary(text, _WORDS) == want
+
+
+@pytest.mark.parametrize("text", [
+    "Die Rechnungen liegen hier.",          # an ending, not a misspelling
+    "Ich muss noch schreiben.",             # verb, not the noun
+    "Das beginnt gleich.",                  # lower case: an ordinary word
+    "Mit großen Schritten.",
+    "Weißt du, wie das geht?",
+    "Die Medien machen Markt.",
+    "Nach Namen sortiert.",
+])
+def test_ordinary_german_stays_as_it_is(text):
+    assert st.match_dictionary(text, _WORDS + ["Nachnamen"]) == text
+
+
+def test_cologne_phonetics():
+    assert st.cologne_code("Müller-Lüdenscheidt") == "65752682"
+    assert st.cologne_code("Wikipedia") == "3412"
+    assert st.cologne_code("Parakit") == st.cologne_code("Parakeet")
+
+
+def test_the_final_sentence_uses_the_dictionary_and_every_correction(module):
+    got = []
+
+    class _Win:
+        def stream_final(self, text, mode="auto", marks="auto"):
+            got.append(text)
+    module._window = _Win()
+    module._active_mode = "auto"
+    module._settings["dictionary"] = [{"w": "MediaMarkt", "s": "", "src": "user"}]
+
+    class _Memory:
+        def apply_all(self, text):
+            return text.replace("Rechnug", "Rechnung")
+
+        def apply(self, text, uncertain=None):
+            raise AssertionError("the live test has no uncertainty to go by")
+    module._error_memory = _Memory()
+    module._on_stream_final("Die Rechnug von Media Markt")
+    assert "Rechnung" in got[-1] and "MediaMarkt" in got[-1]
+
+
+def test_the_live_microphone_feeds_the_level_bar(module):
+    from withease.core.event_bus import bus
+    levels = []
+
+    def listen(level, **_):
+        levels.append(level)
+    bus.subscribe("dictation.level", listen)
+    try:
+        module._level_sent = 0.0
+        module._publish_live_level(b"\x00\x40" * 800)
+    finally:
+        bus.unsubscribe("dictation.level", listen)
+    assert levels and levels[-1] > 0.4

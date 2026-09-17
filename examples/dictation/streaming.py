@@ -340,6 +340,153 @@ _UNIT_WORDS = frozenset(
     "paragraph paragraf paragraphen paragrafen".split())
 
 
+# -- your own words ------------------------------------------------------------
+
+def _key(text: str) -> str:
+    return re.sub(r"[\W_]+", "", text or "").casefold()
+
+
+# German endings: a dictionary word plus one of these is the same word
+# inflected ("Rechnung" -> "Rechnungen"), not a misspelling of it.
+_ENDINGS = ("e", "en", "n", "s", "es", "er", "ern", "em")
+
+
+def _special_spelling(word: str) -> bool:
+    """A name written its own way: several words, a capital inside
+    ("MediaMarkt"), all capitals ("ADAC") or digits."""
+    letters = re.sub(r"[^\w]", "", word)
+    return (" " in word.strip() or "-" in word
+            or any(c.isupper() for c in letters[1:])
+            or any(c.isdigit() for c in letters))
+
+
+def _inflected(a: str, b: str) -> bool:
+    short, long = sorted((a, b), key=len)
+    return long.startswith(short) and long[len(short):] in _ENDINGS
+
+
+def cologne_code(word: str) -> str:
+    """Kölner Phonetik: German words that sound alike get the same code
+    ("Parakit" and "Parakeet", "Meier" and "Mayer")."""
+    w = (_key(word).replace("ä", "a").replace("ö", "o").replace("ü", "u")
+         .replace("ß", "s"))
+    codes = []
+    for i, ch in enumerate(w):
+        prev = w[i - 1] if i else ""
+        nxt = w[i + 1] if i + 1 < len(w) else ""
+        if ch in "aeijouy":
+            code = "0"
+        elif ch == "h":
+            code = ""
+        elif ch == "b" or (ch == "p" and nxt != "h"):
+            code = "1"
+        elif ch in "dt":
+            code = "8" if nxt in ("c", "s", "z") else "2"
+        elif ch in "fvw" or (ch == "p" and nxt == "h"):
+            code = "3"
+        elif ch in "gkq":
+            code = "4"
+        elif ch == "c":
+            if i == 0:
+                code = "4" if nxt in "ahkloqrux" else "8"
+            else:
+                code = ("8" if prev in "sz" or nxt not in "ahkoqux" else "4")
+        elif ch == "x":
+            code = "8" if prev in "ckq" else "48"
+        elif ch == "l":
+            code = "5"
+        elif ch in "mn":
+            code = "6"
+        elif ch == "r":
+            code = "7"
+        elif ch in "sz":
+            code = "8"
+        else:
+            code = ""
+        codes.append(code)
+    out = ""
+    for code in "".join(codes):
+        if not out or out[-1] != code:
+            out += code
+    return out[:1] + out[1:].replace("0", "") if out else ""
+
+
+def match_dictionary(text: str, words: list[str],
+                     similarity: float = 0.86) -> str:
+    """Put your dictionary words back where the recogniser wrote them
+    differently.
+
+    Whisper is TOLD these words before it listens; Parakeet cannot be, so
+    they are matched afterwards instead:
+
+    * the same letters, spaced or cased differently ("Media Markt" ->
+      "MediaMarkt", "withease" -> "WithEase") - always;
+    * a close misspelling ("Mediamark" -> "MediaMarkt") - only for words of
+      six letters or more, starting with the same letter, and never when the
+      difference is just an ending, so "Rechnungen" stays "Rechnungen" even
+      if "Rechnung" is in the dictionary.
+    """
+    import difflib
+    entries = []
+    for word in words or []:
+        key = _key(word)
+        if len(key) >= 4:
+            entries.append((word, key, max(1, len(word.split()))))
+    if not entries or not text:
+        return text
+    spans = [(m.start(), m.end()) for m in re.finditer(r"[\w'’-]+", text)]
+    replacements: list[tuple[int, int, str]] = []
+    taken: set[int] = set()
+    for size in (3, 2, 1):
+        for i in range(len(spans) - size + 1):
+            if any(j in taken for j in range(i, i + size)):
+                continue
+            start, end = spans[i][0], spans[i + size - 1][1]
+            surface = text[start:end]
+            key = _key(surface)
+            tokens = surface.split()
+            capitalised = all(t[:1].isupper() or t[:1].isdigit()
+                              for t in re.findall(r"[\w'’-]+", surface))
+            best, best_score = None, 0.0
+            for word, wkey, parts in entries:
+                if size > parts + 1:
+                    continue
+                special = _special_spelling(word)
+                # Joining several words into one ("Nach Namen" ->
+                # "Nachnamen") only for names that are written that way.
+                if size > parts and not special:
+                    continue
+                if key == wkey:
+                    # Only the case differs: "schreiben"/"Schreiben" is
+                    # grammar, "withease"/"WithEase" is a name.
+                    if size == 1 and len(tokens) == 1 and not special:
+                        continue
+                    score = 1.0
+                elif (len(wkey) >= 6 and key[:1] == wkey[:1] and capitalised
+                      and abs(len(key) - len(wkey)) <= max(2, len(wkey) // 4)
+                      and not _inflected(key, wkey)):
+                    # A misheard name comes out capitalised; a lower-case
+                    # word ("beginnt", "wie das") is an ordinary word.
+                    score = difflib.SequenceMatcher(None, key, wkey).ratio()
+                    if score < similarity:
+                        # written differently, but does it SOUND the same?
+                        if score < 0.7 or cologne_code(key) != cologne_code(wkey):
+                            continue
+                        score = similarity
+                else:
+                    continue
+                if score > best_score:
+                    best, best_score = word, score
+            if best is not None and surface != best:
+                replacements.append((start, end, best))
+                taken.update(range(i, i + size))
+            elif best is not None:
+                taken.update(range(i, i + size))
+    for start, end, word in sorted(replacements, reverse=True):
+        text = text[:start] + word + text[end:]
+    return text
+
+
 def spoken_numbers(text: str) -> str:
     """Number words to digits, "plus" and "Prozent" to signs.
 

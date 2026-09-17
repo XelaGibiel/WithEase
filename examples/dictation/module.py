@@ -5483,7 +5483,8 @@ class DictationModule(BaseModule):
         bus.publish("dictation.state", state="warn", detail=_t("mic.quiet"))
 
     def _refine_transcript(self, text: str, *,
-                           spoken_marks: bool = False) -> str:
+                           spoken_marks: bool = False,
+                           all_corrections: bool = False) -> str:
         """Everything a recognised text goes through before it is shown:
         dictionary, learned corrections, optional AI cleanup, casing, question
         marks, commas, dates and the optional AI punctuation.  Shared by the
@@ -5497,7 +5498,12 @@ class DictationModule(BaseModule):
                 text = apply_spoken_forms(text, forms)
             # Learned corrections – but only where Whisper was uncertain (a
             # clearly-spoken word is trusted), so nothing is over-corrected.
-            text = self._memory().apply(text, uncertain=self._last_low_words)
+            # The live test has no per-word certainty to go by; it applies
+            # every learned correction - as its grey preview already did, so
+            # a corrected word no longer flips back at the end of a sentence.
+            text = (self._memory().apply_all(text) if all_corrections
+                    else self._memory().apply(text,
+                                              uncertain=self._last_low_words))
             # Optional AI cleanup – only on real dictation, never on a command
             # utterance (would rewrite "markiere Haus").  Runs on this worker
             # thread, so the UI stays responsive.
@@ -6007,6 +6013,7 @@ class DictationModule(BaseModule):
                 block, fmt["state"] = audioop.ratecv(
                     block, 2, 1, fmt["rate"], _SAMPLE_RATE, fmt["state"])
             session.put(block)
+            self._publish_live_level(block)
 
         self._live_mic, rate, channels = open_input_stream(sd, device, callback)
         fmt["channels"], fmt["rate"] = channels, rate
@@ -6017,6 +6024,21 @@ class DictationModule(BaseModule):
         self._set_state("recording", _t("stream.chip"))
         _log.info("live dictation started (%s, %d Hz, %d ch)",
                   engine, rate, channels)
+
+    def _publish_live_level(self, block: bytes) -> None:
+        """The level bar on the chip, the same way a normal recording feeds
+        it - seeing that the microphone hears you matters just as much here."""
+        if audioop is None:
+            return
+        try:
+            peak = audioop.max(block, 2) / 32768.0
+        except Exception:
+            return
+        self._live_level = max(getattr(self, "_live_level", 0.0) * 0.6, peak)
+        now = time.monotonic()
+        if now - getattr(self, "_level_sent", 0.0) >= 0.1:
+            self._level_sent = now
+            bus.publish("dictation.level", level=self._live_level)
 
     def stop_stream(self) -> None:
         """End the session; the sentence still being spoken is finished."""
@@ -6082,8 +6104,11 @@ class DictationModule(BaseModule):
         if self._window is None:
             return
         import streaming
-        settled = streaming.spoken_numbers(streaming.clean_fillers(settled))
-        tail = streaming.spoken_numbers(streaming.clean_fillers(tail))
+        words = self.glossary_words()
+        settled = streaming.match_dictionary(
+            streaming.spoken_numbers(streaming.clean_fillers(settled)), words)
+        tail = streaming.match_dictionary(
+            streaming.spoken_numbers(streaming.clean_fillers(tail)), words)
         if self._stream_spoken_marks():
             settled = streaming.apply_spoken_marks(
                 streaming.strip_sentence_marks(settled))
@@ -6124,7 +6149,9 @@ class DictationModule(BaseModule):
                 text = text[:-1]          # cut for length, not a sentence end
         if text:
             self._last_low_words = []
-            text = self._refine_transcript(text, spoken_marks=spoken)
+            text = streaming.match_dictionary(text, self.glossary_words())
+            text = self._refine_transcript(text, spoken_marks=spoken,
+                                           all_corrections=True)
             if not text:
                 info["result"] = "removed by post-processing"
         # One line per sentence, never the words: enough to tell afterwards
