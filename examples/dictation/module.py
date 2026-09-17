@@ -37,7 +37,7 @@ import sys
 import threading
 import time
 import wave
-from typing import Any
+from typing import Any, Callable
 
 # Vosk (Kaldi/OpenBLAS) and faster-whisper (CTranslate2) each ship their own
 # OpenMP runtime.  When both are loaded in one process on Windows, the duplicate
@@ -3886,9 +3886,15 @@ class DictationSettingsWidget(QWidget):
             on_import=m.import_dictionary,
             on_learn=self._open_learn_text,
             on_clear_category=m.clear_dictionary_category,
+            on_pronounce=lambda word, parent: self._open_pronunciation(
+                word, parent),
             title=_t("vocab"), intro=_t("vocab.hint"), parent=self)
         dlg.exec()
         self._dict_summary.setText(self._dict_summary_text())
+
+    def _open_pronunciation(self, word: str, parent: Any) -> None:
+        from pronunciation import PronunciationDialog
+        PronunciationDialog(word, self._module, parent=parent).exec()
 
     def _open_learn_text(self) -> None:
         from settings_dialogs import LearnFromTextDialog
@@ -5995,6 +6001,22 @@ class DictationModule(BaseModule):
             voice_level=getattr(self, "_stream_voice_level", None),
             on_error=lambda exc: _log.warning("live pass failed: %s", exc))
 
+        def feed(block: bytes) -> None:
+            session.put(block)
+            self._publish_live_level(block)
+
+        self._live_mic, rate, channels = self._open_mic_16k(sd, feed)
+        self._live_session = session
+        self._stream_session_info = session
+        session.start()
+        self._stream_started = time.monotonic()
+        self._set_state("recording", _t("stream.chip"))
+        _log.info("live dictation started (%s, %d Hz, %d ch)",
+                  engine, rate, channels)
+
+    def _open_mic_16k(self, sd: Any, feed: Callable[[bytes], None]):
+        """Open the chosen microphone and hand 16 kHz mono int16 to ``feed``.
+        Returns ``(stream, native rate, channels)``."""
         try:
             device = resolve_input_device(self._settings.get("input_device"))
         except Exception:
@@ -6012,18 +6034,114 @@ class DictationModule(BaseModule):
             if fmt["rate"] != _SAMPLE_RATE and audioop is not None:
                 block, fmt["state"] = audioop.ratecv(
                     block, 2, 1, fmt["rate"], _SAMPLE_RATE, fmt["state"])
-            session.put(block)
-            self._publish_live_level(block)
+            feed(block)
 
-        self._live_mic, rate, channels = open_input_stream(sd, device, callback)
+        stream, rate, channels = open_input_stream(sd, device, callback)
         fmt["channels"], fmt["rate"] = channels, rate
-        self._live_session = session
-        self._stream_session_info = session
+        return stream, rate, channels
+
+    # -- Aussprache anlernen ------------------------------------------------
+
+    def pronunciation_engines(self) -> list[tuple[str, Callable[[bytes], str]]]:
+        """The local recognisers a word can be tried on, made ready.
+
+        Both, when both are there: the same word can go wrong differently in
+        the live test (Parakeet) and in normal dictation (Whisper).  Runs on
+        a worker thread - starting either can take a few seconds.  Never
+        downloads a model just for this."""
+        engines: list[tuple[str, Callable[[bytes], str]]] = []
+        try:
+            import parakeet
+            if parakeet.available():
+                if self._parakeet is None:
+                    self._parakeet = parakeet.ParakeetEngine()
+                if not self._parakeet.alive():
+                    self._parakeet.start()
+                engines.append(
+                    ("Parakeet", lambda pcm: self._stream_parakeet(pcm, True)))
+        except Exception:
+            _log.warning("parakeet not ready for pronunciation", exc_info=True)
+        try:
+            model = self._settings.get("local_model", "base")
+            if (self._local_in_process() and not self._use_whispercpp()
+                    and (self._local_model is not None
+                         or model_is_downloaded(model))):
+                self._ensure_model_loaded()
+                engines.append(
+                    ("Whisper", lambda pcm: self._stream_whisper(pcm, True)))
+        except Exception:
+            _log.warning("whisper not ready for pronunciation", exc_info=True)
+        return engines
+
+    def capture_takes(self, on_take: Callable[[bytes], None],
+                      on_level: Callable[[float], None] | None = None) -> Any:
+        """Listen until stopped; every spoken take (speech, then a short
+        pause) goes to ``on_take`` as 16 kHz mono int16.  Returns an object
+        with ``stop()``.  Nothing is written to disk."""
+        import sounddevice as sd
+
+        import streaming
+
+        def grab(pcm: bytes, final: bool) -> str:
+            if final:
+                on_take(pcm)
+            return ""
+
+        session = streaming.StreamSession(
+            grab, lambda *_: None, lambda _text: None, step_s=1e9,
+            pause_s=0.7, detector=streaming.make_gate("normal"))
+        peak = {"value": 0.0}
+
+        def feed(block: bytes) -> None:
+            session.put(block)
+            if on_level is not None and audioop is not None:
+                try:
+                    peak["value"] = max(peak["value"] * 0.6,
+                                        audioop.max(block, 2) / 32768.0)
+                    on_level(peak["value"])
+                except Exception:
+                    pass
+
+        mic, _rate, _channels = self._open_mic_16k(sd, feed)
         session.start()
-        self._stream_started = time.monotonic()
-        self._set_state("recording", _t("stream.chip"))
-        _log.info("live dictation started (%s, %d Hz, %d ch)",
-                  engine, rate, channels)
+
+        class _Capture:
+            def stop(self) -> None:
+                try:
+                    mic.stop()
+                    mic.close()
+                except Exception:
+                    pass
+                session.stop(timeout=5)
+
+        return _Capture()
+
+    def dictated_texts(self) -> list[str]:
+        """What was dictated before (the window's history), to spot a
+        mishearing that is also a word you really use."""
+        return [str(item) for item in (self._settings.get("history") or [])]
+
+    def add_heard_variants(self, written: str, variants: list[str]) -> None:
+        """Keep how a word was misheard, on its dictionary entry."""
+        written = (written or "").strip()
+        if not written:
+            return
+        entries = self._dictionary()
+        entry = next((e for e in entries
+                      if e["w"].casefold() == written.casefold()), None)
+        if entry is None:
+            entry = {"w": written, "s": "", "src": "user", "v": []}
+            entries.append(entry)
+        have = {v.casefold() for v in entry.get("v", [])}
+        have.add(written.casefold())
+        if entry.get("s"):
+            have.add(entry["s"].casefold())
+        for variant in variants:
+            variant = (variant or "").strip()
+            if variant and variant.casefold() not in have:
+                entry.setdefault("v", []).append(variant)
+                have.add(variant.casefold())
+        self._save_dictionary(entries)
 
     def _publish_live_level(self, block: bytes) -> None:
         """The level bar on the chip, the same way a normal recording feeds
@@ -6510,7 +6628,10 @@ class DictationModule(BaseModule):
             if isinstance(e, dict) and str(e.get("w", "")).strip():
                 out.append({"w": str(e.get("w", "")).strip(),
                             "s": str(e.get("s", "")).strip(),
-                            "src": e.get("src") or "user"})
+                            "src": e.get("src") or "user",
+                            # how "Aussprache anlernen" heard it
+                            "v": [str(v).strip() for v in (e.get("v") or [])
+                                  if str(v).strip()]})
         return out
 
     def _migrate_dictionary(self) -> list[dict]:
@@ -6532,7 +6653,8 @@ class DictationModule(BaseModule):
 
     def _save_dictionary(self, entries: list[dict]) -> None:
         self._settings["dictionary"] = [
-            {"w": e["w"], "s": e.get("s", ""), "src": e.get("src", "user")}
+            {"w": e["w"], "s": e.get("s", ""), "src": e.get("src", "user"),
+             **({"v": list(e["v"])} if e.get("v") else {})}
             for e in entries if str(e.get("w", "")).strip()]
         self._settings.pop("glossary", None)        # legacy keys – now unified
         self._settings.pop("spoken_forms", None)
@@ -6554,10 +6676,12 @@ class DictationModule(BaseModule):
                 src = e["src"]
                 if category in ("user", "import", "learned") and src != category:
                     continue
-                if category == "spoken" and not e["s"]:
+                if category == "spoken" and not (e["s"] or e.get("v")):
                     continue
-                rows.append(("dict", e["w"], e["s"], e["w"],
-                             self._SRC_LABELS.get(src, src)))
+                label = self._SRC_LABELS.get(src, src)
+                if e.get("v"):
+                    label += f" · 🎤 {len(e['v'])}"
+                rows.append(("dict", e["w"], e["s"], e["w"], label))
         if category in ("all", "corrected"):
             subs = self._memory().substitutions()   # {folded misheard: correct}
             for misheard, correct in reversed(list(subs.items())):
@@ -6645,7 +6769,12 @@ class DictationModule(BaseModule):
 
     def spoken_forms(self) -> list[tuple[str, str]]:
         """(spoken, written) pairs -- entries that have a spoken form."""
-        return [(e["s"], e["w"]) for e in self._dictionary() if e["s"]]
+        pairs = []
+        for e in self._dictionary():
+            if e["s"]:
+                pairs.append((e["s"], e["w"]))
+            pairs.extend((v, e["w"]) for v in e.get("v", []))
+        return pairs
 
     def add_spoken_form(self, spoken: str, written: str) -> None:
         self.add_dictionary_entry(written, spoken, "user")   # window button
@@ -6667,6 +6796,8 @@ class DictationModule(BaseModule):
             for e in entries:
                 line = (e["s"] + " = " + e["w"]) if e["s"] else e["w"]
                 f.write(line + nl)
+                for variant in e.get("v", []):
+                    f.write(variant + " = " + e["w"] + nl)
         return len(entries)
 
     def import_dictionary(self, path: str) -> int:
@@ -6694,8 +6825,15 @@ class DictationModule(BaseModule):
                     continue
                 key = written.casefold()
                 if key in by_written:
-                    if spoken:
-                        by_written[key]["s"] = spoken
+                    existing = by_written[key]
+                    if spoken and existing["s"] and \
+                            existing["s"].casefold() != spoken.casefold():
+                        # a second spoken form: a heard variant
+                        if spoken.casefold() not in {
+                                v.casefold() for v in existing.get("v", [])}:
+                            existing.setdefault("v", []).append(spoken)
+                    elif spoken:
+                        existing["s"] = spoken
                 else:
                     e = {"w": written, "s": spoken, "src": "import"}
                     entries.append(e)

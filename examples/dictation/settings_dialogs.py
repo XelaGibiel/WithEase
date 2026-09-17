@@ -595,6 +595,7 @@ class DictionaryDialog(QDialog):
         on_import: Callable[[str], int] | None = None,
         on_learn: Callable[[], None] | None = None,
         on_clear_category: Callable[[str], int] | None = None,
+        on_pronounce: Callable[[str, QWidget], None] | None = None,
         title: str = _t("dlg.vocab.title"),
         intro: str = "",
         parent: QWidget | None = None,
@@ -634,6 +635,15 @@ class DictionaryDialog(QDialog):
         add_btn.clicked.connect(self._add)
         add_row.addWidget(add_btn)
         layout.addLayout(add_row)
+        self._on_pronounce = on_pronounce
+        if on_pronounce is not None:
+            pron_row = QHBoxLayout()
+            self._pron_btn = QPushButton(_t("pron.button"))
+            self._pron_btn.setToolTip(_wrap_tip(_t("pron.button.hint")))
+            self._pron_btn.clicked.connect(self._pronounce)
+            pron_row.addWidget(self._pron_btn)
+            pron_row.addStretch()
+            layout.addLayout(pron_row)
 
         self._exists = QLabel("")
         self._exists.setStyleSheet(_READABLE)
@@ -788,6 +798,28 @@ class DictionaryDialog(QDialog):
         if not written:
             return
         self._on_add(written, self._spoken.text().strip())
+        self._written.clear()
+        self._spoken.clear()
+        self._reload()
+
+    def _pronounce(self) -> None:
+        """For the word being typed (added first when new) or the selected
+        entry."""
+        word = self._written.text().strip()
+        if word:
+            known = any(r[3].casefold() == word.casefold()
+                        for r in self._rows_provider("all") if r[0] == "dict")
+            if not known:
+                self._on_add(word, self._spoken.text().strip())
+        else:
+            row = self._table.currentRow()
+            if 0 <= row < len(self._row_meta) and \
+                    self._row_meta[row][0] == "dict":
+                word = self._row_meta[row][1]
+        if not word:
+            self._exists.setText(_t("pron.pick"))
+            return
+        self._on_pronounce(word, self)
         self._written.clear()
         self._spoken.clear()
         self._reload()
