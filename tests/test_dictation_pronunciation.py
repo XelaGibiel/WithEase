@@ -100,7 +100,8 @@ def test_the_spoken_form_is_not_repeated_as_a_variant(module):
 def test_the_list_shows_how_many_were_taught(module):
     module.add_heard_variants("Parakeet", ["Parakit", "Para Kid"])
     rows = module.dictionary_rows("all")
-    assert rows[0][4].endswith("🎤 2")
+    assert rows[0][4] == "von mir", "the origin stays the origin"
+    assert module.heard_variants("Parakeet") == ["Parakit", "Para Kid"]
     assert module.dictionary_rows("spoken"), "counts as having spoken forms"
 
 
@@ -244,9 +245,25 @@ def test_the_dictionary_table_follows_the_font_size(app):
             categories=[("all", "Alle")])
         assert dlg._table.font().pointSize() == 18
         assert "18pt" in dlg._table.horizontalHeader().styleSheet()
-        button = dlg._table.cellWidget(0, 3)
+        button = dlg._table.cellWidget(0, 4)
         assert button.height() <= dlg._table.rowHeight(0)
         assert dlg._table.rowHeight(0) >= dlg._table.fontMetrics().height()
         dlg.close()
     finally:
         app.setFont(before)
+
+
+def test_taught_spellings_have_their_own_column(app, module):
+    from settings_dialogs import DictionaryDialog
+    module.add_heard_variants("Leibig", ["Liebig", "Libek", "Libik"])
+    dlg = DictionaryDialog(
+        rows_provider=module.dictionary_rows, on_add=lambda *a: None,
+        on_edit=lambda *a: None, on_remove=lambda *a: None,
+        categories=[("all", "Alle")], variants_for=module.heard_variants)
+    headers = [dlg._table.horizontalHeaderItem(i).text()
+               for i in range(dlg._table.columnCount())]
+    assert headers[2] == "Herkunft" and headers[3] == "Angelernt"
+    assert dlg._table.item(0, 2).text() == "von mir"
+    assert dlg._table.item(0, 3).text() == "🎤 3"
+    assert "Liebig" in dlg._table.item(0, 3).toolTip()
+    dlg.close()

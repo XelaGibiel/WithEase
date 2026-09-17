@@ -3888,6 +3888,7 @@ class DictationSettingsWidget(QWidget):
             on_clear_category=m.clear_dictionary_category,
             on_pronounce=lambda word, parent: self._open_pronunciation(
                 word, parent),
+            variants_for=m.heard_variants,
             title=_t("vocab"), intro=_t("vocab.hint"), parent=self)
         dlg.exec()
         self._dict_summary.setText(self._dict_summary_text())
@@ -6121,6 +6122,13 @@ class DictationModule(BaseModule):
         from pronunciation import PronunciationDialog
         PronunciationDialog(word, self, parent=parent).exec()
 
+    def heard_variants(self, written: str) -> list[str]:
+        """The spellings "Aussprache anlernen" kept for a word."""
+        for e in self._dictionary():
+            if e["w"].casefold() == (written or "").casefold():
+                return list(e.get("v", []))
+        return []
+
     def dictated_texts(self) -> list[str]:
         """What was dictated before (the window's history), to spot a
         mishearing that is also a word you really use."""
@@ -6683,10 +6691,8 @@ class DictationModule(BaseModule):
                     continue
                 if category == "spoken" and not (e["s"] or e.get("v")):
                     continue
-                label = self._SRC_LABELS.get(src, src)
-                if e.get("v"):
-                    label += f" · 🎤 {len(e['v'])}"
-                rows.append(("dict", e["w"], e["s"], e["w"], label))
+                rows.append(("dict", e["w"], e["s"], e["w"],
+                             self._SRC_LABELS.get(src, src)))
         if category in ("all", "corrected"):
             subs = self._memory().substitutions()   # {folded misheard: correct}
             for misheard, correct in reversed(list(subs.items())):

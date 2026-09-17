@@ -186,6 +186,9 @@ STRINGS: dict[str, dict[str, str]] = {
         # -- dialogs ---------------------------------
         "dlg.close": "Schließen",
         "pron.button": "🎤 Aussprache anlernen",
+        "dlg.vocab.taught": "Angelernt",
+        "dlg.vocab.taught.hint": "Wie viele Schreibweisen „Aussprache anlernen“ für das Wort gespeichert hat.",
+        "dlg.vocab.taught.list": "Wird ersetzt: {list}",
         "pron.button.hint": "Für das Wort im Eingabefeld oder den markierten Eintrag: Du sprichst es dreimal ein, WithEase merkt sich, wie der Erkenner es falsch schreibt, und ersetzt genau das künftig.",
         "pron.pick": "Wort eingeben oder einen Eintrag markieren, dann „Aussprache anlernen“.",
         "pron.title": "Aussprache anlernen: {word}",
@@ -387,6 +390,9 @@ STRINGS: dict[str, dict[str, str]] = {
         # -- dialogs ---------------------------------
         "dlg.close": "Close",
         "pron.button": "🎤 Teach pronunciation",
+        "dlg.vocab.taught": "Taught",
+        "dlg.vocab.taught.hint": "How many spellings 'Teach pronunciation' saved for the word.",
+        "dlg.vocab.taught.list": "Replaced: {list}",
         "pron.button.hint": "For the word in the input field or the selected entry: say it three times, WithEase remembers how the recogniser misspells it and replaces exactly that from then on.",
         "pron.pick": "Type a word or select an entry, then 'Teach pronunciation'.",
         "pron.title": "Teach pronunciation: {word}",

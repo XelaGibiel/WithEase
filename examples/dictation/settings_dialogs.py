@@ -597,6 +597,7 @@ class DictionaryDialog(QDialog):
         on_learn: Callable[[], None] | None = None,
         on_clear_category: Callable[[str], int] | None = None,
         on_pronounce: Callable[[str, QWidget], None] | None = None,
+        variants_for: Callable[[str], list[str]] | None = None,
         title: str = _t("dlg.vocab.title"),
         intro: str = "",
         parent: QWidget | None = None,
@@ -605,6 +606,7 @@ class DictionaryDialog(QDialog):
         self.setWindowTitle(title)
         self.resize(600, 580)
         self._rows_provider = rows_provider
+        self._variants_for = variants_for or (lambda _word: [])
         self._on_add = on_add
         self._on_edit = on_edit
         self._on_remove = on_remove
@@ -670,9 +672,15 @@ class DictionaryDialog(QDialog):
         # its spoken form.  Much more readable than a list of inline fields.
         self._loading = False
         self._row_meta: list[tuple] = []
-        self._table = QTableWidget(0, 4)
+        self._table = QTableWidget(0, 5)
         self._table.setHorizontalHeaderLabels(
-            [_t("dlg.vocab.word"), "Gesprochen / erkannt als", "Herkunft", ""])
+            [_t("dlg.vocab.word"), "Gesprochen", "Herkunft",
+             _t("dlg.vocab.taught"), ""])
+        # short, so it fits a large font; the full meaning on hover
+        self._table.horizontalHeaderItem(1).setToolTip(
+            _wrap_tip("Gesprochen / erkannt als"))
+        self._table.horizontalHeaderItem(3).setToolTip(
+            _wrap_tip(_t("dlg.vocab.taught.hint")))
         self._table.verticalHeader().setVisible(False)
         self._table.setAlternatingRowColors(True)
         self._table.setSelectionBehavior(
@@ -701,7 +709,8 @@ class DictionaryDialog(QDialog):
             size = app.font().pointSize()
             if size > 0:
                 self._table.horizontalHeader().setStyleSheet(
-                    f"QHeaderView::section {{ font-size: {size}pt; }}")
+                    f"QHeaderView::section {{ font-size: {size}pt;"
+                    " padding: 4px 10px; }")
         self._row_h = self._row_height()
         self._table.verticalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Fixed)
@@ -710,8 +719,9 @@ class DictionaryDialog(QDialog):
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self._table.setColumnWidth(3, self._row_h + 6)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(4, self._row_h + 6)
         self._table.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self._table, 1)
 
@@ -774,6 +784,15 @@ class DictionaryDialog(QDialog):
             origin = QTableWidgetItem(src)
             origin.setFlags(noedit)      # read-only; no grey foreground so it
             self._table.setItem(r, 2, origin)   # stays readable when selected
+            variants = self._variants_for(key) if kind == "dict" else []
+            taught = QTableWidgetItem(f"🎤 {len(variants)}" if variants else "")
+            taught.setFlags(noedit)
+            taught.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if variants:
+                taught.setToolTip(_wrap_tip(_t(
+                    "dlg.vocab.taught.list",
+                    list=", ".join(f"„{v}“" for v in variants))))
+            self._table.setItem(r, 3, taught)
             btn = QPushButton("✕")
             side = self._row_h - 4
             btn.setFixedSize(side, side)
@@ -783,7 +802,7 @@ class DictionaryDialog(QDialog):
             btn.setToolTip(_wrap_tip(_t("dlg.remove")))
             btn.clicked.connect(
                 lambda _=False, kd=kind, k=key: self._remove(kd, k))
-            self._table.setCellWidget(r, 3, btn)
+            self._table.setCellWidget(r, 4, btn)
         self._loading = False
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
