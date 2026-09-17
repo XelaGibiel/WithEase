@@ -94,6 +94,75 @@ class Levels:
         return rms >= threshold
 
 
+class EnergyGate:
+    """Loudness only - the fallback when the speech model is not there."""
+
+    def __init__(self, gate: float = 0.0) -> None:
+        self._levels = Levels(gate)
+
+    def is_speech(self, chunk: bytes, in_speech: bool = False) -> bool:
+        return self._levels.is_speech(rms16(chunk))
+
+
+class SileroGate:
+    """Tells speech from everything else with the Silero speech model.
+
+    Loudness cannot tell a voice from a door, a keyboard, a cough or music -
+    they are all "loud".  This small model (well under a millisecond per
+    call) was trained for exactly that question, and faster-whisper already
+    ships it.
+
+    Hysteresis: a sentence only STARTS on clear speech, but once it runs a
+    softer, trailing voice keeps it going - so quiet word endings are not
+    mistaken for the pause that ends the sentence.
+    """
+
+    WINDOW = 512                     # samples; what the model is built for
+    HISTORY = 16                     # windows of context per call (~0.5 s)
+
+    def __init__(self, model, start: float = 0.5, keep: float = 0.35) -> None:
+        self._model = model
+        self.start = start
+        self.keep = keep
+        self._pending = b""
+        self._history = None
+        self.last_probability = 0.0
+
+    def _threshold(self, in_speech: bool) -> float:
+        return self.keep if in_speech else self.start
+
+    def is_speech(self, chunk: bytes, in_speech: bool = False) -> bool:
+        import numpy as np
+        data = self._pending + chunk
+        usable = len(data) // (self.WINDOW * 2) * self.WINDOW * 2
+        self._pending = data[usable:]
+        if not usable:
+            return self.last_probability >= self._threshold(in_speech)
+        fresh = np.frombuffer(data[:usable], dtype=np.int16).astype(
+            np.float32) / 32768.0
+        history = (fresh if self._history is None
+                   else np.concatenate([self._history, fresh]))
+        self._history = history[-self.HISTORY * self.WINDOW:]
+        try:
+            probs = np.asarray(self._model(self._history)).reshape(-1)
+        except Exception:
+            return False
+        new_windows = max(1, len(fresh) // self.WINDOW)
+        self.last_probability = float(probs[-new_windows:].max())
+        return self.last_probability >= self._threshold(in_speech)
+
+
+def make_gate(sensitivity: str = "normal"):
+    """The best available speech gate.  ``sensitivity``: "normal", or "strict"
+    for a noisy room (clearer speech needed before a sentence starts)."""
+    start, keep = (0.7, 0.45) if sensitivity == "strict" else (0.5, 0.35)
+    try:
+        from faster_whisper.vad import get_vad_model
+        return SileroGate(get_vad_model(), start=start, keep=keep)
+    except Exception:
+        return EnergyGate()
+
+
 def rms16(chunk: bytes) -> float:
     try:
         import audioop
@@ -120,7 +189,7 @@ class StreamSession:
                  step_s: float = 0.5, pause_s: float = 0.9,
                  preroll_s: float = 0.3, max_sentence_s: float = 25.0,
                  min_speech_s: float = 0.15, gate: float = 0.0,
-                 first_pass_s: float = 0.0,
+                 first_pass_s: float = 0.0, detector=None,
                  on_error: Callable[[Exception], None] | None = None) -> None:
         self._transcribe = transcribe
         self._on_update = on_update
@@ -134,7 +203,7 @@ class StreamSession:
         # Parakeet picks the language by itself and guesses English on the
         # first half second ("Constant." for "Kannst"); wait for more audio.
         self.first_pass_s = first_pass_s
-        self._levels = Levels(gate)
+        self._detector = detector or EnergyGate(gate)
         self._agreement = Agreement()
         self._preroll: collections.deque[bytes] = collections.deque()
         self._preroll_bytes = 0
@@ -192,7 +261,7 @@ class StreamSession:
             self._decide(ending)
 
     def _take(self, chunk: bytes) -> None:
-        loud = self._levels.is_speech(rms16(chunk))
+        loud = self._detector.is_speech(chunk, bool(self._sentence))
         if not self._sentence:
             if not loud:
                 self._preroll.append(chunk)

@@ -220,6 +220,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "stream.engine.parakeet": "Parakeet (NVIDIA, Test)",
         "stream.engine.parakeet.missing": "Parakeet (Testumgebung fehlt)",
         "stream.pause": "Satzpause (Live)",
+        "stream.noise": "Nebengeräusche (Live)",
+        "stream.noise.normal": "Normal",
+        "stream.noise.strict": "Laute Umgebung – nur deutliche Sprache",
+        "stream.noise.hint": "Eine Spracherkennung entscheidet, ob gerade jemand spricht – Tastatur, Türen, Husten oder Musik starten keinen Satz. „Laute Umgebung“ verlangt deutlichere Sprache, bevor ein Satz beginnt.",
         "stream.loading": "{engine} wird geladen …",
         "stream.chip": "Live",
         "backend.cloud.hint": "Die Aufnahme wird an einen Anbieter geschickt (OpenRouter, OpenAI, Groq …) – den wählst du unten unter „Anbieter“.",
@@ -535,6 +539,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "stream.engine.parakeet": "Parakeet (NVIDIA, test)",
         "stream.engine.parakeet.missing": "Parakeet (test environment missing)",
         "stream.pause": "Sentence pause (live)",
+        "stream.noise": "Background noise (live)",
+        "stream.noise.normal": "Normal",
+        "stream.noise.strict": "Noisy room – clear speech only",
+        "stream.noise.hint": "A speech detector decides whether someone is talking – keyboard, doors, coughing or music do not start a sentence. 'Noisy room' needs clearer speech before a sentence begins.",
         "stream.loading": "Loading {engine} …",
         "stream.chip": "Live",
         "backend.cloud.hint": "The recording is sent to a provider (OpenRouter, OpenAI, Groq …) – pick it below under “Provider”.",
@@ -3061,6 +3069,17 @@ class DictationSettingsWidget(QWidget):
         self._stream_pause.valueChanged.connect(
             lambda v: self._save("stream_pause", round(float(v), 1)))
         rec.addRow(_t("stream.pause"), self._stream_pause)
+        self._stream_noise = QComboBox()
+        self._stream_noise.addItem(_t("stream.noise.normal"), "normal")
+        self._stream_noise.addItem(_t("stream.noise.strict"), "strict")
+        self._stream_noise.setCurrentIndex(max(0, self._stream_noise.findData(
+            self._settings.get("stream_noise", "normal"))))
+        self._stream_noise.currentIndexChanged.connect(
+            lambda i: self._save("stream_noise",
+                                 self._stream_noise.itemData(i)))
+        rec.addRow(_t("stream.noise"), self._stream_noise)
+        self._stream_noise_note = _setting_note(_t("stream.noise.hint"))
+        rec.addRow("", self._stream_noise_note)
         # Changing the model means the next dictation would silently download
         # it – say so, right where the choice was made.
         self._local_model.currentIndexChanged.connect(
@@ -4153,6 +4172,8 @@ class DictationSettingsWidget(QWidget):
         details = local and box.isChecked()
         self._form_rec.setRowVisible(self._stream_engine, details)
         self._form_rec.setRowVisible(self._stream_pause, details)
+        self._form_rec.setRowVisible(self._stream_noise, details)
+        self._form_rec.setRowVisible(self._stream_noise_note, details)
 
     def _update_cloud_rows(self) -> None:
         cloud = self._backend.currentData() == "cloud"
@@ -5932,6 +5953,8 @@ class DictationModule(BaseModule):
             transcribe, self._on_stream_update, self._on_stream_final,
             step_s=0.5 if engine == "whisper" else 0.3, pause_s=pause,
             first_pass_s=0.0 if engine == "whisper" else 1.4,
+            detector=streaming.make_gate(
+                self._settings.get("stream_noise", "normal")),
             on_error=lambda exc: _log.warning("live pass failed: %s", exc))
 
         try:

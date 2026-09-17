@@ -42,18 +42,27 @@ def _say(obj: dict) -> None:
     _PROTOCOL.flush()
 
 
-def _load(model_dir: str):
+def _load(model_dir: str, device: str = "auto", quantization: str = ""):
     import onnx_asr
     import onnxruntime as ort
-    wanted = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    # "auto": NVIDIA if it works, else DirectML (AMD/Intel graphics on
+    # Windows), else the processor.  "cpu" forces the processor.
+    wanted = {"cpu": ["CPUExecutionProvider"],
+              "cuda": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+              "dml": ["DmlExecutionProvider", "CPUExecutionProvider"]}.get(
+        device, ["CUDAExecutionProvider", "DmlExecutionProvider",
+                 "CPUExecutionProvider"])
     providers = [p for p in wanted if p in ort.get_available_providers()]
     try:
         # The CUDA libraries come as pip packages; make them findable.
         ort.preload_dlls()
     except Exception:
         pass
-    model = onnx_asr.load_model(MODEL, path=model_dir, providers=providers)
-    device = "cuda" if "CUDAExecutionProvider" in providers else "cpu"
+    model = onnx_asr.load_model(MODEL, path=model_dir, providers=providers,
+                                quantization=quantization or None)
+    used = providers[0] if providers else "CPUExecutionProvider"
+    device = {"CUDAExecutionProvider": "cuda",
+              "DmlExecutionProvider": "dml"}.get(used, "cpu")
     return model, device
 
 
@@ -63,7 +72,9 @@ def main() -> int:
         os.path.dirname(os.path.abspath(__file__)), "parakeet-model")
     try:
         import numpy as np
-        model, device = _load(model_dir)
+        model, device = _load(
+            model_dir, os.environ.get("WITHEASE_PARAKEET_DEVICE", "auto"),
+            os.environ.get("WITHEASE_PARAKEET_QUANT", ""))
         model.recognize(np.zeros(16000, dtype=np.float32), sample_rate=16000)
     except Exception as exc:                      # report, never hang
         _say({"ready": False, "error": f"{type(exc).__name__}: {exc}"[:300]})

@@ -346,3 +346,54 @@ def test_the_parakeet_folder_is_found_through_the_pointer_file(tmp_path,
     monkeypatch.setenv("APPDATA", str(home))
     monkeypatch.delenv("WITHEASE_PARAKEET_DIR", raising=False)
     assert parakeet.env_dir() == str(folder)
+
+
+# -- telling speech from noise -------------------------------------------------------
+
+class _FakeVad:
+    """Returns a fixed probability per 512-sample window."""
+
+    def __init__(self, prob):
+        self.prob = prob
+        self.lengths = []
+
+    def __call__(self, audio):
+        import numpy as np
+        assert len(audio) % 512 == 0
+        self.lengths.append(len(audio))
+        return np.full((len(audio) // 512, 1), self.prob, dtype="float32")
+
+
+def test_the_speech_gate_needs_clear_speech_to_start_but_less_to_go_on():
+    vad = _FakeVad(0.4)
+    gate = st.SileroGate(vad, start=0.5, keep=0.35)
+    chunk = b"\x01\x00" * 1600
+    assert gate.is_speech(chunk, in_speech=False) is False
+    assert gate.is_speech(chunk, in_speech=True) is True
+
+
+def test_the_speech_gate_keeps_a_short_history_in_whole_windows():
+    vad = _FakeVad(0.9)
+    gate = st.SileroGate(vad)
+    for _ in range(40):
+        gate.is_speech(b"\x01\x00" * 700)
+    assert max(vad.lengths) <= st.SileroGate.HISTORY * 512
+
+
+def test_a_noise_the_gate_rejects_starts_no_sentence():
+    rec, updates, finals = _Recogniser(), [], []
+    s = _session(rec, updates, finals, detector=st.SileroGate(_FakeVad(0.1)))
+    _run(s, _tone(3.0) + _silence(1.2))
+    assert not rec.calls and not finals
+
+
+def test_without_the_speech_model_loudness_is_used(monkeypatch):
+    import builtins
+    real_import = builtins.__import__
+
+    def no_vad(name, *args, **kwargs):
+        if name == "faster_whisper.vad":
+            raise ImportError("not installed")
+        return real_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", no_vad)
+    assert isinstance(st.make_gate(), st.EnergyGate)
