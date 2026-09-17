@@ -163,6 +163,53 @@ def make_gate(sensitivity: str = "normal"):
         return EnergyGate()
 
 
+# Sounds a recogniser writes down when there were no words: a car passing
+# became "Mm-hmm".  Only as whole words - "Hmmel" or "Umzug" stay.
+_FILLERS = re.compile(
+    r"(?<![\w-])(?:m+-?h+m+|m+h+m+|h+m+|u+h+-?h+u+h+|u+h+|u+m+|ä+h+m*|ö+h*m+)"
+    r"(?![\w-])[.,!?…]*", re.IGNORECASE)
+
+_EN = frozenset("""the a an and or but is are was were be been it this that you
+i we they he she my your our to of in on for with not do does did have has
+had what how why where when can could would should will just so if there
+here all no yes okay hello hi thanks thank please""".split())
+_DE = frozenset("""der die das und oder aber ist sind war waren ein eine einen
+es ich wir sie er du mein dein nicht mit auf für von zu im in den dem des
+auch noch schon wie was warum wo wann kann könnte würde soll wird nur so
+wenn hier alle nein ja bitte danke hallo""".split())
+
+
+def clean_fillers(text: str) -> str:
+    """Remove "Mm-hmm", "Hmm", "Uh", "Äh" … and tidy what is left."""
+    cleaned = _FILLERS.sub(" ", text or "")
+    cleaned = re.sub(r"\s+([.,!?…])", r"\1", cleaned)
+    cleaned = re.sub(r"^[\s.,!?…]+", "", cleaned)
+    cleaned = " ".join(cleaned.split())
+    original = (text or "").lstrip()
+    if (cleaned and original[:1].isupper() and cleaned[:1].islower()
+            and not original.lower().startswith(cleaned[:3].lower())):
+        # the filler opened the sentence; the sentence still starts capital
+        cleaned = cleaned[0].upper() + cleaned[1:]
+    return cleaned
+
+
+def looks_foreign(text: str, language: str = "de") -> bool:
+    """True for a sentence that is clearly English while dictating German.
+
+    Parakeet chooses the language by itself, so a voice from the TV or the
+    next room comes out as an English sentence.  Needs several English
+    function words and more of them than German ones - a single "okay" or
+    an English product name never counts."""
+    if language != "de":
+        return False
+    words = re.findall(r"[a-zA-ZäöüÄÖÜß']+", (text or "").lower())
+    if len(words) < 3:
+        return False
+    english = sum(1 for w in words if w in _EN)
+    german = sum(1 for w in words if w in _DE)
+    return english >= 2 and english > 2 * german
+
+
 def rms16(chunk: bytes) -> float:
     try:
         import audioop
@@ -190,6 +237,8 @@ class StreamSession:
                  preroll_s: float = 0.3, max_sentence_s: float = 25.0,
                  min_speech_s: float = 0.15, gate: float = 0.0,
                  first_pass_s: float = 0.0, detector=None,
+                 background_ratio: float = 0.0,
+                 voice_level: float | None = None,
                  on_error: Callable[[Exception], None] | None = None) -> None:
         self._transcribe = transcribe
         self._on_update = on_update
@@ -204,6 +253,14 @@ class StreamSession:
         # first half second ("Constant." for "Kannst"); wait for more audio.
         self.first_pass_s = first_pass_s
         self._detector = detector or EnergyGate(gate)
+        # Your own voice, learned from the sentences that became text.  A
+        # sentence much quieter than that - a voice from the next room, the
+        # TV - is someone else: ``background_ratio`` of your level is the
+        # line (0 switches it off).
+        self.background_ratio = background_ratio
+        self.voice_level = voice_level
+        self._levels_now: list[float] = []
+        self.last_finish: dict = {}
         self._agreement = Agreement()
         self._preroll: collections.deque[bytes] = collections.deque()
         self._preroll_bytes = 0
@@ -283,6 +340,7 @@ class StreamSession:
         self._since_pass += len(chunk)
         if loud:
             self._speech_bytes += len(chunk)
+            self._levels_now.append(rms16(chunk))
             self._silence_bytes = 0
         else:
             self._silence_bytes += len(chunk)
@@ -296,7 +354,22 @@ class StreamSession:
             self._finish()
         elif (self._since_pass >= self.step_s * _BYTES_PER_S
               and len(self._sentence) >= self.first_pass_s * _BYTES_PER_S):
-            self._pass()
+            if self._is_background():
+                self._since_pass = 0          # not you: show nothing
+            else:
+                self._pass()
+
+    def sentence_level(self) -> float:
+        """How loud the speech of the current sentence is (median)."""
+        if not self._levels_now:
+            return 0.0
+        ordered = sorted(self._levels_now)
+        return ordered[len(ordered) // 2]
+
+    def _is_background(self) -> bool:
+        if not self.background_ratio or not self.voice_level:
+            return False
+        return self.sentence_level() < self.background_ratio * self.voice_level
 
     def _pass(self) -> None:
         self._since_pass = 0
@@ -309,15 +382,33 @@ class StreamSession:
     def _finish(self) -> None:
         audio = bytes(self._sentence)
         speech = self._speech_bytes
+        level = self.sentence_level()
+        background = self._is_background()
         self._sentence = bytearray()
         self._agreement.reset()
         self._since_pass = 0
         self._silence_bytes = 0
         self._speech_bytes = 0
+        self._levels_now = []
+        info = {"seconds": round(len(audio) / _BYTES_PER_S, 2),
+                "speech": round(speech / _BYTES_PER_S, 2),
+                "level": round(level), "voice": round(self.voice_level or 0)}
         if speech < self.min_speech_s * _BYTES_PER_S:
+            self.last_finish = {**info, "result": "too little speech"}
             self._on_final("")           # a click or a cough: nothing to say
             return
+        if background:
+            self.last_finish = {**info, "result": "quieter than your voice"}
+            self._on_final("")
+            return
         text = self._run_engine(audio, final=True)
+        if text is None:
+            self.last_finish = {**info, "result": "recogniser failed"}
+        else:
+            self.last_finish = {**info, "result": "text" if text else "empty"}
+            if text and level:
+                self.voice_level = (level if not self.voice_level
+                                    else 0.8 * self.voice_level + 0.2 * level)
         self._on_final(text or "")
 
     def _run_engine(self, audio: bytes, final: bool) -> str | None:

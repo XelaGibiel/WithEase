@@ -397,3 +397,57 @@ def test_without_the_speech_model_loudness_is_used(monkeypatch):
         return real_import(name, *args, **kwargs)
     monkeypatch.setattr(builtins, "__import__", no_vad)
     assert isinstance(st.make_gate(), st.EnergyGate)
+
+
+# -- only your own voice ---------------------------------------------------------------
+
+@pytest.mark.parametrize("spoken, want", [
+    ("Hallo, wie geht das hier? Mm-hmm.", "Hallo, wie geht das hier?"),
+    ("Mhm, ja genau.", "Ja genau."),
+    ("Der Himmel ist blau, ähm, glaube ich.", "Der Himmel ist blau, glaube ich."),
+    ("Hmm", ""),
+    ("Umzug nach Hamburg.", "Umzug nach Hamburg."),
+])
+def test_filler_sounds_are_removed(spoken, want):
+    assert st.clean_fillers(spoken) == want
+
+
+@pytest.mark.parametrize("text, foreign", [
+    ("I think we should go there now", True),
+    ("Yes, I know what you mean.", True),
+    ("Das ist okay für mich", False),
+    ("Das Meeting mit the team ist heute", False),
+    ("Okay", False),
+])
+def test_an_english_sentence_is_recognised_as_foreign(text, foreign):
+    assert st.looks_foreign(text, "de") is foreign
+    assert st.looks_foreign(text, "en") is False
+
+
+def test_a_quiet_voice_from_the_next_room_is_ignored():
+    rec, updates, finals = _Recogniser(), [], []
+    s = _session(rec, updates, finals, background_ratio=0.3)
+    _run(s, _silence(0.3) + _tone(2.0, amplitude=8000) + _silence(1.2))
+    assert finals and finals[-1], "your own sentence becomes text"
+    assert s.voice_level
+
+    calls_before = len(rec.calls)
+    _run(s, _silence(0.3) + _tone(2.0, amplitude=1200) + _silence(1.2))
+    assert finals[-1] == "", "a voice far quieter than yours does not"
+    assert s.last_finish["result"] == "quieter than your voice"
+    assert len(rec.calls) == calls_before, "and it is never shown"
+
+
+def test_without_a_learned_voice_every_sentence_counts():
+    rec, updates, finals = _Recogniser(), [], []
+    s = _session(rec, updates, finals, background_ratio=0.3)
+    _run(s, _silence(0.3) + _tone(2.0, amplitude=1200) + _silence(1.2))
+    assert finals[-1]
+
+
+def test_each_sentence_leaves_a_reason_for_the_log():
+    rec, updates, finals = _Recogniser(), [], []
+    s = _session(rec, updates, finals)
+    _run(s, _silence(0.3) + _tone(2.0) + _silence(1.2))
+    assert s.last_finish["result"] == "text"
+    assert s.last_finish["speech"] > 1.5

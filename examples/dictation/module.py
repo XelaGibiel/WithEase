@@ -5955,6 +5955,10 @@ class DictationModule(BaseModule):
             first_pass_s=0.0 if engine == "whisper" else 1.4,
             detector=streaming.make_gate(
                 self._settings.get("stream_noise", "normal")),
+            # a voice this much quieter than yours is someone else
+            background_ratio=(0.45 if self._settings.get("stream_noise")
+                              == "strict" else 0.25),
+            voice_level=getattr(self, "_stream_voice_level", None),
             on_error=lambda exc: _log.warning("live pass failed: %s", exc))
 
         try:
@@ -5979,6 +5983,7 @@ class DictationModule(BaseModule):
         self._live_mic, rate, channels = open_input_stream(sd, device, callback)
         fmt["channels"], fmt["rate"] = channels, rate
         self._live_session = session
+        self._stream_session_info = session
         session.start()
         self._stream_started = time.monotonic()
         self._set_state("recording", _t("stream.chip"))
@@ -5993,6 +5998,8 @@ class DictationModule(BaseModule):
         self._close_live_mic()
         self._set_state("transcribing")
         session.stop()
+        # remembered for the next session, so it knows your voice at once
+        self._stream_voice_level = session.voice_level
         if session.pass_ms:
             ordered = sorted(session.pass_ms)
             _log.info("live dictation ended: %d passes, median %.0f ms, "
@@ -6034,6 +6041,12 @@ class DictationModule(BaseModule):
     def _on_stream_update(self, settled: str, tail: str) -> None:
         if self._window is None:
             return
+        import streaming
+        settled = streaming.clean_fillers(settled)
+        tail = streaming.clean_fillers(tail)
+        if streaming.looks_foreign(f"{settled} {tail}",
+                                   self._local_language()):
+            settled = tail = ""
         # Whisper marks a word it has only half heard with "..." - that is
         # already what the grey colour says.
         tail = re.sub(r"\s*(\.\.\.|…)$", "", tail)
@@ -6043,10 +6056,23 @@ class DictationModule(BaseModule):
                                    self._apply_live_partial(tail))
 
     def _on_stream_final(self, text: str) -> None:
-        text = self._postprocess_asr(text)
+        import streaming
+        session = getattr(self, "_stream_session_info", None)
+        info = dict(getattr(session, "last_finish", {}) or {})
+        raw_chars = len(text or "")
+        text = streaming.clean_fillers(self._postprocess_asr(text))
+        if text and streaming.looks_foreign(text, self._local_language()):
+            info["result"] = "another language"
+            text = ""
         if text:
             self._last_low_words = []
             text = self._refine_transcript(text)
+            if not text:
+                info["result"] = "removed by post-processing"
+        # One line per sentence, never the words: enough to tell afterwards
+        # WHY a sentence vanished.
+        _log.info("live sentence: %s", {**info, "chars": raw_chars,
+                                         "kept": len(text or "")})
         if self._window is not None:
             self._window.stream_final(text, self._active_mode)
 
