@@ -645,7 +645,7 @@ def test_short_parakeet_words_are_fixed(module):
         def transcribe(self, pcm, final=False):
             return "Yeah."
     module._parakeet = _Parakeet()
-    assert module._stream_parakeet(b"  " * 8000, True) == "Ja."
+    assert module._stream_parakeet(b"\x00\x00" * 8000, True) == "Ja."
 
 
 def test_the_misheard_quotation_word_works():
