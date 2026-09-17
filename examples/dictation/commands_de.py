@@ -74,6 +74,8 @@ _QUOTE_WORDS = (
     "anführungszeichen", "anfuehrungszeichen",
     "anführungsstriche", "anfuehrungsstriche",
     "anführungsstrich", "anfuehrungsstrich",
+    # how a recogniser often writes it
+    "anführerstriche", "anführerstrich", "anführerzeichen",
     "gänsefüßchen", "gänsefüsschen", "gaensefuesschen",
     "zitatzeichen",
 )

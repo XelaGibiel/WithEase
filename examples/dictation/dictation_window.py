@@ -1355,7 +1355,7 @@ class DictationWindow(QWidget):
                 and pos < cursor and not doc[pos + 1:cursor].strip()):
             return text                  # moved or edited meanwhile
         m = _re.match(r"(\W*)(\w+)(.*)", text, _re.S)
-        if not m or m.group(2).lower() not in streaming.CONTINUATIONS:
+        if not m or not streaming.continues(m.group(2), m.group(3)):
             return text
         word = m.group(2).lower()
         cur = QTextCursor(self._edit.document())

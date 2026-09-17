@@ -5969,7 +5969,7 @@ class DictationModule(BaseModule):
                 self._set_state("transcribing",
                                 _t("stream.loading", engine="Parakeet"))
                 self._parakeet.start()
-            transcribe = self._parakeet.transcribe
+            transcribe = self._stream_parakeet
         else:
             if not self._local_in_process():
                 raise ConfigError(_t("err.no_local"))
@@ -6069,12 +6069,21 @@ class DictationModule(BaseModule):
     def _stream_spoken_marks(self) -> bool:
         return self._settings.get("stream_punct", "auto") == "spoken"
 
+    def _stream_parakeet(self, pcm: bytes, final: bool) -> str:
+        """Parakeet, with its English look-alikes of short German words fixed.
+
+        Measured: handing short words to Whisper instead made them worse
+        ("hat" became "Hut"), so Parakeet keeps them."""
+        import streaming
+        return streaming.fix_short_english(
+            self._parakeet.transcribe(pcm, final), self._local_language())
+
     def _on_stream_update(self, settled: str, tail: str) -> None:
         if self._window is None:
             return
         import streaming
-        settled = streaming.clean_fillers(settled)
-        tail = streaming.clean_fillers(tail)
+        settled = streaming.spoken_numbers(streaming.clean_fillers(settled))
+        tail = streaming.spoken_numbers(streaming.clean_fillers(tail))
         if self._stream_spoken_marks():
             settled = streaming.apply_spoken_marks(
                 streaming.strip_sentence_marks(settled))
@@ -6100,7 +6109,8 @@ class DictationModule(BaseModule):
         session = getattr(self, "_stream_session_info", None)
         info = dict(getattr(session, "last_finish", {}) or {})
         raw_chars = len(text or "")
-        text = streaming.clean_fillers(self._postprocess_asr(text))
+        text = streaming.spoken_numbers(
+            streaming.clean_fillers(self._postprocess_asr(text)))
         if text and streaming.looks_foreign(text, self._local_language()):
             info["result"] = "another language"
             text = ""

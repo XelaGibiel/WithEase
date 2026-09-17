@@ -227,16 +227,208 @@ _ABBREVIATIONS = frozenset(
     "o.ä s.o u.u".split())
 
 
+# These DO open sentences - "Wenn es regnet, bleibe ich zu Hause." - but
+# such a sentence then has a comma before its main clause.  Without one,
+# "Wenn es wieder vorkommt." is the tail of the sentence before it.
+TRAILING_CLAUSES = frozenset(
+    "wenn ob obwohl falls sobald solange bevor nachdem sofern".split())
+
+
+def continues(word: str, rest_of_sentence: str) -> bool:
+    """Whether a sentence starting with ``word`` continues the one before."""
+    lower = word.lower()
+    if lower in CONTINUATIONS:
+        return True
+    if lower in TRAILING_CLAUSES:
+        clause = re.split(r"[.!?]", rest_of_sentence, maxsplit=1)[0]
+        return "," not in clause
+    return False
+
+
 def merge_continuations(text: str) -> str:
     """"… besser Pausen. Und dann" -> "… besser Pausen und dann"."""
+    text = text or ""
+
     def join(match: re.Match) -> str:
         word = match.group(1)
-        lower = word.lower()
-        if lower not in CONTINUATIONS:
+        if not continues(word, text[match.end():]):
             return match.group(0)
+        lower = word.lower()
         return (" " if lower in NO_COMMA else ", ") + lower
 
-    return re.sub(r"\.\s+([A-ZÄÖÜ][a-zäöüß]+)\b", join, text or "")
+    return re.sub(r"\.\s+([A-ZÄÖÜ][a-zäöüß]+)\b", join, text)
+
+
+# -- short words ---------------------------------------------------------------
+
+# Parakeet picks the language by itself, and a single short German word is
+# too little to go on: "ja" came out as "Yeah", "hat" as "Had".  Only when
+# the whole utterance is that one word.
+_SHORT_ENGLISH = {"yeah": "Ja", "yes": "Ja", "yep": "Ja", "nine": "Nein",
+                  "nay": "Nein", "had": "Hat", "is": "Ist", "east": "Ist",
+                  "hut": "Hat", "dust": "Du", "ish": "Ich"}
+
+
+def fix_short_english(text: str, language: str = "de") -> str:
+    if language != "de":
+        return text
+    words = re.findall(r"[A-Za-z]+", text or "")
+    if len(words) != 1:
+        return text
+    german = _SHORT_ENGLISH.get(words[0].lower())
+    return text.replace(words[0], german, 1) if german else text
+
+
+# -- numbers and signs ------------------------------------------------------------
+
+_UNITS = {"null": 0, "eins": 1, "ein": 1, "eine": 1, "zwei": 2, "zwo": 2,
+          "drei": 3, "vier": 4, "fünf": 5, "fuenf": 5, "sechs": 6,
+          "sieben": 7, "acht": 8, "neun": 9}
+_TEENS = {"zehn": 10, "elf": 11, "zwölf": 12, "zwoelf": 12, "dreizehn": 13,
+          "vierzehn": 14, "fünfzehn": 15, "fuenfzehn": 15, "sechzehn": 16,
+          "siebzehn": 17, "achtzehn": 18, "neunzehn": 19}
+_TENS = {"zwanzig": 20, "dreißig": 30, "dreissig": 30, "vierzig": 40,
+         "fünfzig": 50, "fuenfzig": 50, "sechzig": 60, "siebzig": 70,
+         "achtzig": 80, "neunzig": 90}
+
+
+def _below_100(word: str) -> int | None:
+    if word in _TEENS:
+        return _TEENS[word]
+    if word in _UNITS and word not in ("ein", "eine"):
+        return _UNITS[word]
+    if word in _TENS:
+        return _TENS[word]
+    for tens, value in _TENS.items():
+        if word.endswith(tens):
+            head = word[:-len(tens)]
+            # "siebenundvierzig" - and "siebenvierzig", as it is misheard
+            head = head[:-3] if head.endswith("und") else head
+            if head in _UNITS and _UNITS[head] > 0:
+                return value + _UNITS[head]
+    return None
+
+
+def _below_1000(word: str) -> int | None:
+    if "hundert" in word:
+        head, _, tail = word.partition("hundert")
+        count = 1 if head in ("", "ein", "eins") else _below_100(head)
+        rest = _below_100(tail) if tail else 0
+        if count is None or rest is None or not head:
+            return None               # a bare "hundert" stays a word
+        return count * 100 + rest
+    return _below_100(word)
+
+
+def number_value(word: str) -> int | None:
+    """The value of one German number word, or None."""
+    word = (word or "").lower()
+    if "tausend" in word:
+        head, _, tail = word.partition("tausend")
+        count = 1 if head in ("ein", "eins") else _below_1000(head)
+        rest = _below_1000(tail) if tail else 0
+        if not head or count is None or rest is None:
+            return None
+        return count * 1000 + rest
+    return _below_1000(word)
+
+
+# After these a small number is a quantity to read, so it becomes a digit too.
+_UNIT_WORDS = frozenset(
+    "prozent euro cent uhr grad kilo kilogramm gramm meter kilometer "
+    "zentimeter millimeter liter stück minuten sekunden stunden".split())
+
+
+def spoken_numbers(text: str) -> str:
+    """Number words to digits, "plus" and "Prozent" to signs.
+
+    German style: from 13 on numbers are written as digits; 0-12 stay words
+    ("zwei Wochen") unless a sign, a unit or another digit stands next to
+    them ("plus sieben", "sieben Prozent")."""
+    if not text:
+        return text
+    tokens = re.findall(r"\S+", text)
+
+    def core(token: str) -> tuple[str, str, str]:
+        m = re.match(r"^([„(\[]*)(.*?)([.,;:!?)\]“]*)$", token)
+        return m.group(1), m.group(2), m.group(3)
+
+    # 1) join "zweitausend sechsundzwanzig" said as two words
+    values: list[int | None] = []
+    for token in tokens:
+        _lead, word, _trail = core(token)
+        values.append(number_value(word))
+    out: list[str] = []
+    i = 0
+    while i < len(tokens):
+        lead, word, trail = core(tokens[i])
+        value = values[i]
+        if (value is not None and not trail and i + 1 < len(tokens)
+                and values[i + 1] is not None
+                and word.lower().endswith(("tausend", "hundert"))
+                and values[i + 1] < (1000 if word.lower().endswith("tausend")
+                                     else 100)):
+            _l2, _w2, trail = core(tokens[i + 1])
+            value += values[i + 1]
+            i += 1
+        out.append((lead, word, trail, value))
+        i += 1
+
+    def is_sign(word: str) -> bool:
+        return word.lower() in ("plus", "minus")
+
+    def next_to_quantity(k: int) -> bool:
+        for j in (k - 1, k + 1):
+            if 0 <= j < len(out):
+                _l, w, _t, v = out[j]
+                if (is_sign(w) or w.lower() in _UNIT_WORDS
+                        or (w and w[0].isdigit())
+                        or (v is not None and v >= 13)):
+                    return True
+        return False
+
+    # 2) numbers to digits
+    words = []
+    for k, (lead, word, trail, value) in enumerate(out):
+        if value is not None and (value >= 13 or next_to_quantity(k)):
+            word = str(value)
+        words.append([lead, word, trail])
+
+    # 3) signs: only next to numbers or another sign ("C plus plus")
+    def numeric(k: int) -> bool:
+        return 0 <= k < len(words) and bool(
+            re.fullmatch(r"[+-]?\d+([.,]\d+)?", words[k][1]))
+
+    def signish(k: int) -> bool:
+        return 0 <= k < len(words) and words[k][1].lower() in (
+            "plus", "minus", "+", "-", "++")
+
+    for k, entry in enumerate(words):
+        low = entry[1].lower()
+        if low == "plus" and (numeric(k + 1) or numeric(k - 1)
+                              or signish(k + 1) or signish(k - 1)):
+            entry[1] = "+"
+        elif low == "minus" and (numeric(k + 1) and (numeric(k - 1)
+                                                    or k == 0)):
+            entry[1] = "-"
+        elif low == "prozent" and numeric(k - 1):
+            entry[1] = "%"
+
+    # 4) glue: "+ + 47" -> "++47", "C + +" -> "C++"; "5 + 3" keeps spaces
+    text_out = ""
+    for k, (lead, word, trail) in enumerate(words):
+        piece = lead + word + trail
+        prev = words[k - 1][1] if k else ""
+        glue = (k and (
+            (word == "+" and prev in ("+",) and not words[k - 1][2])
+            or (prev == "+" and not words[k - 1][2] and word[:1].isdigit()
+                and not (k >= 2 and numeric(k - 2)))
+            or (word == "+" and k + 1 < len(words) and words[k + 1][1] == "+"
+                and not numeric(k - 1) and prev and not words[k - 1][2]
+                and len(prev) == 1)))
+        text_out += (piece if glue or not text_out else " " + piece)
+    return text_out
+
 
 
 def strip_sentence_marks(text: str) -> str:
@@ -464,11 +656,16 @@ class StreamSession:
                 self._pass()
 
     def sentence_level(self) -> float:
-        """How loud the speech of the current sentence is (median)."""
+        """How loud the speech of the current sentence is.
+
+        The loud parts count, not the middle: a short word like "ist" is
+        mostly a soft "i" and a hiss, and its median sat so far below a
+        normal sentence that it was taken for a voice from the next room.
+        """
         if not self._levels_now:
             return 0.0
         ordered = sorted(self._levels_now)
-        return ordered[len(ordered) // 2]
+        return ordered[min(len(ordered) - 1, int(len(ordered) * 0.9))]
 
     def _is_background(self) -> bool:
         if not self.background_ratio or not self.voice_level:

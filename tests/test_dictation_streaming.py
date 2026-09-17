@@ -585,3 +585,71 @@ def test_the_new_live_settings_appear_with_the_switch(app, module):
     page._stream_punct.setCurrentIndex(page._stream_punct.findData("spoken"))
     assert module._settings["stream_punct"] == "spoken"
     page.deleteLater()
+
+
+# -- short words, numbers, trailing clauses ---------------------------------------
+
+def test_a_short_loud_word_is_not_taken_for_a_background_voice():
+    """"ist" is mostly a soft vowel and a hiss; its loud part decides."""
+    rec, updates, finals = _Recogniser(), [], []
+    s = _session(rec, updates, finals, background_ratio=0.25, voice_level=6000)
+    word = _tone(0.1, amplitude=7000) + _tone(0.4, amplitude=900)
+    _run(s, _silence(0.3) + word + _silence(1.2), chunk_s=0.05)
+    assert s.last_finish["result"] != "quieter than your voice"
+
+
+@pytest.mark.parametrize("text, want", [
+    ("Plus plus siebenvierzig.", "++47."),
+    ("Ich programmiere in C plus plus.", "Ich programmiere in C++."),
+    ("Das macht fünf plus drei.", "Das macht 5 + 3."),
+    ("Wir waren zwei Wochen weg.", "Wir waren zwei Wochen weg."),
+    ("Es kostet siebenundvierzig Euro.", "Es kostet 47 Euro."),
+    ("Das sind sieben Prozent.", "Das sind 7 %."),
+    ("Im Jahr zweitausend sechsundzwanzig.", "Im Jahr 2026."),
+    ("Er ist dreihundertvierzig Meter gelaufen.", "Er ist 340 Meter gelaufen."),
+    ("Ein Mann und eine Frau.", "Ein Mann und eine Frau."),
+    ("Hundert Dank.", "Hundert Dank."),
+    ("Ein Plus für dich.", "Ein Plus für dich."),
+])
+def test_spoken_numbers_and_signs(text, want):
+    assert st.spoken_numbers(text) == want
+
+
+@pytest.mark.parametrize("text, want", [
+    ("Ich sage dir dann Bescheid. Wenn es wieder vorkommt.",
+     "Ich sage dir dann Bescheid, wenn es wieder vorkommt."),
+    ("Das war gut. Wenn es regnet, bleibe ich zu Hause.",
+     "Das war gut. Wenn es regnet, bleibe ich zu Hause."),
+    ("Ich weiß nicht. Ob das geht.", "Ich weiß nicht, ob das geht."),
+])
+def test_a_trailing_clause_joins_the_sentence_before(text, want):
+    assert st.merge_continuations(text) == want
+
+
+def test_the_window_joins_a_trailing_clause_after_a_pause(app, win):
+    win._apply_stream_final("Ich sage dir dann Bescheid.", "auto", "auto")
+    win._apply_stream_final("Wenn es wieder vorkommt.", "auto", "auto")
+    assert win.text() == "Ich sage dir dann Bescheid, wenn es wieder vorkommt."
+
+
+@pytest.mark.parametrize("text, want", [
+    ("Yeah.", "Ja."), ("Had", "Hat"), ("Nine", "Nein"),
+    ("Yeah that is", "Yeah that is"), ("Obama", "Obama"),
+])
+def test_a_single_english_look_alike_becomes_german(text, want):
+    assert st.fix_short_english(text) == want
+
+
+def test_short_parakeet_words_are_fixed(module):
+    class _Parakeet:
+        def transcribe(self, pcm, final=False):
+            return "Yeah."
+    module._parakeet = _Parakeet()
+    assert module._stream_parakeet(b"  " * 8000, True) == "Ja."
+
+
+def test_the_misheard_quotation_word_works():
+    import commands_de as cde
+    got = cde.apply_inline_punctuation(
+        "Er sagte Anführerstriche unten Hallo Anführerstriche oben und ging.")
+    assert got == "Er sagte „Hallo“ und ging."

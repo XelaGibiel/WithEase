@@ -113,8 +113,13 @@ class ParakeetEngine:
             if not self.alive():
                 self.start()
             self._next_id += 1
+            # Half a second of silence either side: without it a short word
+            # comes back as its English look-alike ("Had" for "hat", "Nine"
+            # for "nein") or as nothing at all.
+            pad = b"\x00\x00" * 8000
             request = {"id": self._next_id,
-                       "pcm": base64.b64encode(pcm16).decode("ascii")}
+                       "pcm": base64.b64encode(pad + pcm16 + pad).decode(
+                           "ascii")}
             self._proc.stdin.write(json.dumps(request) + "\n")
             self._proc.stdin.flush()
             answer = self._read_line(60)
