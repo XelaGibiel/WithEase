@@ -210,6 +210,83 @@ def looks_foreign(text: str, language: str = "de") -> bool:
     return english >= 2 and english > 2 * german
 
 
+# -- sentence marks ----------------------------------------------------------
+
+# Words that do not open a German sentence of their own: after a thinking
+# pause they continue the sentence before, so a full stop in front of them
+# was the pause, not the end.  Deliberately NOT here: "wenn", "ob",
+# "obwohl", "aber", "denn" - they open sentences all the time.
+CONTINUATIONS = frozenset(
+    "und oder sondern sowie bzw beziehungsweise dass sodass weil damit "
+    "wobei weshalb wodurch womit".split())
+# ... and the ones that take no comma in front of them.
+NO_COMMA = frozenset("und oder sowie bzw beziehungsweise".split())
+
+_ABBREVIATIONS = frozenset(
+    "usw bzw ca etc evtl ggf inkl vgl nr dr hr fr str tel abs z.b d.h u.a "
+    "o.ä s.o u.u".split())
+
+
+def merge_continuations(text: str) -> str:
+    """"… besser Pausen. Und dann" -> "… besser Pausen und dann"."""
+    def join(match: re.Match) -> str:
+        word = match.group(1)
+        lower = word.lower()
+        if lower not in CONTINUATIONS:
+            return match.group(0)
+        return (" " if lower in NO_COMMA else ", ") + lower
+
+    return re.sub(r"\.\s+([A-ZÄÖÜ][a-zäöüß]+)\b", join, text or "")
+
+
+def strip_sentence_marks(text: str) -> str:
+    """Remove the recogniser's own . ? ! - for "Satzzeichen nur gesprochen".
+
+    Numbers ("3.5"), dates and abbreviations ("z.B.", "usw.") keep theirs."""
+    def drop(match: re.Match) -> str:
+        word = match.group(1)
+        if word.lower().rstrip(".") in _ABBREVIATIONS or len(word) == 1:
+            return match.group(0)
+        return word
+
+    text = re.sub(r"([\wäöüÄÖÜß.]*[^\W\d_])[.!?]+(?=\s|$)", drop, text or "")
+    from postprocess import fix_casing
+    return fix_casing(text)
+
+
+# The spoken words for sentence marks.  "Punkt" and "Komma" are ordinary
+# nouns too ("der Punkt ist", "ein Komma fehlt"), so after an article or a
+# preposition they stay words.
+_NOT_AFTER = (r"(?<!\bder )(?<!\bden )(?<!\bdem )(?<!\bdes )(?<!\bein )"
+              r"(?<!\beinen )(?<!\beinem )(?<!\bkein )(?<!\bkeinen )"
+              r"(?<!\bam )(?<!\bzum )(?<!\bbeim )(?<!\bim )(?<!\bvom )"
+              r"(?<!\bdiesen )(?<!\bdiesem )(?<!\bjeden )")
+_SPOKEN_MARKS = [
+    (re.compile(r"[\s,]*\bneuer\s+satz\b[\s.]*", re.IGNORECASE), ". "),
+    (re.compile(r"[\s,.]*" + _NOT_AFTER + r"\bpunkt\b[\s.]*", re.IGNORECASE),
+     ". "),
+    (re.compile(r"[\s,]*\bfragezeichen\b[\s.]*", re.IGNORECASE), "? "),
+    (re.compile(r"[\s,]*\bausrufezeichen\b[\s.]*", re.IGNORECASE), "! "),
+    (re.compile(r"[\s,]*" + _NOT_AFTER + r"\bkomma\b[\s,.]*", re.IGNORECASE),
+     ", "),
+]
+
+
+def apply_spoken_marks(text: str) -> str:
+    """"hinbekommt Punkt neuer Gedanke" -> "hinbekommt. Neuer Gedanke"."""
+    words = re.findall(r"\w+", (text or "").lower())
+    if words and all(w in ("punkt", "komma", "fragezeichen",
+                           "ausrufezeichen", "neuer", "satz") for w in words):
+        return text        # only the mark: the voice command inserts it
+    for pattern, mark in _SPOKEN_MARKS:
+        text = pattern.sub(mark, text or "")
+    text = " ".join(text.split())
+    # a capital after a spoken full stop; the very first letter is left to
+    # the joining, which knows what stands before it
+    return re.sub(r"([.!?]\s+)([a-zäöü])",
+                  lambda m: m.group(1) + m.group(2).upper(), text)
+
+
 def rms16(chunk: bytes) -> float:
     try:
         import audioop
@@ -234,6 +311,7 @@ class StreamSession:
                  on_update: Callable[[str, str], None],
                  on_final: Callable[[str], None], *,
                  step_s: float = 0.5, pause_s: float = 0.9,
+                 keep_silence_s: float = 0.3,
                  preroll_s: float = 0.3, max_sentence_s: float = 25.0,
                  min_speech_s: float = 0.15, gate: float = 0.0,
                  first_pass_s: float = 0.0, detector=None,
@@ -245,7 +323,13 @@ class StreamSession:
         self._on_final = on_final
         self._on_error = on_error
         self.step_s = step_s
+        # Only a pause this long ends the sentence; shorter ones are for
+        # thinking and leave it open.
         self.pause_s = pause_s
+        # Silence beyond this is left out of what the recogniser hears: to
+        # it the sentence sounds spoken in one go, so a thinking pause gives
+        # it no reason to write a full stop.
+        self.keep_silence_s = keep_silence_s
         self.preroll_s = preroll_s
         self.max_sentence_s = max_sentence_s
         self.min_speech_s = min_speech_s
@@ -321,11 +405,7 @@ class StreamSession:
         loud = self._detector.is_speech(chunk, bool(self._sentence))
         if not self._sentence:
             if not loud:
-                self._preroll.append(chunk)
-                self._preroll_bytes += len(chunk)
-                while (self._preroll_bytes > self.preroll_s * _BYTES_PER_S
-                       and self._preroll):
-                    self._preroll_bytes -= len(self._preroll.popleft())
+                self._remember_quiet(chunk)
                 return
             # Speech begins: keep what came just before it - the first
             # consonant is quiet and "drei" otherwise arrives as "Reihe".
@@ -336,22 +416,46 @@ class StreamSession:
             self._speech_bytes = 0
             self._silence_bytes = 0
             self._since_pass = 0
-        self._sentence += chunk
-        self._since_pass += len(chunk)
         if loud:
+            if self._preroll:
+                # Speaking again after a thinking pause: the same quiet
+                # first consonant as at the start ("Pausen", not "hausen").
+                for old in self._preroll:
+                    self._sentence += old
+                    self._since_pass += len(old)
+                self._preroll.clear()
+                self._preroll_bytes = 0
             self._speech_bytes += len(chunk)
             self._levels_now.append(rms16(chunk))
             self._silence_bytes = 0
         else:
             self._silence_bytes += len(chunk)
+            if self._silence_bytes > self.keep_silence_s * _BYTES_PER_S:
+                self._remember_quiet(chunk)   # a thinking pause: left out
+                return
+        self._sentence += chunk
+        self._since_pass += len(chunk)
+
+    def _remember_quiet(self, chunk: bytes) -> None:
+        """Keep only the last moment of quiet, for when speech (re)starts."""
+        self._preroll.append(chunk)
+        self._preroll_bytes += len(chunk)
+        while (self._preroll_bytes > self.preroll_s * _BYTES_PER_S
+               and self._preroll):
+            self._preroll_bytes -= len(self._preroll.popleft())
 
     def _decide(self, ending: bool) -> None:
         if not self._sentence:
             return
         paused = self._silence_bytes >= self.pause_s * _BYTES_PER_S
-        too_long = len(self._sentence) >= self.max_sentence_s * _BYTES_PER_S
+        # A sentence that runs too long is cut - at a thinking pause when
+        # there is one, and only when there is none after half as long again.
+        length = len(self._sentence) / _BYTES_PER_S
+        at_breath = self._silence_bytes >= 0.3 * _BYTES_PER_S
+        too_long = (length >= self.max_sentence_s and at_breath) or \
+            length >= self.max_sentence_s * 1.5
         if ending or paused or too_long:
-            self._finish()
+            self._finish("stop" if ending else "pause" if paused else "long")
         elif (self._since_pass >= self.step_s * _BYTES_PER_S
               and len(self._sentence) >= self.first_pass_s * _BYTES_PER_S):
             if self._is_background():
@@ -379,7 +483,7 @@ class StreamSession:
         settled, tail = self._agreement.update(text.split())
         self._on_update(" ".join(settled), " ".join(tail))
 
-    def _finish(self) -> None:
+    def _finish(self, reason: str = "pause") -> None:
         audio = bytes(self._sentence)
         speech = self._speech_bytes
         level = self.sentence_level()
@@ -390,7 +494,8 @@ class StreamSession:
         self._silence_bytes = 0
         self._speech_bytes = 0
         self._levels_now = []
-        info = {"seconds": round(len(audio) / _BYTES_PER_S, 2),
+        info = {"end": reason,
+                "seconds": round(len(audio) / _BYTES_PER_S, 2),
                 "speech": round(speech / _BYTES_PER_S, 2),
                 "level": round(level), "voice": round(self.voice_level or 0)}
         if speech < self.min_speech_s * _BYTES_PER_S:

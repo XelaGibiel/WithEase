@@ -219,7 +219,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "stream.engine.whisper": "Whisper (gewähltes Modell)",
         "stream.engine.parakeet": "Parakeet (NVIDIA, Test)",
         "stream.engine.parakeet.missing": "Parakeet (Testumgebung fehlt)",
-        "stream.pause": "Satzpause (Live)",
+        "stream.pause": "Satzende nach Pause (Live)",
+        "stream.pause.hint": "Kürzere Pausen sind Denkpausen: Der Satz bleibt offen und bekommt keinen Punkt. Erst nach so langer Stille ist der Satz fertig.",
+        "stream.punct": "Satzzeichen (Live)",
+        "stream.punct.auto": "Automatisch",
+        "stream.punct.spoken": "Nur gesprochen („Punkt“, „Fragezeichen“, „neuer Satz“)",
+        "stream.punct.hint": "Automatisch: Punkte setzt der Erkenner; ein Punkt vor „und“, „dass“, „weil“ … nach einer Denkpause wird zurückgenommen. Nur gesprochen: Punkt, Frage- und Ausrufezeichen kommen nur, wenn du sie sagst – Kommas setzen weiter die Regeln.",
         "stream.noise": "Nebengeräusche (Live)",
         "stream.noise.normal": "Normal",
         "stream.noise.strict": "Laute Umgebung – nur deutliche Sprache",
@@ -538,7 +543,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "stream.engine.whisper": "Whisper (chosen model)",
         "stream.engine.parakeet": "Parakeet (NVIDIA, test)",
         "stream.engine.parakeet.missing": "Parakeet (test environment missing)",
-        "stream.pause": "Sentence pause (live)",
+        "stream.pause": "Sentence ends after pause (live)",
+        "stream.pause.hint": "Shorter pauses are thinking pauses: the sentence stays open and gets no full stop. Only after this much silence is the sentence finished.",
+        "stream.punct": "Punctuation (live)",
+        "stream.punct.auto": "Automatic",
+        "stream.punct.spoken": "Spoken only ('Punkt', 'Fragezeichen', 'neuer Satz')",
+        "stream.punct.hint": "Automatic: the recogniser sets full stops; one before 'und', 'dass', 'weil' … after a thinking pause is taken back. Spoken only: full stops, question and exclamation marks only when you say them - commas still come from the rules.",
         "stream.noise": "Background noise (live)",
         "stream.noise.normal": "Normal",
         "stream.noise.strict": "Noisy room – clear speech only",
@@ -3060,15 +3070,28 @@ class DictationSettingsWidget(QWidget):
                                  self._stream_engine.itemData(i)))
         rec.addRow(_t("stream.engine"), self._stream_engine)
         self._stream_pause = QDoubleSpinBox()
-        self._stream_pause.setRange(0.4, 3.0)
+        self._stream_pause.setRange(1.0, 8.0)
         self._stream_pause.setSingleStep(0.1)
         self._stream_pause.setDecimals(1)
         self._stream_pause.setSuffix(" s")
         self._stream_pause.setValue(
-            float(self._settings.get("stream_pause", 0.9)))
+            float(self._settings.get("stream_end_pause", 2.5)))
         self._stream_pause.valueChanged.connect(
-            lambda v: self._save("stream_pause", round(float(v), 1)))
+            lambda v: self._save("stream_end_pause", round(float(v), 1)))
         rec.addRow(_t("stream.pause"), self._stream_pause)
+        self._stream_pause_note = _setting_note(_t("stream.pause.hint"))
+        rec.addRow("", self._stream_pause_note)
+        self._stream_punct = QComboBox()
+        self._stream_punct.addItem(_t("stream.punct.auto"), "auto")
+        self._stream_punct.addItem(_t("stream.punct.spoken"), "spoken")
+        self._stream_punct.setCurrentIndex(max(0, self._stream_punct.findData(
+            self._settings.get("stream_punct", "auto"))))
+        self._stream_punct.currentIndexChanged.connect(
+            lambda i: self._save("stream_punct",
+                                 self._stream_punct.itemData(i)))
+        rec.addRow(_t("stream.punct"), self._stream_punct)
+        self._stream_punct_note = _setting_note(_t("stream.punct.hint"))
+        rec.addRow("", self._stream_punct_note)
         self._stream_noise = QComboBox()
         self._stream_noise.addItem(_t("stream.noise.normal"), "normal")
         self._stream_noise.addItem(_t("stream.noise.strict"), "strict")
@@ -4172,6 +4195,9 @@ class DictationSettingsWidget(QWidget):
         details = local and box.isChecked()
         self._form_rec.setRowVisible(self._stream_engine, details)
         self._form_rec.setRowVisible(self._stream_pause, details)
+        self._form_rec.setRowVisible(self._stream_pause_note, details)
+        self._form_rec.setRowVisible(self._stream_punct, details)
+        self._form_rec.setRowVisible(self._stream_punct_note, details)
         self._form_rec.setRowVisible(self._stream_noise, details)
         self._form_rec.setRowVisible(self._stream_noise_note, details)
 
@@ -5456,7 +5482,8 @@ class DictationModule(BaseModule):
         _log.info("dictation: quiet microphone (peak %.2f)", level)
         bus.publish("dictation.state", state="warn", detail=_t("mic.quiet"))
 
-    def _refine_transcript(self, text: str) -> str:
+    def _refine_transcript(self, text: str, *,
+                           spoken_marks: bool = False) -> str:
         """Everything a recognised text goes through before it is shown:
         dictionary, learned corrections, optional AI cleanup, casing, question
         marks, commas, dates and the optional AI punctuation.  Shared by the
@@ -5484,7 +5511,8 @@ class DictationModule(BaseModule):
                 from postprocess import (fix_casing, fix_commas, fix_dates,
                                          fix_question_marks)
                 text = fix_casing(text)          # undo stray capitalisation
-                text = fix_question_marks(text)
+                if not spoken_marks:      # the user sets them by voice
+                    text = fix_question_marks(text)
                 # Whisper writes roughly half the commas German requires;
                 # these are the unambiguous ones.
                 text = fix_commas(text)
@@ -5495,7 +5523,7 @@ class DictationModule(BaseModule):
                 # The optional AI pass runs LAST, on text the rules already
                 # fixed, and may only move punctuation - see
                 # _ai_punctuation for how that is enforced.
-                if self._settings.get("punctuation_ai"):
+                if self._settings.get("punctuation_ai") and not spoken_marks:
                     text = self._ai_punctuation(text)
         return text
 
@@ -5948,7 +5976,7 @@ class DictationModule(BaseModule):
             self._ensure_model_loaded(announce=True)
             transcribe = self._stream_whisper
 
-        pause = max(0.4, float(self._settings.get("stream_pause", 0.9)))
+        pause = max(1.0, float(self._settings.get("stream_end_pause", 2.5)))
         session = streaming.StreamSession(
             transcribe, self._on_stream_update, self._on_stream_final,
             step_s=0.5 if engine == "whisper" else 0.3, pause_s=pause,
@@ -6038,12 +6066,24 @@ class DictationModule(BaseModule):
                              and getattr(seg, "avg_logprob", 0.0) < -1.0)]
         return " ".join(part for part in parts if part)
 
+    def _stream_spoken_marks(self) -> bool:
+        return self._settings.get("stream_punct", "auto") == "spoken"
+
     def _on_stream_update(self, settled: str, tail: str) -> None:
         if self._window is None:
             return
         import streaming
         settled = streaming.clean_fillers(settled)
         tail = streaming.clean_fillers(tail)
+        if self._stream_spoken_marks():
+            settled = streaming.apply_spoken_marks(
+                streaming.strip_sentence_marks(settled))
+            tail = streaming.apply_spoken_marks(
+                streaming.strip_sentence_marks(tail))
+            if settled and tail[:1].isupper() and not settled.endswith(
+                    (".", "!", "?")):
+                from postprocess import fix_casing
+                tail = fix_casing("x " + tail)[2:]
         if streaming.looks_foreign(f"{settled} {tail}",
                                    self._local_language()):
             settled = tail = ""
@@ -6064,9 +6104,17 @@ class DictationModule(BaseModule):
         if text and streaming.looks_foreign(text, self._local_language()):
             info["result"] = "another language"
             text = ""
+        spoken = self._stream_spoken_marks()
+        if text and spoken:
+            text = streaming.apply_spoken_marks(
+                streaming.strip_sentence_marks(text))
+        elif text:
+            text = streaming.merge_continuations(text)
+            if info.get("end") == "long" and text.endswith("."):
+                text = text[:-1]          # cut for length, not a sentence end
         if text:
             self._last_low_words = []
-            text = self._refine_transcript(text)
+            text = self._refine_transcript(text, spoken_marks=spoken)
             if not text:
                 info["result"] = "removed by post-processing"
         # One line per sentence, never the words: enough to tell afterwards
@@ -6074,7 +6122,9 @@ class DictationModule(BaseModule):
         _log.info("live sentence: %s", {**info, "chars": raw_chars,
                                          "kept": len(text or "")})
         if self._window is not None:
-            self._window.stream_final(text, self._active_mode)
+            self._window.stream_final(
+                text, self._active_mode,
+                "spoken" if self._stream_spoken_marks() else "auto")
 
     def start_live(self) -> None:
         if self._live_active or self._state != "idle":

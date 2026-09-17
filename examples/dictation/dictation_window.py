@@ -750,7 +750,7 @@ class DictationWindow(QWidget):
     _ai_msg_sig = Signal(str)                  # short status/error message
     _ai_problem_sig = Signal(str, str)         # AI failed: kind, detail
     _stream_sig = Signal(str, str)             # live test: settled, tail
-    _stream_final_sig = Signal(str, str)       # live test: sentence, mode
+    _stream_final_sig = Signal(str, str, str)  # sentence, mode, marks
     _take_sel_sig = Signal(str)                # selection taken from the target
 
     def __init__(self, on_insert: Callable[[str], None] | None = None,
@@ -812,6 +812,9 @@ class DictationWindow(QWidget):
         # Live dictation test: where the sentence being spoken stands in the
         # document, and what was written there - (start, end, text).
         self._stream_run: tuple[int, int, str] | None = None
+        # Where the last live sentence put its automatic full stop, so the
+        # next one can take it back when it turns out to continue it.
+        self._stream_stop: int | None = None
         self._prov_end: int | None = None
         self._last_final_end: int | None = None
         self._run_start: int | None = None     # start of the un-polished run
@@ -1261,10 +1264,13 @@ class DictationWindow(QWidget):
         """Show the sentence being spoken: ``settled`` black, ``tail`` grey."""
         self._stream_sig.emit(settled or "", tail or "")
 
-    def stream_final(self, text: str, mode: str = "auto") -> None:
+    def stream_final(self, text: str, mode: str = "auto",
+                     marks: str = "auto") -> None:
         """The sentence is over: replace the live text with the finished one,
-        which goes the normal way (voice commands, joining, marks)."""
-        self._stream_final_sig.emit(text or "", mode or "auto")
+        which goes the normal way (voice commands, joining, marks).
+        ``marks`` "auto" allows taking back the previous automatic stop."""
+        self._stream_final_sig.emit(text or "", mode or "auto",
+                                    marks or "auto")
 
     def _stream_run_intact(self) -> tuple[int, int, str] | None:
         run = self._stream_run
@@ -1307,7 +1313,8 @@ class DictationWindow(QWidget):
             cur.setCharFormat(self._prov_format())
         self._stream_run = (start, end, self.text()[start:end])
 
-    def _apply_stream_final(self, text: str, mode: str) -> None:
+    def _apply_stream_final(self, text: str, mode: str,
+                            marks: str = "auto") -> None:
         run = self._stream_run_intact()
         self._stream_run = None
         if run is not None:
@@ -1324,7 +1331,69 @@ class DictationWindow(QWidget):
                 cur.deletePreviousChar()
             self._edit.setTextCursor(cur)
         if text.strip():
-            self._on_transcript(text, mode, [])
+            if marks == "auto":
+                text = self._continue_after_stop(text)
+            else:
+                self._stream_stop = None
+                text = self._attach_leading_mark(text)
+            if text.strip():
+                self._on_transcript(text, mode, [])
+            self._remember_stop(text, marks)
+
+    def _continue_after_stop(self, text: str) -> str:
+        """Take back the automatic full stop of the previous live sentence
+        when this one continues it ("… Pausen." + "Und dann …")."""
+        import re as _re
+
+        import streaming
+        pos, self._stream_stop = self._stream_stop, None
+        if pos is None:
+            return text
+        doc = self.text()
+        cursor = self._edit.textCursor().position()
+        if not (0 <= pos < len(doc) and doc[pos] == "."
+                and pos < cursor and not doc[pos + 1:cursor].strip()):
+            return text                  # moved or edited meanwhile
+        m = _re.match(r"(\W*)(\w+)(.*)", text, _re.S)
+        if not m or m.group(2).lower() not in streaming.CONTINUATIONS:
+            return text
+        word = m.group(2).lower()
+        cur = QTextCursor(self._edit.document())
+        cur.setPosition(pos)
+        cur.setPosition(pos + 1, QTextCursor.MoveMode.KeepAnchor)
+        cur.insertText("" if word in streaming.NO_COMMA else ",")
+        return m.group(1) + word + m.group(3)
+
+    def _attach_leading_mark(self, text: str) -> str:
+        """A sentence that starts with a spoken mark ("Punkt, neuer Gedanke"
+        after a pause) puts the mark straight after the text before it - not
+        after a space."""
+        stripped = text.lstrip()
+        if not stripped[:1] or stripped[0] not in ".,!?":
+            return text
+        cur = self._edit.textCursor()
+        end = cur.position()
+        doc = self.text()
+        start = end
+        while start > 0 and doc[start - 1] == " ":
+            start -= 1
+        cur.setPosition(start)
+        cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+        cur.insertText(stripped[0])
+        self._edit.setTextCursor(cur)
+        return stripped[1:].lstrip()
+
+    def _remember_stop(self, text: str, marks: str) -> None:
+        self._stream_stop = None
+        if marks != "auto" or not text.rstrip().endswith(".") \
+                or cde.parse(text) is not None:
+            return
+        doc = self.text()
+        pos = self._edit.textCursor().position()
+        while pos > 0 and doc[pos - 1] in " \n":
+            pos -= 1
+        if pos > 0 and doc[pos - 1] == ".":
+            self._stream_stop = pos - 1
 
     def live_partial(self, text: str) -> None:
         self._partial_sig.emit(text or "")

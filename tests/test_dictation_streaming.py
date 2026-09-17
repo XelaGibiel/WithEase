@@ -155,8 +155,9 @@ def test_a_failing_pass_does_not_end_the_session():
 def test_a_very_long_sentence_is_cut():
     rec, updates, finals = _Recogniser(), [], []
     s = _session(rec, updates, finals, max_sentence_s=4.0)
-    _run(s, _tone(9.0))
+    _run(s, _tone(13.0))
     assert len(finals) >= 2
+    assert s.last_finish["end"] == "long"
 
 
 # -- the window ------------------------------------------------------------------
@@ -270,12 +271,12 @@ def test_the_finished_sentence_gets_the_normal_treatment(module, monkeypatch):
     got = []
 
     class _Win:
-        def stream_final(self, text, mode="auto"):
+        def stream_final(self, text, mode="auto", marks="auto"):
             got.append((text, mode))
     module._window = _Win()
     module._active_mode = "auto"
     monkeypatch.setattr(module, "_refine_transcript",
-                        lambda text: text + " [fertig]")
+                        lambda text, **_kw: text + " [fertig]")
     module._on_stream_final("Hallo Welt")
     module._on_stream_final("")
     assert got == [("Hallo Welt [fertig]", "auto"), ("", "auto")]
@@ -451,3 +452,136 @@ def test_each_sentence_leaves_a_reason_for_the_log():
     _run(s, _silence(0.3) + _tone(2.0) + _silence(1.2))
     assert s.last_finish["result"] == "text"
     assert s.last_finish["speech"] > 1.5
+
+
+# -- thinking pauses and full stops ------------------------------------------------------
+
+def test_a_thinking_pause_leaves_the_sentence_open():
+    rec, updates, finals = _Recogniser(), [], []
+    s = _session(rec, updates, finals, pause_s=2.5)
+    _run(s, _silence(0.3) + _tone(1.5) + _silence(1.5) + _tone(1.5))
+    assert not finals, "1.5 s of thinking is not the end of the sentence"
+    _run(s, _silence(2.6))
+    assert len(finals) == 1
+
+
+def test_the_recogniser_does_not_hear_the_thinking_pause():
+    rec, updates, finals = _Recogniser(), [], []
+    s = _session(rec, updates, finals, pause_s=5.0, keep_silence_s=0.3)
+    _run(s, _silence(0.3) + _tone(1.0) + _silence(3.0) + _tone(1.0))
+    s._finish("stop")
+    heard = rec.calls[-1][0]
+    # 3 s of pause shrink to 0.3 s kept + 0.3 s lead-in before the next word
+    assert heard < 0.3 + 1.0 + 0.3 + 0.3 + 1.0 + 0.2, f"{heard} s - pause kept"
+
+
+def test_a_long_sentence_is_cut_at_a_breath():
+    rec, updates, finals = _Recogniser(), [], []
+    s = _session(rec, updates, finals, pause_s=5.0, max_sentence_s=4.0)
+    _run(s, _tone(4.5))
+    assert not finals, "no cut in the middle of a word"
+    _run(s, _silence(0.4))
+    assert finals and s.last_finish["end"] == "long"
+
+
+@pytest.mark.parametrize("text, want", [
+    ("Ich möchte besser Pausen. Und dann weiter.",
+     "Ich möchte besser Pausen und dann weiter."),
+    ("Ich denke. Dass es geht.", "Ich denke, dass es geht."),
+    ("Das war gut. Wenn du kommst, sag Bescheid.",
+     "Das war gut. Wenn du kommst, sag Bescheid."),
+    ("Das war gut. Aber nicht ganz.", "Das war gut. Aber nicht ganz."),
+])
+def test_a_stop_before_a_continuation_is_taken_back(text, want):
+    assert st.merge_continuations(text) == want
+
+
+@pytest.mark.parametrize("text, want", [
+    ("Wir treffen uns. Und reden?", "Wir treffen uns und reden"),
+    ("Das kostet 3.5 Euro, z.B. heute usw.", "Das kostet 3.5 Euro, z.B. heute usw."),
+])
+def test_only_the_recognisers_own_marks_are_removed(text, want):
+    assert st.strip_sentence_marks(text) == want
+
+
+@pytest.mark.parametrize("spoken, want", [
+    ("das ist gut Punkt neuer Gedanke", "das ist gut. Neuer Gedanke"),
+    ("hallo neuer Satz wie geht es Ausrufezeichen", "hallo. Wie geht es!"),
+    ("der Punkt ist wichtig Komma sagt er Fragezeichen",
+     "der Punkt ist wichtig, sagt er?"),
+    ("ein Komma fehlt hier Punkt", "ein Komma fehlt hier."),
+    ("Punkt", "Punkt"),
+    ("Punkt neuer Gedanke", ". Neuer Gedanke"),
+])
+def test_spoken_marks(spoken, want):
+    assert st.apply_spoken_marks(spoken) == want
+
+
+def test_the_window_takes_back_a_stop_when_the_sentence_goes_on(app, win):
+    win._apply_stream("Ich möchte besser", "Pausen")
+    win._apply_stream_final("Ich möchte besser Pausen.", "auto", "auto")
+    assert win.text() == "Ich möchte besser Pausen."
+    win._apply_stream("Und", "dann")
+    win._apply_stream_final("Und dann weiter.", "auto", "auto")
+    assert win.text() == "Ich möchte besser Pausen und dann weiter."
+
+
+def test_a_subordinate_clause_gets_its_comma(app, win):
+    win._apply_stream_final("Ich glaube.", "auto", "auto")
+    win._apply_stream_final("Dass es klappt.", "auto", "auto")
+    assert win.text() == "Ich glaube, dass es klappt."
+
+
+def test_a_real_new_sentence_keeps_its_stop(app, win):
+    win._apply_stream_final("Das war gut.", "auto", "auto")
+    win._apply_stream_final("Morgen geht es weiter.", "auto", "auto")
+    assert win.text() == "Das war gut. Morgen geht es weiter."
+
+
+def test_spoken_marks_are_never_taken_back(app, win):
+    win._apply_stream_final("Das war gut.", "auto", "spoken")
+    win._apply_stream_final("Und dann weiter", "auto", "spoken")
+    assert win.text() == "Das war gut. Und dann weiter"
+
+
+def test_a_spoken_stop_after_a_pause_attaches_to_the_text(app, win):
+    win._apply_stream_final("Das war gut", "auto", "spoken")
+    win._apply_stream_final(". Neuer Gedanke", "auto", "spoken")
+    assert win.text() == "Das war gut. Neuer Gedanke"
+
+
+def test_the_final_sentence_in_spoken_mode(module, monkeypatch):
+    got = []
+
+    class _Win:
+        def stream_final(self, text, mode="auto", marks="auto"):
+            got.append((text, marks))
+    module._window = _Win()
+    module._active_mode = "auto"
+    module._settings["stream_punct"] = "spoken"
+    module._on_stream_final("Das ist gut. Punkt. Neuer Gedanke")
+    text, marks = got[-1]
+    assert marks == "spoken"
+    assert text.startswith("Das ist gut. Neuer Gedanke")
+
+
+def test_the_final_sentence_in_automatic_mode(module):
+    got = []
+
+    class _Win:
+        def stream_final(self, text, mode="auto", marks="auto"):
+            got.append((text, marks))
+    module._window = _Win()
+    module._active_mode = "auto"
+    module._on_stream_final("Ich möchte besser Pausen. Und dann weiter.")
+    assert got[-1] == ("Ich möchte besser Pausen und dann weiter.", "auto")
+
+
+def test_the_new_live_settings_appear_with_the_switch(app, module):
+    page = module.get_settings_widget()
+    page._stream_cb.setChecked(True)
+    assert page._stream_punct.isVisibleTo(page)
+    assert page._stream_pause.value() == 2.5
+    page._stream_punct.setCurrentIndex(page._stream_punct.findData("spoken"))
+    assert module._settings["stream_punct"] == "spoken"
+    page.deleteLater()
