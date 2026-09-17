@@ -19,6 +19,7 @@ from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -688,12 +689,29 @@ class DictionaryDialog(QDialog):
             " background: rgba(128,128,128,90); color: palette(text); }"
             "QTableWidget::item:selected:!active {"
             " background: rgba(128,128,128,70); color: palette(text); }")
+        # An own stylesheet on an item view drops it back to the system font
+        # (Qt re-polishes it), so the words ignored the font size set in
+        # WithEase.  Put the application font back, and size the rows and
+        # the remove buttons from it.
+        app = QApplication.instance()
+        if app is not None:
+            self._table.setFont(app.font())
+            # the header has a stylesheet rule of its own in the theme, so
+            # setFont alone does not reach it
+            size = app.font().pointSize()
+            if size > 0:
+                self._table.horizontalHeader().setStyleSheet(
+                    f"QHeaderView::section {{ font-size: {size}pt; }}")
+        self._row_h = self._row_height()
+        self._table.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Fixed)
+        self._table.verticalHeader().setDefaultSectionSize(self._row_h)
         hh = self._table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self._table.setColumnWidth(3, 34)
+        self._table.setColumnWidth(3, self._row_h + 6)
         self._table.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self._table, 1)
 
@@ -723,6 +741,17 @@ class DictionaryDialog(QDialog):
 
     # -- population -----------------------------------------------------
 
+    def _row_height(self) -> int:
+        """Tall enough for the text at the chosen font size, and never below
+        the size a finger or a shaky mouse can hit."""
+        height = QFontMetrics(self._table.font()).height() + 14
+        try:
+            from withease.gui import theme
+            height = max(height, int(theme.target_px() * 0.8))
+        except Exception:
+            height = max(height, 32)
+        return height
+
     def _reload(self) -> None:
         self._loading = True
         self._table.setRowCount(0)
@@ -746,7 +775,11 @@ class DictionaryDialog(QDialog):
             origin.setFlags(noedit)      # read-only; no grey foreground so it
             self._table.setItem(r, 2, origin)   # stays readable when selected
             btn = QPushButton("✕")
-            btn.setFixedWidth(28)
+            side = self._row_h - 4
+            btn.setFixedSize(side, side)
+            # the theme's minimum button height is taller than a table row;
+            # without this the cross was cut off to an empty box
+            btn.setStyleSheet("QPushButton { min-height: 0px; padding: 0px; }")
             btn.setToolTip(_wrap_tip(_t("dlg.remove")))
             btn.clicked.connect(
                 lambda _=False, kd=kind, k=key: self._remove(kd, k))

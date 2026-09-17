@@ -225,3 +225,28 @@ def test_a_word_from_your_own_dictations_is_not_ticked():
     own = ["Ich habe den Para Kit gestern bestellt."]
     assert pr.risky("Para Kit", own) is True
     assert pr.risky("Parakit", own) is False
+
+
+def test_the_dictionary_table_follows_the_font_size(app):
+    """An own stylesheet on the table dropped it to the system font, and the
+    remove buttons were taller than a row - cut off to empty boxes."""
+    from PySide6.QtGui import QFont
+    from settings_dialogs import DictionaryDialog
+    before = app.font()
+    big = QFont(before)
+    big.setPointSize(18)
+    app.setFont(big)
+    try:
+        rows = [("dict", "Leibig", "", "Leibig", "von mir")]
+        dlg = DictionaryDialog(
+            rows_provider=lambda _c: rows, on_add=lambda *a: None,
+            on_edit=lambda *a: None, on_remove=lambda *a: None,
+            categories=[("all", "Alle")])
+        assert dlg._table.font().pointSize() == 18
+        assert "18pt" in dlg._table.horizontalHeader().styleSheet()
+        button = dlg._table.cellWidget(0, 3)
+        assert button.height() <= dlg._table.rowHeight(0)
+        assert dlg._table.rowHeight(0) >= dlg._table.fontMetrics().height()
+        dlg.close()
+    finally:
+        app.setFont(before)
