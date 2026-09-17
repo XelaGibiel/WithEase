@@ -517,6 +517,30 @@ class MainWindow(QMainWindow):
         self._version_btn.setEnabled(True)
         self._version_btn.setStyleSheet(
             f"font-weight: bold; color: {theme.accent()};")
+        self._announce_update(info)
+
+    def _announce_update(self, info) -> None:
+        """Show what a new version improves - unprompted, once per version.
+
+        A highlighted button in the footer only reaches someone who looks
+        there, and it says nothing about WHY the update matters to them.
+        So the notes open by themselves the first time a version is seen,
+        and the version is remembered so this never turns into a nag.
+
+        Deliberately not modal: the settings window stays usable, and
+        nobody has to hit a small button to get their work back."""
+        if not self.isVisible():
+            return          # nothing to sit on top of - the footer carries it
+        from withease.core import config
+        cfg = config.load_app_config()
+        if cfg.get("update_notes_seen") == info.version:
+            return
+        cfg["update_notes_seen"] = info.version
+        config.save_app_config(cfg)
+        from withease.gui.update_dialog import UpdateDialog
+        # Parented, so it is kept alive and closes with the window.
+        self._update_notice = UpdateDialog(info, self)
+        self._update_notice.show()
 
     def _on_version_clicked(self) -> None:
         if self._latest_release is None:

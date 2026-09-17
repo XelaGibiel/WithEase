@@ -47,6 +47,9 @@ DEFAULT_APP_CONFIG: dict[str, Any] = {
     # Reading of "active_seconds" at the moment "Später" was pressed, so the
     # postponement counts from THEN and not from the install.
     "support_hint_snoozed_at": 0,
+    # Version whose release notes were already shown unprompted, so the
+    # "what is new" window appears once per version and never nags.
+    "update_notes_seen": "",
 }
 
 DEFAULT_PROFILE: dict[str, Any] = {
@@ -86,6 +89,7 @@ DEFAULT_PROFILE: dict[str, Any] = {
             "sticky_altgr": False,
             "sticky_win": False,
             "sticky_auto_release": True,
+            "capslock_indicator": True,
             "sticky_indicator_position": "bottom-right",
             "sticky_chip_size": 24,
             "show_modifier_status": True,

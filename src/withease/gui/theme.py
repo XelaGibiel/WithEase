@@ -167,6 +167,21 @@ def danger_color() -> str:
     return "#EF5350" if is_dark() else "#C62828"
 
 
+def danger_fill() -> tuple[str, str]:
+    """``(background, text)`` for a button filled red.  Every pair ≥ 4.5:1."""
+    if high_contrast():
+        return ("#FF6B6B", "#000000") if is_dark() else ("#B00000", "#FFFFFF")
+    return ("#C62828", "#FFFFFF")
+
+
+def ok_fill() -> tuple[str, str]:
+    """``(background, text)`` for the green "done" state of a button.
+    Every pair ≥ 4.5:1."""
+    if high_contrast():
+        return ("#00FF66", "#000000") if is_dark() else ("#006400", "#FFFFFF")
+    return ("#2E7D32", "#FFFFFF")
+
+
 def action_color() -> str:
     """Neutral "do something" blue for small action icons (refresh/apply).
 
@@ -550,6 +565,22 @@ def app_stylesheet() -> str:
         }}
         QPushButton[danger="true"]:disabled {{
             color: {hint_color()}; border-color: {s['border']};
+        }}
+
+        /* Filled red: for the few places where the strongest "careful"
+           signal is wanted on purpose (the dictation window's "Schließen").
+           Kept apart from danger="true" so delete buttons stay tinted. */
+        QPushButton[dangerFill="true"] {{
+            background: {danger_fill()[0]}; color: {danger_fill()[1]};
+            border-color: {danger_fill()[0]};
+        }}
+        QPushButton[dangerFill="true"]:hover {{ border-color: {s['text']}; }}
+
+        /* A button that just did something you cannot see (copied to the
+           clipboard) says so for a moment: green, with a check mark. */
+        QPushButton[confirmed="true"] {{
+            background: {ok_fill()[0]}; color: {ok_fill()[1]};
+            border-color: {ok_fill()[0]};
         }}
 
         QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox,

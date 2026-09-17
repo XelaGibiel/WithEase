@@ -124,6 +124,27 @@ def _mark_danger(button):
         return button
 
 
+def _mark_danger_filled(button):
+    """``ui_utils.mark_danger_filled`` with a fallback for an OLDER core: the
+    tinted danger style instead of the red fill."""
+    try:
+        from withease.gui.ui_utils import mark_danger_filled
+        return mark_danger_filled(button)
+    except Exception:
+        return _mark_danger(button)
+
+
+def _flash_confirmation(button, text: str, then=None) -> None:
+    """``ui_utils.flash_confirmation`` with a fallback for an OLDER core: no
+    check mark, but the action itself still happens right away."""
+    try:
+        from withease.gui.ui_utils import flash_confirmation
+        flash_confirmation(button, text, then=then)
+    except Exception:
+        if then is not None:
+            then()
+
+
 def _show_undo(widget, text: str, on_undo) -> bool:
     """``widgets.undo_bar.show_undo`` with a fallback for an OLDER core.
 
@@ -283,6 +304,10 @@ _STATE = {
     "idle":         ("state.idle", "#2E7D32"),
     "recording":    ("state.recording", "#C62828"),
     "transcribing": ("state.transcribing", "#1565C0"),
+    # A speech model being downloaded or pushed into the graphics card.
+    # The module passes the whole sentence as the detail, because only it
+    # knows which model and which of the two waits this is.
+    "loading":      ("state.loading", "#1565C0"),
     "error":        ("state.error", "#C62828"),
 }
 
@@ -723,6 +748,7 @@ class DictationWindow(QWidget):
     _ai_busy_sig = Signal(bool)                # AI request running (disable UI)
     _ai_result_sig = Signal(str)               # replace buffer with AI result
     _ai_msg_sig = Signal(str)                  # short status/error message
+    _ai_problem_sig = Signal(str, str)         # AI failed: kind, detail
     _take_sel_sig = Signal(str)                # selection taken from the target
 
     def __init__(self, on_insert: Callable[[str], None] | None = None,
@@ -768,6 +794,14 @@ class DictationWindow(QWidget):
         self._ai_shown = bool(ai_visible)
         self._restore_geometry = geometry
         self._pending_low_words: list[str] = []   # flagged-but-still-here words
+        # "Kopieren & Schließen" waits for its check mark before closing;
+        # a second press in that moment must not copy and close twice.
+        self._confirm_pending = False
+        # Yellow "Whisper was unsure" marks as (cursor over the word, word).
+        # The cursors follow every edit on their own; a mark only goes when
+        # the word underneath it changes.
+        self._low_marks: list = []
+        self._candidate_marks: list = []       # "nimm N" choices, (start, end)
         self._tr = t or (lambda s: s)
         self._spell_mode = False
         self._correction_dialog: CorrectionDialog | None = None
@@ -831,6 +865,26 @@ class DictationWindow(QWidget):
             " border: 1px solid rgba(255,255,255,0.20); border-radius: 16px;"
             " padding: 10px 24px; font-weight: bold; font-size: larger; }")
         self._busy_chip.hide()
+        # Same place, in warning red: when a KI-Aktion fails (most often:
+        # Ollama was never started) the reason used to appear only in the
+        # status line at the bottom - easy to miss while looking at the text,
+        # which is exactly where the eyes are after choosing an action.
+        self._problem_chip = QLabel(self._edit.viewport())
+        self._problem_chip.setTextFormat(Qt.TextFormat.RichText)
+        self._problem_chip.setWordWrap(True)
+        self._problem_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._problem_chip.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._problem_chip.setStyleSheet(
+            "QLabel { background: rgba(183,28,28,0.96); color: #FFFFFF;"
+            " border: 1px solid rgba(255,255,255,0.30); border-radius: 16px;"
+            " padding: 12px 24px; }")
+        self._problem_chip.installEventFilter(self)
+        self._problem_chip.hide()
+        # Long enough to read twice; a click on it or the next edit is sooner.
+        self._problem_timer = QTimer(self)
+        self._problem_timer.setSingleShot(True)
+        self._problem_timer.setInterval(15000)
+        self._problem_timer.timeout.connect(self._hide_problem_chip)
         split.addWidget(self._edit)
 
         right = QWidget()
@@ -961,6 +1015,7 @@ class DictationWindow(QWidget):
         self._close_btn.setShortcut("Ctrl+W")
         self._close_btn.setToolTip(_wrap_tip(_t("tip.close")))
         self._close_btn.clicked.connect(self._close_and_clear)
+        _mark_danger_filled(self._close_btn)
         row.addWidget(self._close_btn)
         row.addStretch()
         layout.addLayout(row)
@@ -972,7 +1027,17 @@ class DictationWindow(QWidget):
         self._rec_timer.timeout.connect(self._tick_recording)
         self._rec_secs = 0
         self._status_base = ""
+        # The state before the current one.  A model load can interrupt a
+        # running recording (live mode loads on the first chunk); coming
+        # back from it must not restart the recording clock at 0 s.
+        self._last_state = "idle"
+        self._paused_secs = 0    # recording seconds parked during a load
         self._edit.textChanged.connect(self._update_counter)
+        # textChanged, not the document's contentsChange: the document outlives
+        # the window during destruction and kept firing into a half-deleted
+        # widget - an access violation.  The check rescans every mark anyway,
+        # so it needs no positions from the signal.
+        self._edit.textChanged.connect(self._on_contents_change)
         self._update_counter()
         self._edit.installEventFilter(self)      # Escape cancels „nimm N“
         self._load_initial_history(history or [])
@@ -985,6 +1050,8 @@ class DictationWindow(QWidget):
         self._ai_busy_sig.connect(self._apply_ai_busy)
         self._ai_result_sig.connect(self._apply_ai_result)
         self._ai_msg_sig.connect(self._apply_ai_message)
+        self._ai_problem_sig.connect(self._apply_ai_problem)
+        self._edit.textChanged.connect(self._hide_problem_chip)
         self._take_sel_sig.connect(self._apply_take_selected)
         self._partial_sig.connect(self._apply_partial)
         self._final_sig.connect(self._apply_final)
@@ -1024,6 +1091,13 @@ class DictationWindow(QWidget):
 
     def ai_message(self, msg: str) -> None:
         self._ai_msg_sig.emit(msg or "")
+
+    def ai_problem(self, kind: str, detail: str = "") -> None:
+        """Show why a KI-Aktion failed, where it cannot be missed.
+
+        ``kind`` is one of ollama / lmstudio / offline / setup / timeout /
+        empty / other; ``detail`` is only shown for "other"."""
+        self._ai_problem_sig.emit(kind or "other", detail or "")
 
     def _rebuild_ai_bar(self) -> None:
         while self._ai_bar.count():
@@ -1092,10 +1166,49 @@ class DictationWindow(QWidget):
             max(0, (r.width() - self._busy_chip.width()) // 2),
             max(0, (r.height() - self._busy_chip.height()) // 2))
 
+    def _position_problem_chip(self) -> None:
+        r = self._edit.viewport().rect()
+        self._problem_chip.setFixedWidth(max(120, min(r.width() - 24, 520)))
+        self._problem_chip.adjustSize()
+        self._problem_chip.move(
+            max(0, (r.width() - self._problem_chip.width()) // 2),
+            max(0, (r.height() - self._problem_chip.height()) // 2))
+
+    def _apply_ai_problem(self, kind: str, detail: str) -> None:
+        import html
+
+        import dict_i18n
+        self._busy_chip.hide()
+        for b in self._ai_buttons:
+            b.setEnabled(True)
+        if f"ai.problem.{kind}.title" not in dict_i18n.STRINGS["en"]:
+            kind = "other"
+        title = _t(f"ai.problem.{kind}.title")
+        text = _t(f"ai.problem.{kind}.text", detail=detail)
+        plain_title = title.lstrip("⚠ ").strip()
+        self._problem_chip.setText(
+            "<div style='font-weight:bold; font-size:large'>"
+            f"{html.escape(title)}</div>"
+            f"<div style='margin-top:4px'>{html.escape(text)}</div>"
+            "<div style='margin-top:6px; font-size:small'>"
+            f"{html.escape(_t('ai.problem.dismiss'))}</div>")
+        self._problem_chip.setAccessibleName(f"{plain_title}. {text}")
+        self._position_problem_chip()
+        self._problem_chip.show()
+        self._problem_chip.raise_()
+        self._problem_timer.start()
+        # The status line keeps it too, for after the chip is gone.
+        self._hint.setText(f"{plain_title} – {text}" if text else plain_title)
+
+    def _hide_problem_chip(self) -> None:
+        self._problem_timer.stop()
+        self._problem_chip.hide()
+
     def _apply_ai_busy(self, on: bool) -> None:
         for b in self._ai_buttons:
             b.setEnabled(not on)
         if on:
+            self._hide_problem_chip()
             self._hint.setText("KI arbeitet …")
             self._position_busy_chip()
             self._busy_chip.show()
@@ -1366,23 +1479,39 @@ class DictationWindow(QWidget):
     def _apply_state(self, state: str, mode: str = "") -> None:
         key, colour = _STATE.get(state, _STATE["idle"])
         label = _t(key)         # translated HERE, not in the table at import
-        if mode and state in ("recording", "transcribing"):
+        if state == "loading" and mode:
+            label = mode
+        elif mode and state in ("recording", "transcribing"):
             label = f"{label}   ·   {mode}"
         # Keep the font size identical across every state so the label's height
         # never changes and the window doesn't shift up/down when recording
         # starts/stops.  Recording still stands out via the red colour and the
         # running timer – not a bigger font.
         if state == "recording":
+            # A model load can interrupt a running recording (live mode
+            # loads on the first chunk).  Coming back from it resumes the
+            # clock instead of restarting it at 0 s.
+            self._rec_secs = (self._paused_secs
+                              if self._last_state == "loading" else 0)
+            self._status_base = label
+            self._status.setText(f"{label}    {self._rec_secs} s")
+            colour = "#e53935"
+            self._rec_timer.start()
+        elif state == "loading":
+            # The same one-second ticker as recording, for the same
+            # reason: a number that keeps moving is the proof that this
+            # is a wait and not a crash.
+            self._paused_secs = self._rec_secs
             self._rec_secs = 0
             self._status_base = label
             self._status.setText(f"{label}    0 s")
-            colour = "#e53935"
             self._rec_timer.start()
         else:
             self._rec_timer.stop()
             self._status.setText(label)
         self._status.setStyleSheet(
             f"font-weight: bold; font-size: larger; color: {colour};")
+        self._last_state = state
 
     def _tick_recording(self) -> None:
         self._rec_secs += 1
@@ -1500,14 +1629,14 @@ class DictationWindow(QWidget):
         self._forward_correction()      # "ersetze A durch B" learns here too
         if res.status == "awaiting_dictation":
             # "korrigiere …" selected the target → open the correction window.
-            self._clear_marks()
+            self._clear_candidates()
             self._open_correction(self._edit.textCursor().selectedText())
             self._report(text, _t("msg.correction_open"))
         elif res.status == "ambiguous" and res.matches:
             legend = self._mark_candidates(res.matches)
             self._report(text, legend)
         else:
-            self._clear_marks()
+            self._clear_candidates()
             self._report(text, res.message or f"Befehl: {cmd.kind}")
 
     def _do_insert(self, keep_open: bool = False) -> None:
@@ -1551,12 +1680,24 @@ class DictationWindow(QWidget):
             self._on_copy(text)
             self._archive()
             self._set_hint(_t("msg.clipboard"))
+            _flash_confirmation(self._copy_btn, _t("win.copied"))
 
     def _do_copy_and_close(self) -> None:
+        if self._confirm_pending:
+            return                            # already copying and closing
         text = self.text().strip()
-        if text:
-            self._on_copy(text)
-        self._close_and_clear()
+        if not text:
+            self._close_and_clear()
+            return
+        self._on_copy(text)
+        self._confirm_pending = True
+
+        def close() -> None:
+            self._confirm_pending = False
+            self._close_and_clear()
+
+        # Closed only once the check mark has been seen.
+        _flash_confirmation(self._copy_close_btn, _t("win.copied"), then=close)
 
     # -- history & buffer lifecycle ------------------------------------
 
@@ -1599,8 +1740,62 @@ class DictationWindow(QWidget):
         self._on_history_changed(items)
 
     def _clear_marks(self) -> None:
-        self._edit.setExtraSelections([])
+        """Remove every mark - only for when the text itself is gone
+        (cleared, archived, replaced by a history entry)."""
+        self._low_marks = []
+        self._candidate_marks = []
         self._badges.set_badges([])
+        self._apply_marks()
+
+    def _clear_candidates(self) -> None:
+        """Remove the "nimm N" choices and leave the yellow marks alone."""
+        self._candidate_marks = []
+        self._badges.set_badges([])
+        self._apply_marks()
+
+    def _apply_marks(self) -> None:
+        """Paint the yellow "unsure" words and the green "nimm N" choices.
+
+        Both used to go through one setExtraSelections call that each of them
+        overwrote, and every command, every correction and every new sentence
+        began with a full clear - so dealing with ONE uncertain word erased
+        the yellow from all the others as well.
+        """
+        selections = [self._selection(QTextCursor(cursor), _LOW_CONF_BG)
+                      for cursor, _word in self._low_marks]
+        doc = self._edit.document()
+        for start, end in self._candidate_marks:
+            cur = QTextCursor(doc)
+            cur.setPosition(start)
+            cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            selections.append(self._selection(cur, _CANDIDATE_BG))
+        self._edit.setExtraSelections(selections)
+
+    @staticmethod
+    def _selection(cursor: QTextCursor, colour: QColor):
+        sel = QTextEdit.ExtraSelection()
+        fmt = QTextCharFormat()
+        fmt.setBackground(colour)
+        sel.format = fmt
+        sel.cursor = cursor
+        return sel
+
+    def _on_contents_change(self, *_args) -> None:
+        """Keep a yellow mark only while its word is still there, unchanged.
+
+        Measured: text added before it, after the sentence or anywhere else
+        leaves a mark's cursor on its word.  What does change is the word
+        under a mark - corrected, replaced, or extended - and exactly then the
+        mark has done its job and goes.  Every other mark stays.
+        """
+        if not self._low_marks:
+            return
+        doc = self._edit.toPlainText()
+        kept = [(cur, word) for cur, word in self._low_marks
+                if doc[cur.selectionStart():cur.selectionEnd()] == word]
+        if len(kept) != len(self._low_marks):
+            self._low_marks = kept
+            self._apply_marks()
 
     def _clear_buffer(self) -> None:
         self._edit.clear()
@@ -1744,8 +1939,10 @@ class DictationWindow(QWidget):
 
     def _highlight_low_words(self, low_words: list | None) -> None:
         """Tint words Whisper was unsure about (confidence heatmap).  Matches by
-        word text inside the just-inserted span, so it survives smart spacing."""
-        self._clear_marks()
+        word text inside the just-inserted span, so it survives smart spacing.
+        Adds to the marks already in the text - a word flagged in the previous
+        sentence is exactly as uncertain as it was before."""
+        self._clear_candidates()
         if not low_words or self._editor._last_insert is None:
             return
         start, end = self._editor._last_insert
@@ -1919,28 +2116,26 @@ class DictationWindow(QWidget):
         if (obj is self._edit and event.type() == QEvent.Type.Resize
                 and self._busy_chip.isVisible()):
             self._position_busy_chip()
+        if (obj is self._edit and event.type() == QEvent.Type.Resize
+                and self._problem_chip.isVisible()):
+            self._position_problem_chip()
+        # A click anywhere on the warning closes it.
+        if (obj is self._problem_chip
+                and event.type() == QEvent.Type.MouseButtonRelease):
+            self._hide_problem_chip()
+            return True
         return super().eventFilter(obj, event)
 
     def _cancel_candidates(self) -> None:
         self._editor.cancel_pending()
-        self._clear_marks()
+        self._clear_candidates()
         self._set_hint(_t("msg.selection_cancelled"))
 
     def _mark_candidates(self, matches: list[tuple[int, int]]) -> str:
         """Highlight the „nimm N“ choices in the text, paint numbered badges
         (choice 1..N in document order) and build a legend for the readout."""
-        selections = []
-        for start, end in matches:
-            sel = QTextEdit.ExtraSelection()
-            fmt = QTextCharFormat()
-            fmt.setBackground(_CANDIDATE_BG)
-            sel.format = fmt
-            cur = QTextCursor(self._edit.document())
-            cur.setPosition(start)
-            cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
-            sel.cursor = cur
-            selections.append(sel)
-        self._edit.setExtraSelections(selections)
+        self._candidate_marks = list(matches)
+        self._apply_marks()
         self._badges.set_badges([(i, s) for i, (s, _e) in enumerate(matches, 1)])
 
         doc = self.text()
@@ -1954,17 +2149,17 @@ class DictationWindow(QWidget):
     # -- confidence highlighting ---------------------------------------
 
     def highlight_low_confidence(self, spans: list[tuple[int, int]]) -> None:
-        """Underline/tint word spans Whisper was unsure about (positions are
-        offsets into the LAST inserted text; the module maps them)."""
-        selections = []
+        """Tint word spans Whisper was unsure about (document positions).
+
+        ADDS to the marks already there instead of replacing them."""
+        doc = self._edit.document()
+        text = self._edit.toPlainText()
         for start, end in spans:
-            sel = QTextEdit.ExtraSelection()
-            fmt = QTextCharFormat()
-            fmt.setBackground(_LOW_CONF_BG)
-            sel.format = fmt
-            cur = QTextCursor(self._edit.document())
+            word = text[start:end]
+            if not word:
+                continue
+            cur = QTextCursor(doc)
             cur.setPosition(start)
             cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
-            sel.cursor = cur
-            selections.append(sel)
-        self._edit.setExtraSelections(selections)
+            self._low_marks.append((cur, word))
+        self._apply_marks()

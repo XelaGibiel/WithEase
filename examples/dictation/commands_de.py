@@ -54,35 +54,60 @@ _HOMOPHONES = {
 PUNCT_WORDS = {
     "punkt": ".", "komma": ",", "fragezeichen": "?", "ausrufezeichen": "!",
     "doppelpunkt": ":", "semikolon": ";", "strichpunkt": ";",
-    "bindestrich": "-", "gedankenstrich": "–", "auslassungspunkte": "…",
+    "bindestrich": "-", "binderstrich": "-", "gedankenstrich": "–",
+    "auslassungspunkte": "…", "unterstrich": "_", "tiefstrich": "_",
 }
 
 # Inline punctuation: unambiguous spoken symbols that should become the symbol
 # even in the middle of a dictated sentence ("Preis Doppelpunkt zehn" → "Preis:
 # zehn").  Deliberately excludes "Punkt"/"Komma" (common words; Whisper already
 # auto-punctuates sentences).  Grouped by spacing behaviour.
-_INLINE_TIGHT = {"schrägstrich": "/", "schragstrich": "/", "bindestrich": "-"}
+# "Binderstrich" is how Whisper often writes a spoken "Bindestrich".
+_INLINE_TIGHT = {"schrägstrich": "/", "schragstrich": "/", "bindestrich": "-",
+                 "binderstrich": "-", "unterstrich": "_", "tiefstrich": "_"}
+# Every way a person actually says the German quotation marks, built from a
+# list instead of written out by hand.  The hand-written table had
+# "Anführungszeichen" and "Gänsefüßchen" but not "Anführungsstriche" - so
+# dictating that mid-sentence produced those words instead of the marks, and
+# nothing pointed at why.
+_QUOTE_WORDS = (
+    "anführungszeichen", "anfuehrungszeichen",
+    "anführungsstriche", "anfuehrungsstriche",
+    "anführungsstrich", "anfuehrungsstrich",
+    "gänsefüßchen", "gänsefüsschen", "gaensefuesschen",
+    "zitatzeichen",
+)
+_QUOTES_OPEN = {f"{word} {side}": "„"
+                for word in _QUOTE_WORDS for side in ("auf", "unten")}
+_QUOTES_CLOSE = {f"{word} {side}": "“"
+                 for word in _QUOTE_WORDS for side in ("zu", "oben")}
+
 _INLINE_OPEN = {
     "runde klammer auf": "(", "eckige klammer auf": "[", "klammer auf": "(",
-    "anführungszeichen auf": "„", "anfuehrungszeichen auf": "„",
-    "anführungszeichen unten": "„", "anfuehrungszeichen unten": "„",
-    "gänsefüßchen auf": "„", "gänsefüßchen unten": "„",
+    **_QUOTES_OPEN,
 }
 _INLINE_CLOSE = {
     "runde klammer zu": ")", "eckige klammer zu": "]", "klammer zu": ")",
-    "anführungszeichen zu": "“", "anfuehrungszeichen zu": "“",
-    "anführungszeichen oben": "“", "anfuehrungszeichen oben": "“",
-    "gänsefüßchen zu": "“", "gänsefüßchen oben": "“", "doppelpunkt": ":",
+    **_QUOTES_CLOSE,
+    "doppelpunkt": ":",
     "semikolon": ";", "strichpunkt": ";", "gedankenstrich": "–",
     "ausrufezeichen": "!", "fragezeichen": "?",
 }
 
 
-def _inline_replace(text: str, mapping: dict, left: str, right: str) -> str:
+def _inline_replace(text: str, mapping: dict, left: str, right: str,
+                    space_before: bool = False) -> str:
+    """``space_before``: the symbol keeps one space to the word in front of it
+    (an opening bracket or quote), even when ``left`` swallowed that space."""
     for phrase in sorted(mapping, key=len, reverse=True):
         body = r"\b" + r"\s+".join(re.escape(w) for w in phrase.split()) + r"\b"
-        text = re.sub(left + body + right,
-                      lambda _m, s=mapping[phrase]: s, text, flags=re.IGNORECASE)
+
+        def put(m, s=mapping[phrase]):
+            before = m.string[:m.start()]
+            if not space_before or not before or before[-1] in " \t\n([„":
+                return s
+            return " " + s
+        text = re.sub(left + body + right, put, text, flags=re.IGNORECASE)
     return text
 
 
@@ -99,8 +124,11 @@ def apply_inline_punctuation(text: str) -> str:
     # closers: no space before; eat a stray period Whisper put before *and*
     # directly after (but keep the space before the next word)
     text = _inline_replace(text, _INLINE_CLOSE, r"[\s.,;:!?]*", r"\.?")
-    # openers: no space after; eat a stray period Whisper put after
-    text = _inline_replace(text, _INLINE_OPEN, r"", r"[\s.]*")
+    # openers: no space after.  Whisper hears the spoken word as a clause of
+    # its own and wraps it in commas ("raussuchen, Klammer auf, bei") - those
+    # commas belong to the spoken word, not to the text, so they go with it.
+    text = _inline_replace(text, _INLINE_OPEN, r"[ \t]*(?:[,;][ \t]*)?",
+                           r"[\s.,;:]*", space_before=True)
     return text
 
 # German number words → int (for "nimm zwei", "die letzten drei Wörter").
@@ -360,13 +388,10 @@ def _m_format(t: str) -> Command | None:
         return Command("punct", {"char": "(", "glue": "left"})
     if t in ("klammer zu", "runde klammer zu"):
         return Command("punct", {"char": ")"})
-    if t in ("anführungszeichen auf", "anfuehrungszeichen auf",
-             "anführungszeichen unten", "anfuehrungszeichen unten",
-             "gänsefüßchen auf", "gänsefüßchen unten"):
+    # Spoken on its own, the same vocabulary as inline (see _QUOTE_WORDS).
+    if t in _QUOTES_OPEN:
         return Command("punct", {"char": "„", "glue": "left"})
-    if t in ("anführungszeichen zu", "anfuehrungszeichen zu",
-             "anführungszeichen oben", "anfuehrungszeichen oben",
-             "gänsefüßchen zu", "gänsefüßchen oben"):
+    if t in _QUOTES_CLOSE:
         return Command("punct", {"char": "“"})
     return None
 
@@ -514,6 +539,11 @@ CHEAT_SHEET: list[tuple[str, list[tuple[str, str]]]] = [
         ("neue Zeile", "Zeilenumbruch"),
         ("neuer Absatz", "Leerzeile und neuer Absatz"),
         ("Punkt · Komma · Fragezeichen", "Satzzeichen einfügen"),
+        ("Anführungsstriche unten · oben",
+         "„ und “ setzen – geht auch als Anführungszeichen oder Gänsefüßchen"),
+        ("Klammer auf · Klammer zu", "( und ) setzen"),
+        ("Bindestrich · Unterstrich · Schrägstrich",
+         "- _ / ohne Leerzeichen setzen: „2026 Bindestrich 09“ → 2026-09"),
         ("großschreiben · kleinschreiben", "nächstes Wort groß/klein"),
         ("wörtlich <Text>", "Text einfügen, auch wenn er wie ein Befehl klingt"),
         ("buchstabiere Anton Berta …", "buchstabiert einfügen"),

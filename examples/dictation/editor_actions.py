@@ -148,6 +148,13 @@ class Editor:
             # tends to append to a single spoken word, so "Testen." doesn't drop
             # a stray period into the middle of a line.
             text = text.rstrip(" .,;:!?…") or text
+            # …and its capital first letter, which Whisper puts on every
+            # utterance.  A replacement that lands mid-line must follow
+            # what stands BEFORE it, exactly like the no-selection path
+            # below: "markiere den Nachricht" + "die Nachricht" used to
+            # arrive as "…ich habe Die Nachricht heute…".
+            from postprocess import match_case
+            text = match_case(self._text()[:cur.selectionStart()], text)
             old = cur.selectedText().strip()
             # Only *correction commands* ("korrigiere …", "ersetze …") teach the
             # error memory – a plain "markiere …" edit must not, so quick edits

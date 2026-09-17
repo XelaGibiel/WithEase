@@ -6,7 +6,9 @@ when all are released.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Qt, Signal
+import sys
+
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -24,8 +26,25 @@ _MODIFIERS: list[tuple[str, str]] = [
 ]
 
 
+# Caps Lock is not a Sticky key, but switched on by accident it undoes a
+# latched Shift - so it gets a chip of its own, in a warning red.
+_CAPSLOCK = ("capslock", "#C62828")
+_CAPSLOCK_POLL_MS = 250
+
+
 def _label(name: str) -> str:
     return tr(f"key.mod.{name}")
+
+
+def capslock_on() -> bool:
+    """Whether Caps Lock is switched on right now (False off Windows)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.user32.GetKeyState(0x14) & 1)
+    except Exception:
+        return False
 
 _DEFAULT_CHIP_H = 24
 
@@ -39,6 +58,7 @@ class _Bridge(QObject):
     updated = Signal(dict)
     chip_size_changed = Signal(int)
     preview_changed = Signal(bool)
+    capslock_watch_changed = Signal(bool)
 
 
 class ModifierIndicator(QWidget):
@@ -58,16 +78,25 @@ class ModifierIndicator(QWidget):
         self._chip_h = _DEFAULT_CHIP_H
         self._preview = False
         self._suppressed = False   # hidden over a fullscreen window
+        self._capslock_watch = False   # the keyboard module wants it shown
+        self._capslock = False         # Caps Lock is on right now
+        # Polled: Caps Lock can be switched by any keyboard, by another
+        # program or by the on-screen keyboard - no hook sees all of those.
+        self._capslock_timer = QTimer(self)
+        self._capslock_timer.setInterval(_CAPSLOCK_POLL_MS)
+        self._capslock_timer.timeout.connect(self._poll_capslock)
 
         self._bridge = _Bridge()
         self._bridge.updated.connect(self._apply_state)
         self._bridge.chip_size_changed.connect(self._apply_chip_size)
         self._bridge.preview_changed.connect(self._apply_preview)
+        self._bridge.capslock_watch_changed.connect(self._apply_capslock_watch)
 
         bus.subscribe("keyboard.modifier_status", self._on_status)
         bus.subscribe("keyboard.indicator_position", self._on_position)
         bus.subscribe("keyboard.chip_size", self._on_chip_size)
         bus.subscribe("keyboard.preview", self._on_preview)
+        bus.subscribe("keyboard.capslock_watch", self._on_capslock_watch)
 
         self._update_geometry()
         from withease.gui.widgets.cursor_indicator import IndicatorCoordinator
@@ -97,11 +126,41 @@ class ModifierIndicator(QWidget):
     def _on_preview(self, active: bool, **_: object) -> None:
         self._bridge.preview_changed.emit(active)
 
+    def _on_capslock_watch(self, active: bool, **_: object) -> None:
+        self._bridge.capslock_watch_changed.emit(bool(active))
+
+    def _apply_capslock_watch(self, active: bool) -> None:
+        self._capslock_watch = active
+        if active:
+            self._capslock_timer.start()
+            self._poll_capslock()
+        else:
+            self._capslock_timer.stop()
+            if self._capslock:
+                self._capslock = False
+                self._reapply()
+
+    def _poll_capslock(self) -> None:
+        on = capslock_on()
+        if on != self._capslock:
+            self._capslock = on
+            if not self._preview:
+                self._reapply()
+
+    def _chips(self) -> list[tuple[str, str]]:
+        """The chips to draw, left to right: latched keys, then Caps Lock."""
+        if self._preview:
+            return [*_MODIFIERS, _CAPSLOCK]
+        chips = [m for m in _MODIFIERS if self._state.get(m[0])]
+        if self._capslock_watch and self._capslock:
+            chips.append(_CAPSLOCK)
+        return chips
+
     def _apply_chip_size(self, size: int) -> None:
         self.set_chip_size(size)
 
     def _should_show(self) -> bool:
-        return self._preview or any(self._state.values())
+        return bool(self._chips())
 
     def _reapply(self) -> None:
         """Visibility = (preview or a modifier is latched) AND not suppressed
@@ -137,6 +196,18 @@ class ModifierIndicator(QWidget):
     def _font_px(self) -> int:
         return max(9, round(self._chip_h * 13 / 24))
 
+    def _width_of(self, name: str) -> int:
+        """Modifier chips share one width so they do not jump around; the
+        Caps Lock chip is as wide as its longer label needs."""
+        if name != _CAPSLOCK[0]:
+            return self._chip_w()
+        from PySide6.QtGui import QFont, QFontMetrics
+        font = QFont()
+        font.setPixelSize(self._font_px())
+        font.setBold(True)
+        text = QFontMetrics(font).horizontalAdvance(_label(name))
+        return max(self._chip_w(), text + self._chip_h // 2)
+
     def _chip_w(self) -> int:
         # Wide enough for the widest LOCALISED label ("Umschalt" is much
         # longer than "Shift"), never narrower than the classic proportion.
@@ -159,13 +230,11 @@ class ModifierIndicator(QWidget):
         return round(self._chip_h * 6 / 24)
 
     def _update_geometry(self) -> None:
-        if self._preview:
-            count = len(_MODIFIERS)
-        else:
-            active_count = sum(1 for m in _MODIFIERS if self._state.get(m[0]))
-            count = max(active_count, 1)  # at least 1 for initial sizing
-        cw, gap, margin = self._chip_w(), self._gap(), self._margin()
-        w = count * cw + (count - 1) * gap + 2 * margin
+        # at least one chip wide for the initial sizing
+        widths = [self._width_of(name) for name, _ in self._chips()] or [
+            self._chip_w()]
+        gap, margin = self._gap(), self._margin()
+        w = sum(widths) + (len(widths) - 1) * gap + 2 * margin
         h = self._chip_h + 2 * margin
         self.setFixedSize(w, h)
         self._reposition()
@@ -196,11 +265,11 @@ class ModifierIndicator(QWidget):
     # ------------------------------------------------------------------
 
     def paintEvent(self, _event: object) -> None:
-        active = _MODIFIERS if self._preview else [m for m in _MODIFIERS if self._state.get(m[0])]
+        active = self._chips()
         if not active:
             return
 
-        cw, ch = self._chip_w(), self._chip_h
+        ch = self._chip_h
         gap, margin, radius = self._gap(), self._margin(), self._radius()
         font_px = self._font_px()
 
@@ -211,6 +280,7 @@ class ModifierIndicator(QWidget):
         x = margin
         for name, colour in active:
             label = _label(name)
+            cw = self._width_of(name)
             path = QPainterPath()
             path.addRoundedRect(x, margin, cw, ch, radius, radius)
             p.fillPath(path, QColor(colour))

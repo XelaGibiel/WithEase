@@ -14,6 +14,7 @@ import logging
 import subprocess
 import sys
 import threading
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,27 @@ _API_RELEASES = f"https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=2
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 
 _TIMEOUT = 10  # seconds
+
+
+# Everything the update path downloads must come from GitHub over HTTPS.
+# The release metadata already arrives over TLS from api.github.com, so a
+# rewritten URL means something has gone wrong further upstream - but this is
+# the one code path that REPLACES the program's own files, on a program that
+# sees every keystroke.  A rule that important belongs in code, not in a
+# comment.  (Redirects are followed by urllib and land on GitHub's own
+# download hosts, which are authenticated by TLS in turn.)
+_TRUSTED_HOSTS = frozenset({
+    "github.com", "api.github.com", "codeload.github.com",
+    "raw.githubusercontent.com", "objects.githubusercontent.com",
+})
+
+
+def is_trusted_url(url: str) -> bool:
+    """True for an HTTPS URL on one of GitHub's own hosts."""
+    parts = urllib.parse.urlsplit(url)
+    host = (parts.hostname or "").lower()
+    return parts.scheme == "https" and (
+        host in _TRUSTED_HOSTS or host.endswith(".githubusercontent.com"))
 
 
 @dataclass
@@ -136,6 +158,10 @@ def _update_via_zipball(info: ReleaseInfo) -> None:
 
     if not info.zipball_url:
         raise RuntimeError("no download URL in release")
+    if not is_trusted_url(info.zipball_url):
+        raise RuntimeError(
+            f"refusing to update from a non-GitHub address: "
+            f"{info.zipball_url}")
     req = urllib.request.Request(
         info.zipball_url, headers={"User-Agent": "WithEase"})
     with urllib.request.urlopen(req, timeout=120) as resp:

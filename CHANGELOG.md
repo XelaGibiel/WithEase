@@ -23,6 +23,11 @@ that stops happening after a while, so there is now one.
    the newest one.
 3. `npm --prefix website run data` picks up the new version number from
    `pyproject.toml`; the "Aktuell" badge follows it on its own.
+4. Pushing the `v<version>` tag builds the .exe and attaches two files to
+   the release: the ZIP and its `.sha256`. The build installs only what
+   `requirements-build.txt` pins, so it fails rather than silently shipping
+   a different wheel. To upgrade a build dependency, edit `DIRECT` in
+   `tools/pin_build_deps.py`, run it, and commit the regenerated file.
 
 ---
 

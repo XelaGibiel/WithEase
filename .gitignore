@@ -51,6 +51,7 @@ withease-makros.json
 # Programm-Repository
 website/
 START_Webseite.bat
+START_Editor.bat
 
 # Lokale Werkzeug-Einstellungen (Claude Code)
 .claude/

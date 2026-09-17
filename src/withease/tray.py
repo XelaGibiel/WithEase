@@ -79,6 +79,9 @@ class TrayIcon(QSystemTrayIcon):
         bus.subscribe("app.resumed",             lambda **_: self._set_paused(False))
         bus.subscribe("i18n.language_changed",   lambda **_: self._refresh())
         bus.subscribe("profiles.changed",        lambda **_: self._on_profile_changed())
+        # A module whose tray contribution changed (another microphone was
+        # picked) asks for the tooltip and menu to be rebuilt.
+        bus.subscribe("tray.refresh",            lambda **_: self._refresh())
 
         self.activated.connect(self._on_activated)
 
@@ -98,15 +101,35 @@ class TrayIcon(QSystemTrayIcon):
         self._update_tooltip()
         self._build_menu()
 
+    # Windows keeps only the first 127 characters of a tray tooltip.
+    _TOOLTIP_LIMIT = 127
+
     def _update_tooltip(self) -> None:
         """Show app name, active profile and running state at a glance, so
         hovering the tray icon tells the user immediately whether WithEase
-        is active and which profile is in use."""
+        is active and which profile is in use.
+
+        Modules may add a line of their own - the dictation module names the
+        microphone it records from.  The tray publishes "tray.tooltip" with a
+        list and shows what was appended; the core itself knows nothing
+        about microphones."""
         state = (tr("tray.state.paused") if self._app.is_paused
                  else tr("tray.state.active"))
-        self.setToolTip(
-            f"{tr('app.name')} – {state}\n"
-            f"{tr('tray.tooltip.profile', name=self._app.active_profile)}")
+        lines = [f"{tr('app.name')} – {state}",
+                 tr("tray.tooltip.profile", name=self._app.active_profile)]
+        extra: list[str] = []
+        try:
+            bus.publish("tray.tooltip", lines=extra)
+        except Exception:
+            extra = []
+        text = "\n".join(lines)
+        for line in (str(x) for x in extra if x):
+            # A line that would run past the Windows limit is left out whole
+            # rather than cut off in the middle of a word.
+            if len(text) + 1 + len(line) > self._TOOLTIP_LIMIT:
+                break
+            text += "\n" + line
+        self.setToolTip(text)
 
     def _update_icon(self) -> None:
         if ICON_PATH.exists():
@@ -134,6 +157,20 @@ class TrayIcon(QSystemTrayIcon):
             prefix = tr("tray.module_active_prefix") if module.enabled else "   "
             menu.addAction(f"{prefix}{module.DISPLAY_NAME}", module.toggle)
 
+        # Sections contributed by modules - the dictation module's microphone
+        # list, for one - so a quick switch does not mean opening the
+        # settings.  Each section refills itself whenever it is opened, so a
+        # microphone plugged in after start-up is listed without a restart.
+        sections: list[dict] = []
+        try:
+            bus.publish("tray.menu", sections=sections)
+        except Exception:
+            sections = []
+        if sections:
+            menu.addSeparator()
+            for section in sections:
+                self._add_section(menu, section)
+
         menu.addSeparator()
 
         profile_menu = menu.addMenu(tr("tray.switch_profile"))
@@ -156,6 +193,31 @@ class TrayIcon(QSystemTrayIcon):
         menu.addAction(tr("app.quit"), self._app.quit)
 
         self.setContextMenu(menu)
+
+    def _add_section(self, menu: QMenu, section: dict) -> None:
+        """One submenu from a module's ``{"title": ..., "populate": ...}``.
+
+        ``populate`` returns ``(label, checked, callback)`` tuples."""
+        title = str(section.get("title") or "")
+        populate = section.get("populate")
+        if not title or not callable(populate):
+            return
+        sub = menu.addMenu(title)
+        self._fill_section(sub, populate)
+        sub.aboutToShow.connect(
+            lambda sub=sub, populate=populate: self._fill_section(sub, populate))
+
+    @staticmethod
+    def _fill_section(sub: QMenu, populate) -> None:
+        sub.clear()
+        try:
+            items = list(populate() or [])
+        except Exception:
+            items = []
+        for label, checked, callback in items:
+            action = sub.addAction(str(label), callback)
+            action.setCheckable(True)
+            action.setChecked(bool(checked))
 
     def _show_menu_at_cursor(self) -> None:
         menu = self.contextMenu()

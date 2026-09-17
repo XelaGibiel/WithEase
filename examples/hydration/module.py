@@ -515,6 +515,13 @@ class HydrationSettings(QWidget):
         layout.setSpacing(16)
 
         self._enabled_cb = QCheckBox(_t("enabled"))
+        # Anywhere on the row switches the module.  On an older core
+        # without the helper the box simply stays the smaller target.
+        try:
+            from withease.gui.ui_utils import whole_row_toggle
+            whole_row_toggle(self._enabled_cb)
+        except Exception:
+            pass
         self._enabled_cb.setChecked(self._module.enabled)
         # "larger" is relative, so the title follows the app font-size setting
         # (a fixed 13px did not scale like the other modules).

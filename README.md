@@ -97,6 +97,30 @@ English); [CHANGELOG.md](CHANGELOG.md) keeps the archive up to 0.5.0.
 > Windows SmartScreen may warn about the unsigned app – click *More info* →
 > *Run anyway*.
 
+#### Checking the download
+
+Every release carries a `WithEase-<version>-win64.zip.sha256` file next to
+the archive. It holds the SHA-256 fingerprint of the exact file the build
+produced, so you can confirm that what you downloaded is what was published.
+WithEase reads every keystroke on your machine – it is worth the ten seconds.
+
+In PowerShell, in the folder with both files:
+
+```powershell
+(Get-FileHash WithEase-<version>-win64.zip -Algorithm SHA256).Hash.ToLower()
+Get-Content WithEase-<version>-win64.zip.sha256
+```
+
+The two values must be identical. (In Git Bash or WSL the shorter
+`sha256sum -c WithEase-<version>-win64.zip.sha256` does the same.) If they
+differ, do not run the program – delete it and please
+[open an issue](https://github.com/XelaGibiel/WithEase/issues/new).
+
+> What this proves and what it does not: it proves the file survived the
+> download unchanged and matches the published build. It is not a signature –
+> both values come from the same release page, so it cannot vouch for the
+> release itself, only for your copy of it.
+
 ### Linux
 
 1. Download `WithEase-<version>-linux64.tar.gz`.

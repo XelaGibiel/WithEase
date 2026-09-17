@@ -149,11 +149,15 @@ def test_close_clears_buffer_and_archives(app):
 
 
 def test_copy_and_close(app):
+    """Copied at once - closed and cleared only after the check mark on
+    the button has been visible (see test_confirm_buttons.py)."""
+    from PySide6.QtTest import QTest
     win, _, copied = make(app)
     feed(app, win, "Meine Notiz")
     win._do_copy_and_close()
     app.processEvents()
     assert copied == ["Meine Notiz"]
+    QTest.qWait(1100)
     assert win.text() == ""
 
 

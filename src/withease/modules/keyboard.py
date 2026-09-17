@@ -90,6 +90,7 @@ class KeyboardModule(BaseModule):
         shared_keyboard_hook.subscribe(self._on_key_event)
         self._kb_subscribed = True
         bus.publish("module.started", module_id=self.MODULE_ID)
+        self._publish_capslock_watch()
 
     def stop(self) -> None:
         if self._kb_subscribed:
@@ -100,6 +101,7 @@ class KeyboardModule(BaseModule):
         self._keys_held.clear()
         bus.publish("module.stopped", module_id=self.MODULE_ID)
         bus.publish("keyboard.modifier_status", state=self._sticky_state.copy())
+        bus.publish("keyboard.capslock_watch", active=False)
 
     def get_settings_widget(self) -> QWidget:
         from withease.gui.settings.keyboard_settings import KeyboardSettingsWidget
@@ -107,6 +109,19 @@ class KeyboardModule(BaseModule):
 
     def on_settings_changed(self) -> None:
         bus.publish("module.settings_changed", module_id=self.MODULE_ID)
+        self._publish_capslock_watch()
+
+    def _publish_capslock_watch(self) -> None:
+        """Tell the chip whether to show a switched-on Caps Lock.
+
+        A Caps Lock hit by accident undoes a latched Shift: on the German
+        layout Caps Lock + Shift + "." gives "." instead of ":", and letters
+        come out small.  It looks exactly like Sticky Keys failing, so the chip
+        that shows the latched keys shows Caps Lock too."""
+        active = (self.enabled
+                  and self._settings.get("sticky_enabled", True)
+                  and self._settings.get("capslock_indicator", True))
+        bus.publish("keyboard.capslock_watch", active=bool(active))
 
     def load_settings(self, settings: dict[str, Any]) -> None:
         # Release anything latched under the previous settings/profile so no

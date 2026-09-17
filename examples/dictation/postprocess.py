@@ -155,6 +155,54 @@ def guard_cleanup(original: str, cleaned: str) -> str:
     return c
 
 
+# ---------------------------------------------------------------------------
+# The punctuation-only AI pass
+# ---------------------------------------------------------------------------
+
+def build_punctuation_prompt() -> str:
+    """System instruction for the pass that may ONLY move punctuation."""
+    return (
+        "Du bist ein Korrektor für deutsche Zeichensetzung. Setze fehlende "
+        "Kommas und korrigiere die Zeichensetzung nach den deutschen Regeln. "
+        "Ändere KEIN einziges Wort: nicht die Formulierung, nicht die "
+        "Reihenfolge, nicht die Schreibweise, nicht die Groß- und "
+        "Kleinschreibung. Füge nichts hinzu und lasse nichts weg. Gib "
+        "ausschließlich den Text zurück – ohne Anführungszeichen, ohne "
+        "Kommentare."
+    )
+
+
+# Letters and digits only: everything between the words is punctuation, and
+# punctuation is exactly what this pass is allowed to change.
+_WORD_RE = re.compile(r"[^\W_]+")
+
+
+def _words_only(text: str) -> list[str]:
+    return _WORD_RE.findall(text or "")
+
+
+def guard_punctuation(original: str, edited: str) -> str:
+    """Accept the AI's punctuation only if it changed nothing else.
+
+    The word sequence has to be identical, character for character, casing
+    included.  If one word moved, changed spelling or case, or went missing,
+    the answer is discarded and the dictation stands exactly as spoken.
+
+    That strictness is the point.  ``guard_cleanup`` above only compares
+    LENGTHS (0.5x to 1.8x), which a model can satisfy while rewriting every
+    single word - fine for a pass that is asked to improve the wording, wrong
+    for one that promised to touch nothing but the commas.
+    """
+    if not edited or not edited.strip():
+        return original
+    candidate = edited.strip().strip("\"'„“”").strip()
+    if not candidate:
+        return original
+    if _words_only(candidate) != _words_only(original):
+        return original
+    return candidate
+
+
 # German yes/no questions put a finite verb first (V1 word order): „Können Sie
 # …", „Ist das …", „Hast du …".  Whisper often ends such polite questions with a
 # period; this restores the question mark.  Kept to modal + sein/haben/werden
@@ -252,6 +300,138 @@ def fix_casing(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Commas German requires and Whisper does not write
+# ---------------------------------------------------------------------------
+
+# Measured against large-v3 on six dictated sentences: of the nine commas
+# German grammar demands, Whisper writes four.  It handles "weil"/"wenn"
+# clauses and reliably misses the comma before "aber", the one that closes an
+# extended infinitive, and both commas around a relative clause.  The prompt
+# makes no difference - that was tested too.
+#
+# Only unambiguous cases are repaired here.  A comma in the WRONG place is
+# worse than a missing one, because it changes how the sentence reads, so
+# relative clauses - which need real parsing to delimit - are deliberately
+# left alone.  Every rule below has to survive its counter-examples in
+# tests/test_dictation_commas.py.
+
+# Punctuation that already ends a token, so nothing may be appended to it.
+_ALREADY_PUNCTUATED = ",;:.!?…-–—("
+
+# Words that can only ever open a new clause's SUBJECT.  This is what tells
+# the conjunction "aber" ("..., aber er kam nicht") from the flavouring
+# particle ("Das ist aber schön"), which takes no comma at all.
+_SUBJECT_STARTERS = frozenset((
+    "ich du er sie es wir ihr man "
+    "das dies dieser diese dieses jener jene jenes "
+    "der die den dem des ein eine einen einem einer eines "
+    "mein meine meinen meinem meiner dein deine deinen deinem "
+    "sein seine seinen ihr ihre ihren unser unsere euer eure "
+    "kein keine keinen keinem "
+    "da hier dort nichts niemand jemand alles alle jeder jede jedes"
+).split())
+
+# Finite auxiliaries and modals.  A flavouring particle sits directly after
+# one of them ("ist aber", "hat aber", "war denn"), a conjunction does not -
+# it follows the end of a clause.  Reuses the question openers, which are
+# exactly that set of forms.
+_PARTICLE_HOSTS = _Q_OPENERS
+
+# Subordinating conjunctions that cannot be anything else, so a comma in front
+# of them is safe whenever they are not the first word of the sentence.
+_SUBORDINATORS = frozenset(
+    "weil dass obwohl falls sodass ob wohingegen wenngleich".split())
+
+# Conjunctions that are also particles or pronominal adverbs.  These need both
+# tests: a subject must follow, and no finite auxiliary may precede.
+_AMBIGUOUS_CONJUNCTIONS = frozenset("aber sondern denn jedoch damit".split())
+
+# Verbs after which an EXPANDED infinitive takes a comma ("Ich habe versucht,
+# dich zu erreichen").  A bare infinitive does not ("Ich habe versucht zu
+# schlafen"), so at least one word has to stand between verb and "zu".
+_INFINITIVE_TRIGGERS = frozenset((
+    "versucht versuche versuchst versuchen versuchte versuchten "
+    "beschlossen beschließe beschließt vorgeschlagen gebeten "
+    "angefangen begonnen aufgehört geschafft vergessen versprochen "
+    "gelernt geplant empfohlen erlaubt verboten vorgehabt gewagt"
+).split())
+
+_INFINITIVE_ENDINGS = ("en", "ern", "eln")
+
+
+def _core(token: str) -> str:
+    """A token reduced to its bare word, lower case."""
+    return token.strip("\"'„“”»«().,;:!?…-–—").lower()
+
+
+def _closes(token: str) -> bool:
+    """True when a token already ends in punctuation."""
+    stripped = token.rstrip("\"'„“”»«)")
+    return bool(stripped) and stripped[-1] in _ALREADY_PUNCTUATED
+
+
+def _infinitive_comma(cores: list[str], parts: list[str]) -> set[int]:
+    """Indices before which an extended infinitive needs its opening comma."""
+    marks: set[int] = set()
+    for i, core in enumerate(cores):
+        if core not in _INFINITIVE_TRIGGERS or _closes(parts[i]):
+            continue
+        for j in range(i + 2, min(len(cores), i + 8)):
+            if _closes(parts[j - 1]):
+                break                      # a clause boundary got there first
+            if cores[j] != "zu":
+                continue
+            if j + 1 < len(cores) and cores[j + 1].endswith(_INFINITIVE_ENDINGS):
+                marks.add(i + 1)           # comma goes after the trigger verb
+            break
+    return marks
+
+
+def _commas_in_sentence(sentence: str) -> str:
+    body = sentence.strip()
+    if not body or " " not in body:
+        return sentence
+    lead = sentence[:len(sentence) - len(sentence.lstrip())]
+    trail = sentence[len(lead) + len(body):]
+    parts = body.split(" ")
+    cores = [_core(p) for p in parts]
+
+    marks: set[int] = set()
+    for i, core in enumerate(cores):
+        if i == 0 or _closes(parts[i - 1]):
+            continue
+        if core in _SUBORDINATORS:
+            marks.add(i)
+        elif core in _AMBIGUOUS_CONJUNCTIONS:
+            following = cores[i + 1] if i + 1 < len(cores) else ""
+            if (following in _SUBJECT_STARTERS
+                    and cores[i - 1] not in _PARTICLE_HOSTS):
+                marks.add(i)
+    marks |= _infinitive_comma(cores, parts)
+
+    for i in marks:
+        if 0 < i <= len(parts) - 1 and not _closes(parts[i - 1]):
+            parts[i - 1] += ","
+    return lead + " ".join(parts) + trail
+
+
+def fix_commas(text: str) -> str:
+    """Insert the commas German requires that Whisper left out.
+
+    Conservative by design: only conjunctions that cannot be read another way,
+    plus the opening comma of an extended infinitive.  Never removes a comma,
+    never touches one that is already there."""
+    if not text or not text.strip():
+        return text
+    # Keep the separators, so paragraph breaks survive.
+    tokens = re.split(r"((?<=[.!?…])\s+)", text)
+    for i, tok in enumerate(tokens):
+        if i % 2 == 0 and tok.strip():
+            tokens[i] = _commas_in_sentence(tok)
+    return "".join(tokens)
+
+
+# ---------------------------------------------------------------------------
 # Joining a new utterance onto text that is already there
 # ---------------------------------------------------------------------------
 
@@ -260,6 +440,38 @@ _SENTENCE_END = ".!?…"
 # After these no space is wanted before the new text (an opening bracket or
 # quote glues to what follows).
 _NO_SPACE_AFTER = "([{„«\u201c'\"\u2013\u2014-/"
+
+
+def match_case(previous: str, text: str) -> str:
+    """``text`` with its first letter fitted to what stands before it.
+
+    Whisper capitalises every utterance as if it were a sentence of its own.
+    Dropped into a running sentence that is simply wrong, and it was wrong in
+    one place for a long time: replacing a selection ("markiere den Nachricht",
+    then speak the replacement) inserted the words verbatim, so "die Nachricht"
+    arrived as "Die Nachricht" in the middle of the line.
+
+    Only words German never capitalises mid-sentence are lowered, so a noun
+    keeps its capital - "…und dann Haus" never becomes "haus".
+    """
+    if not text:
+        return text
+    tail = (previous or "").rstrip("\r")
+    stripped = tail.rstrip()
+    if not stripped:
+        return text                         # nothing before: leave as spoken
+    # A line break starts a new sentence just as a full stop does - and it is
+    # removed by rstrip(), so it has to be read off the UNstripped tail.
+    starts_sentence = (tail.endswith(("\n", "\r"))
+                       or stripped[-1] in _SENTENCE_END)
+    head, rest = text[:1], text[1:]
+    if starts_sentence:
+        return head.upper() + rest
+    if head.isupper():
+        first_word = re.split(r"[\s,;:.!?]", text, 1)[0]
+        if first_word.lower() in _LOWER_WORDS:
+            return head.lower() + rest      # only the safe function words
+    return text
 
 
 def join_dictation(previous: str, new_text: str,
@@ -314,14 +526,7 @@ def join_dictation(previous: str, new_text: str,
         if not new_text:
             return ""
 
-    head, rest = new_text[:1], new_text[1:]
-    if starts_sentence:
-        head = head.upper()
-    elif head.isupper():
-        first_word = re.split(r"[\s,;:.!?]", new_text, 1)[0]
-        if first_word.lower() in _LOWER_WORDS:
-            head = head.lower()             # only the safe function words
-    return sep + head + rest
+    return sep + match_case(previous, new_text)
 
 
 # ---------------------------------------------------------------------------

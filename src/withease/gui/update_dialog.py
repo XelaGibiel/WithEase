@@ -13,8 +13,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
+    QTextBrowser,
     QVBoxLayout,
 )
 
@@ -57,9 +57,18 @@ class UpdateDialog(QDialog):
         notes_label = QLabel(tr("app.update.notes"))
         layout.addWidget(notes_label)
 
-        notes = QPlainTextEdit(info.notes or tr("app.update.no_notes"))
-        notes.setReadOnly(True)
+        # Release notes are Markdown.  Rendered, "## Besser treffen" is a
+        # heading and "* ..." a bullet; as plain text they were those raw
+        # characters - a wall nobody reads, least of all someone who only
+        # wants to know whether this update fixes their problem.
+        notes = QTextBrowser()
+        notes.setOpenExternalLinks(True)
         notes.setAccessibleName(tr("app.update.notes"))
+        body = (info.notes or "").strip()
+        if body:
+            notes.setMarkdown(body)
+        else:
+            notes.setPlainText(tr("app.update.no_notes"))
         layout.addWidget(notes, 1)
 
         self._status = QLabel("")
@@ -74,10 +83,12 @@ class UpdateDialog(QDialog):
 
         btn_row = QHBoxLayout()
         self._install_btn = QPushButton(tr("app.update.install"))
+        self._install_btn.setMinimumHeight(theme.target_px())
         self._install_btn.clicked.connect(self._on_install)
         btn_row.addWidget(self._install_btn)
 
         page_btn = QPushButton(tr("app.update.open_page"))
+        page_btn.setMinimumHeight(theme.target_px())
         page_btn.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl(info.html_url)))
         btn_row.addWidget(page_btn)

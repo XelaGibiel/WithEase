@@ -930,6 +930,9 @@ class MacrosSettingsWidget(QWidget):
 
         # ── Module toggle ──────────────────────────────────────────
         self._enabled_cb = QCheckBox(tr("module.macros.enabled"))
+        # Anywhere on the row switches the module, not only the box.
+        from withease.gui.ui_utils import whole_row_toggle
+        whole_row_toggle(self._enabled_cb)
         self._enabled_cb.setChecked(self._module.enabled)
         self._enabled_cb.setStyleSheet(theme.title_style())
         self._enabled_cb.toggled.connect(self._on_module_toggled)

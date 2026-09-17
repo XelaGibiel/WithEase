@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 from withease.core.i18n import tr
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
@@ -79,7 +79,24 @@ class WrappingLabel(QLabel):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        self.setMinimumHeight(self.heightForWidth(self.width()))
+        wanted = self.heightForWidth(self.width())
+        if wanted != self.minimumHeight():
+            self.setMinimumHeight(wanted)
+            self.updateGeometry()       # let the row shrink as well as grow
+
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt override)
+        """The height the text needs at the width this label REALLY has.
+
+        QLabel works its hint out for a line length of its own choosing - for
+        one of these notes about 137 pixels - and a form row is as tall as
+        that hint says.  A note that fits on one line across the page was
+        therefore given three lines of space, and left a visible hole under
+        the setting it explains."""
+        hint = super().sizeHint()
+        width = self.width()
+        if width > 0:
+            return QSize(hint.width(), self.heightForWidth(width))
+        return hint
 
 
 def label_with_hint(text: str, tooltip: str) -> QWidget:
@@ -213,6 +230,57 @@ def mark_danger(button) -> None:
     return button
 
 
+
+def _repolish(widget) -> None:
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
+
+def mark_danger_filled(button) -> None:
+    """Fill a button red (see theme's QPushButton[dangerFill]).
+
+    Stronger than :func:`mark_danger`, which only tints - use it where the
+    red is wanted on purpose, not for every delete button."""
+    button.setProperty("dangerFill", True)
+    _repolish(button)
+
+
+def flash_confirmation(button, text: str, then=None, ms: int = 900) -> None:
+    """Show for a moment that a button did its job, then restore it.
+
+    Green fill and ``text`` (a check mark and a word) in place of the label.
+    For actions whose result is invisible - something copied to the
+    clipboard looks exactly like nothing happening.
+
+    ``then`` runs once the confirmation has been SEEN.  "Kopieren &
+    Schließen" closes the window only afterwards: a check mark on a window
+    that disappears in the same instant would never reach anyone.
+
+    The button keeps its width while it shows the shorter text.  A button
+    that shrinks under the pointer moves its neighbour into the spot where
+    the next click was already on its way.
+    """
+    if not button.property("confirmed"):
+        button.setProperty("_label", button.text())
+        button.setProperty("_minWidth", button.minimumWidth())
+        button.setMinimumWidth(button.width())
+    button.setText(text)
+    button.setProperty("confirmed", True)
+    _repolish(button)
+
+    def restore() -> None:
+        try:
+            button.setText(button.property("_label") or "")
+            button.setMinimumWidth(int(button.property("_minWidth") or 0))
+            button.setProperty("confirmed", False)
+            _repolish(button)
+        except RuntimeError:
+            pass                              # the button is gone already
+        if then is not None:
+            then()
+
+    QTimer.singleShot(ms, restore)
+
 def _separate_from_neighbour(button) -> None:
     """Put a gap between a delete button and the harmless button beside it.
 
@@ -268,6 +336,43 @@ def inside_click_target(widget) -> bool:
             return True
         parent = parent.parentWidget()
     return False
+
+
+class _WholeRowToggle(QObject):
+    """Event filter behind :func:`whole_row_toggle`."""
+
+    _MOUSE = (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
+              QEvent.Type.MouseButtonDblClick)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
+        if event.type() not in self._MOUSE:
+            return False
+        if event.button() != Qt.MouseButton.LeftButton or not obj.isEnabled():
+            return False
+        # All three are taken over and the click happens on release, like a
+        # real button: press, slide off the row, let go - nothing happens.
+        if (event.type() == QEvent.Type.MouseButtonRelease
+                and obj.rect().contains(event.position().toPoint())):
+            obj.setFocus(Qt.FocusReason.MouseFocusReason)
+            obj.click()
+        return True
+
+
+def whole_row_toggle(checkbox):
+    """Let a checkbox toggle from anywhere on its row.
+
+    Qt only reacts to a click on the small box and its caption text.  A
+    module's on/off switch is a title across the full width of its page, so
+    most of the visible row did nothing at all: clicking beside the words was
+    ignored, and switching a module on meant hitting the box itself.  For
+    someone with a tremor that is the difference between one try and five.
+    """
+    filt = _WholeRowToggle(checkbox)        # parented: lives as long as the box
+    checkbox.installEventFilter(filt)
+    checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+    checkbox.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           checkbox.sizePolicy().verticalPolicy())
+    return checkbox
 
 
 def _layout_containing(layout, widget):

@@ -53,6 +53,9 @@ class KeyboardSettingsWidget(QWidget):
 
         # ── Module toggle ────────────────────────────────────────────
         self._enabled_cb = QCheckBox(tr("module.keyboard.enabled"))
+        # Anywhere on the row switches the module, not only the box.
+        from withease.gui.ui_utils import whole_row_toggle
+        whole_row_toggle(self._enabled_cb)
         self._enabled_cb.setChecked(self._module.enabled)
         self._enabled_cb.setStyleSheet(theme.title_style())
         self._enabled_cb.toggled.connect(self._on_module_toggled)
@@ -170,6 +173,18 @@ class KeyboardSettingsWidget(QWidget):
         # so it reads as an explanation of THAT switch and not of the card.
         sticky_form.addRow(
             "", setting_note(tr("module.keyboard.sticky.auto_release.hint"),
+                             checkbox=True))
+
+        # Caps Lock is no Sticky key, but switched on by accident it cancels a
+        # latched Shift - so it is shown in the same chip.
+        self._capslock_cb = QCheckBox(tr("module.keyboard.capslock_indicator"))
+        self._capslock_cb.setChecked(
+            self._settings.get("capslock_indicator", True))
+        self._capslock_cb.toggled.connect(
+            lambda v: self._save("capslock_indicator", v))
+        sticky_form.addRow("", self._capslock_cb)
+        sticky_form.addRow(
+            "", setting_note(tr("module.keyboard.capslock_indicator.hint"),
                              checkbox=True))
 
         from withease.gui.widgets.modifier_indicator import POSITIONS

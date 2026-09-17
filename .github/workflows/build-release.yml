@@ -4,6 +4,18 @@ name: Build & attach release binaries
 # GitHub release for the tag.  Runs on every pushed v* tag and can also be
 # triggered manually for an existing tag/release.
 # (A Linux build job used to live here – removed until Linux is actually tested.)
+#
+# Two things this file is deliberately strict about, because the artifact it
+# produces is downloaded and executed by people, and WithEase sees every
+# keystroke on their machine:
+#
+#   * Dependencies are installed from requirements-build.txt with
+#     --require-hashes.  Nothing enters the .exe whose exact bytes were not
+#     agreed on beforehand; a tampered or merely different wheel fails the
+#     build instead of shipping.
+#   * The finished archive is hashed and the SHA-256 published next to it, so
+#     a download can be checked before it is run.
+
 on:
   push:
     tags: ["v*"]
@@ -30,11 +42,16 @@ jobs:
           ref: ${{ env.REL_TAG }}
       - uses: actions/setup-python@v5
         with:
+          # Must match PYTHON_VERSION in tools/pin_build_deps.py – the pinned
+          # wheels are resolved for exactly this interpreter.
           python-version: "3.12"
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller sounddevice requests
+      - name: Install dependencies (pinned + hash-verified)
+        # No "pip install --upgrade pip" here on purpose: that would be one
+        # more unpinned download into the build.  The pip the runner image
+        # ships with is enough and comes from a known image, not from a live
+        # fetch.  --only-binary keeps pip from building anything from source.
+        # Quoted: ":all:" would otherwise read as YAML mapping syntax.
+        run: "pip install --require-hashes --only-binary=:all: -r requirements-build.txt"
       - name: Build
         run: >
           pyinstaller --noconfirm --clean --windowed --name WithEase
@@ -51,11 +68,25 @@ jobs:
           --hidden-import datetime --hidden-import glob --hidden-import queue
           --hidden-import faulthandler --hidden-import warnings --hidden-import site
           --noupx src/withease/__main__.py
-      - name: Package
+      - name: Package and hash
         shell: pwsh
-        run: Compress-Archive -Path dist/WithEase -DestinationPath "WithEase-${{ env.REL_TAG }}-win64.zip"
+        run: |
+          $zip = "WithEase-${{ env.REL_TAG }}-win64.zip"
+          Compress-Archive -Path dist/WithEase -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          # Exactly the sha256sum format: lower-case hash, two spaces,
+          # file name, one LF.  Written through .NET so it gets no BOM
+          # and no CRLF - "sha256sum -c" on Linux rejects both.
+          $line = "$hash  $zip" + [char]10
+          [System.IO.File]::WriteAllText((Join-Path $PWD "$zip.sha256"), $line)
+          # Also in the build log, so the value can be compared against the
+          # published file without downloading anything.
+          Write-Host "SHA-256  $hash"
+          Add-Content -Path $env:GITHUB_ENV -Value "ZIP_NAME=$zip"
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.REL_TAG }}
-          files: WithEase-${{ env.REL_TAG }}-win64.zip
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
