@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -93,6 +94,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QGroupBox,
@@ -211,6 +213,15 @@ _STRINGS: dict[str, dict[str, str]] = {
         "backend": "Erkennung",
         "backend.hint": "Lokal: Die Aufnahme verlässt diesen PC nie. Braucht einmalig einen Download und mehr Rechenleistung.\nCloud-Dienst: Schneller und genauer, dafür wird die Aufnahme an den Anbieter gesendet.",
         "backend.cloud": "Cloud-Dienst",
+        "stream": "Live-Diktat (Test)",
+        "stream.hint": "Der Text erscheint schon beim Sprechen: graue Wörter können sich noch ändern, schwarze stehen fest. Nach einer Sprechpause wird der Satz wie ein normales Diktat fertig gemacht (Wörterbuch, Kommas, Befehle). Die Diktiertaste startet und beendet das Live-Diktat. Nur im Diktierfenster.",
+        "stream.engine": "Erkenner (Live)",
+        "stream.engine.whisper": "Whisper (gewähltes Modell)",
+        "stream.engine.parakeet": "Parakeet (NVIDIA, Test)",
+        "stream.engine.parakeet.missing": "Parakeet (Testumgebung fehlt)",
+        "stream.pause": "Satzpause (Live)",
+        "stream.loading": "{engine} wird geladen …",
+        "stream.chip": "Live",
         "backend.cloud.hint": "Die Aufnahme wird an einen Anbieter geschickt (OpenRouter, OpenAI, Groq …) – den wählst du unten unter „Anbieter“.",
         "backend.local": "Lokal auf diesem PC",
         "backend.local.missing": "nicht installiert",
@@ -517,6 +528,15 @@ _STRINGS: dict[str, dict[str, str]] = {
         "backend": "Recognition",
         "backend.hint": "Local: the recording never leaves this PC. Needs a one-off download and more computing power.\nCloud service: faster and more accurate, but the recording is sent to the provider.",
         "backend.cloud": "Cloud service",
+        "stream": "Live dictation (test)",
+        "stream.hint": "Text appears while you speak: grey words may still change, black ones are settled. After a pause the sentence is finished like a normal dictation (dictionary, commas, commands). The dictation key starts and ends live dictation. Dictation window only.",
+        "stream.engine": "Recogniser (live)",
+        "stream.engine.whisper": "Whisper (chosen model)",
+        "stream.engine.parakeet": "Parakeet (NVIDIA, test)",
+        "stream.engine.parakeet.missing": "Parakeet (test environment missing)",
+        "stream.pause": "Sentence pause (live)",
+        "stream.loading": "Loading {engine} …",
+        "stream.chip": "Live",
         "backend.cloud.hint": "The recording is sent to a provider (OpenRouter, OpenAI, Groq …) – pick it below under “Provider”.",
         "backend.local": "Locally on this PC",
         "backend.local.missing": "not installed",
@@ -3009,6 +3029,38 @@ class DictationSettingsWidget(QWidget):
         self._local_model_note = _setting_note(_t("local.hint"))
         rec.addRow("", self._local_model_note)
         rec.addRow("", self._model_status)
+
+        # Live dictation test - only for the local backend.
+        self._stream_cb = QCheckBox(_t("stream"))
+        self._stream_cb.setChecked(bool(self._settings.get("stream_enabled")))
+        self._stream_cb.toggled.connect(self._on_stream_toggled)
+        _whole_row_toggle(self._stream_cb)
+        rec.addRow("", self._stream_cb)
+        self._stream_note = _setting_note(_t("stream.hint"))
+        rec.addRow("", self._stream_note)
+        self._stream_engine = QComboBox()
+        import parakeet as _parakeet
+        self._stream_engine.addItem(_t("stream.engine.whisper"), "whisper")
+        self._stream_engine.addItem(
+            _t("stream.engine.parakeet") if _parakeet.available()
+            else _t("stream.engine.parakeet.missing"), "parakeet")
+        found = self._stream_engine.findData(
+            self._settings.get("stream_engine", "whisper"))
+        self._stream_engine.setCurrentIndex(max(0, found))
+        self._stream_engine.currentIndexChanged.connect(
+            lambda i: self._save("stream_engine",
+                                 self._stream_engine.itemData(i)))
+        rec.addRow(_t("stream.engine"), self._stream_engine)
+        self._stream_pause = QDoubleSpinBox()
+        self._stream_pause.setRange(0.4, 3.0)
+        self._stream_pause.setSingleStep(0.1)
+        self._stream_pause.setDecimals(1)
+        self._stream_pause.setSuffix(" s")
+        self._stream_pause.setValue(
+            float(self._settings.get("stream_pause", 0.9)))
+        self._stream_pause.valueChanged.connect(
+            lambda v: self._save("stream_pause", round(float(v), 1)))
+        rec.addRow(_t("stream.pause"), self._stream_pause)
         # Changing the model means the next dictation would silently download
         # it – say so, right where the choice was made.
         self._local_model.currentIndexChanged.connect(
@@ -4085,6 +4137,22 @@ class DictationSettingsWidget(QWidget):
         if not cloud:
             self._update_install_note()
         self._update_cloud_rows()
+        self._update_stream_rows()
+
+    def _on_stream_toggled(self, on: bool) -> None:
+        self._save("stream_enabled", bool(on))
+        self._update_stream_rows()
+
+    def _update_stream_rows(self) -> None:
+        box = getattr(self, "_stream_cb", None)
+        if box is None:
+            return
+        local = self._backend.currentData() != "cloud"
+        self._form_rec.setRowVisible(box, local)
+        self._form_rec.setRowVisible(self._stream_note, local)
+        details = local and box.isChecked()
+        self._form_rec.setRowVisible(self._stream_engine, details)
+        self._form_rec.setRowVisible(self._stream_pause, details)
 
     def _update_cloud_rows(self) -> None:
         cloud = self._backend.currentData() == "cloud"
@@ -4436,6 +4504,12 @@ class DictationModule(BaseModule):
         self._asr_lock = threading.Lock()
         self._last_low_words: list[str] = []   # low-confidence words (heatmap)
         self._live_active = False              # Vosk live streaming active
+        # Live dictation test (streaming.py): the session, its microphone
+        # and the Parakeet worker, kept warm between sessions.
+        self._live_session: Any = None
+        self._live_mic: Any = None
+        self._live_starting = False
+        self._parakeet: Any = None
         self._vosk: Any = None
         self._live_stream: Any = None
         self._live_queue: Any = None
@@ -4518,6 +4592,11 @@ class DictationModule(BaseModule):
         self._abort_recording()
         if self._live_active:
             self.stop_live()
+        if self._live_session is not None:
+            self.stop_stream()
+        if self._parakeet is not None:
+            self._parakeet.stop()
+            self._parakeet = None
         self._whisper_proc.stop()       # shut down the out-of-process worker
         if self._whispercpp is not None:
             self._whispercpp.stop()
@@ -4560,7 +4639,9 @@ class DictationModule(BaseModule):
 
         Dropping the take stops the audio stream, so it happens on a thread of
         its own - exactly like the Escape key does."""
-        if self._state == "recording":
+        if self._live_session is not None:
+            threading.Thread(target=self.stop_stream, daemon=True).start()
+        elif self._state == "recording":
             threading.Thread(target=self._abort_recording, daemon=True).start()
 
     def _on_tray_tooltip(self, lines: list | None = None, **_: object) -> None:
@@ -4954,6 +5035,9 @@ class DictationModule(BaseModule):
             if vk == 0x1B and self._live_active:
                 threading.Thread(target=self.stop_live, daemon=True).start()
                 return True
+            if vk == 0x1B and self._live_session is not None:
+                threading.Thread(target=self.stop_stream, daemon=True).start()
+                return True
             if vk == 0x1B and self._state == "recording":
                 threading.Thread(target=self._abort_recording,
                                  daemon=True).start()
@@ -4967,6 +5051,17 @@ class DictationModule(BaseModule):
                 mode = "command"
             else:
                 return False
+            # Live dictation test: the key starts and ends the session.
+            if self._stream_wanted():
+                if self._live_session is not None:
+                    threading.Thread(target=self.stop_stream,
+                                     daemon=True).start()
+                elif self._state == "idle" and not self._live_starting:
+                    self._active_mode = mode
+                    self._live_starting = True
+                    threading.Thread(target=self.start_stream,
+                                     daemon=True).start()
+                return True
             # Live backend: the key toggles continuous streaming.
             if self._settings.get("backend") == "live":
                 if self._live_active:
@@ -5340,36 +5435,11 @@ class DictationModule(BaseModule):
         _log.info("dictation: quiet microphone (peak %.2f)", level)
         bus.publish("dictation.state", state="warn", detail=_t("mic.quiet"))
 
-    def _stop_and_transcribe(self) -> None:
-        with self._state_lock:
-            if self._state != "recording":
-                return
-            wav = self._close_stream()
-            seconds, sound = self._sound_seconds(wav)
-            passes = (seconds >= self._MIN_CLIP_S
-                      and sound >= self._MIN_SPEECH_S)
-            # Enough to reconstruct a "short words are not recognised" report
-            # from the log afterwards.  No text is ever logged - the log is a
-            # file nobody looks at, and dictations are private.
-            _log.info("dictation: %.2f s recorded, %.2f s of sound, peak %.2f "
-                      "-> %s", seconds, sound,
-                      getattr(self, "_last_level", -1.0),
-                      "transcribing" if passes else "discarded (too short)")
-            if not passes:
-                self._set_state("idle")
-                self._say_nothing_heard("short")
-                self._finish_capture("")
-                return
-            self._set_state("transcribing")
-        self._maybe_warn_quiet_mic()
-        try:
-            text = self.transcribe(wav)
-        except Exception as exc:
-            self._error(str(exc)[:120], fixable=isinstance(exc, ConfigError))
-            self._finish_capture("")
-            return
-        text = (text or "").strip()
-        _log.info("dictation: %d characters recognised", len(text))
+    def _refine_transcript(self, text: str) -> str:
+        """Everything a recognised text goes through before it is shown:
+        dictionary, learned corrections, optional AI cleanup, casing, question
+        marks, commas, dates and the optional AI punctuation.  Shared by the
+        normal dictation and the live test, so both finish text the same way."""
         if text and not self._settings.get("raw_recognition"):
             # „reine Erkennung“ off → apply the normal refinements.
             # User dictionary (spoken → written) is deterministic user intent.
@@ -5406,6 +5476,39 @@ class DictationModule(BaseModule):
                 # _ai_punctuation for how that is enforced.
                 if self._settings.get("punctuation_ai"):
                     text = self._ai_punctuation(text)
+        return text
+
+    def _stop_and_transcribe(self) -> None:
+        with self._state_lock:
+            if self._state != "recording":
+                return
+            wav = self._close_stream()
+            seconds, sound = self._sound_seconds(wav)
+            passes = (seconds >= self._MIN_CLIP_S
+                      and sound >= self._MIN_SPEECH_S)
+            # Enough to reconstruct a "short words are not recognised" report
+            # from the log afterwards.  No text is ever logged - the log is a
+            # file nobody looks at, and dictations are private.
+            _log.info("dictation: %.2f s recorded, %.2f s of sound, peak %.2f "
+                      "-> %s", seconds, sound,
+                      getattr(self, "_last_level", -1.0),
+                      "transcribing" if passes else "discarded (too short)")
+            if not passes:
+                self._set_state("idle")
+                self._say_nothing_heard("short")
+                self._finish_capture("")
+                return
+            self._set_state("transcribing")
+        self._maybe_warn_quiet_mic()
+        try:
+            text = self.transcribe(wav)
+        except Exception as exc:
+            self._error(str(exc)[:120], fixable=isinstance(exc, ConfigError))
+            self._finish_capture("")
+            return
+        text = (text or "").strip()
+        _log.info("dictation: %d characters recognised", len(text))
+        text = self._refine_transcript(text)
         self._set_state("idle")
         if self._capture_token:
             # One-shot capture (settings search): answer the requester and
@@ -5771,6 +5874,158 @@ class DictationModule(BaseModule):
             from vocabulary import apply_spoken_forms
             text = apply_spoken_forms(text, forms)
         return self._memory().apply_all(text)
+
+    # -- live dictation (test) --------------------------------------------
+
+    def _stream_wanted(self) -> bool:
+        return (bool(self._settings.get("stream_enabled"))
+                and self._settings.get("backend", "local") == "local"
+                and self._window_mode())
+
+    def _stream_engine_name(self) -> str:
+        return self._settings.get("stream_engine", "whisper")
+
+    def start_stream(self) -> None:
+        """Open the window, get the recogniser ready, open the microphone."""
+        try:
+            self._start_stream()
+        except Exception as exc:
+            _log.exception("live dictation could not start")
+            self._close_live_mic()
+            self._live_session = None
+            self._error(str(exc)[:120], fixable=isinstance(exc, ConfigError))
+        finally:
+            self._live_starting = False
+
+    def _start_stream(self) -> None:
+        import streaming
+        if self._state != "idle":
+            return
+        try:
+            import sounddevice as sd
+        except Exception:
+            raise ConfigError(_t("err.no_audio_lib"))
+        self._capture_target()
+        if self._window is not None:
+            self._window.request_open()
+
+        engine = self._stream_engine_name()
+        if engine == "parakeet":
+            import parakeet
+            if self._parakeet is None:
+                if not parakeet.available():
+                    raise ConfigError(_t("stream.engine.parakeet.missing"))
+                self._parakeet = parakeet.ParakeetEngine()
+            if not self._parakeet.alive():
+                self._set_state("transcribing",
+                                _t("stream.loading", engine="Parakeet"))
+                self._parakeet.start()
+            transcribe = self._parakeet.transcribe
+        else:
+            if not self._local_in_process():
+                raise ConfigError(_t("err.no_local"))
+            self._ensure_model_loaded(announce=True)
+            transcribe = self._stream_whisper
+
+        pause = max(0.4, float(self._settings.get("stream_pause", 0.9)))
+        session = streaming.StreamSession(
+            transcribe, self._on_stream_update, self._on_stream_final,
+            step_s=0.5 if engine == "whisper" else 0.3, pause_s=pause,
+            first_pass_s=0.0 if engine == "whisper" else 1.4,
+            on_error=lambda exc: _log.warning("live pass failed: %s", exc))
+
+        try:
+            device = resolve_input_device(self._settings.get("input_device"))
+        except Exception:
+            device = None
+        # The format is known only once the stream is open; the very first
+        # blocks before that are dropped (a few milliseconds of silence).
+        fmt: dict[str, Any] = {"rate": 0, "channels": 1, "state": None}
+
+        def callback(indata, _frames, _time, _status) -> None:
+            if not fmt["rate"]:
+                return
+            block = bytes(indata)
+            if fmt["channels"] >= 2 and audioop is not None:
+                block = audioop.tomono(block, 2, 0.5, 0.5)
+            if fmt["rate"] != _SAMPLE_RATE and audioop is not None:
+                block, fmt["state"] = audioop.ratecv(
+                    block, 2, 1, fmt["rate"], _SAMPLE_RATE, fmt["state"])
+            session.put(block)
+
+        self._live_mic, rate, channels = open_input_stream(sd, device, callback)
+        fmt["channels"], fmt["rate"] = channels, rate
+        self._live_session = session
+        session.start()
+        self._stream_started = time.monotonic()
+        self._set_state("recording", _t("stream.chip"))
+        _log.info("live dictation started (%s, %d Hz, %d ch)",
+                  engine, rate, channels)
+
+    def stop_stream(self) -> None:
+        """End the session; the sentence still being spoken is finished."""
+        session, self._live_session = self._live_session, None
+        if session is None:
+            return
+        self._close_live_mic()
+        self._set_state("transcribing")
+        session.stop()
+        if session.pass_ms:
+            ordered = sorted(session.pass_ms)
+            _log.info("live dictation ended: %d passes, median %.0f ms, "
+                      "max %.0f ms", len(ordered),
+                      ordered[len(ordered) // 2], ordered[-1])
+        self._set_state("idle")
+
+    def _close_live_mic(self) -> None:
+        mic, self._live_mic = self._live_mic, None
+        if mic is not None:
+            try:
+                mic.stop()
+                mic.close()
+            except Exception:
+                pass
+
+    def _stream_whisper(self, pcm: bytes, final: bool) -> str:
+        """One pass of Whisper over the sentence so far.
+
+        Quick and greedy while speaking; at the end of the sentence the same
+        careful settings as a normal dictation (beam search, silence filter).
+        No prompt: on short clips Whisper tends to repeat a prompt back."""
+        import numpy as np
+        model = self._ensure_model_loaded()
+        audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        with self._asr_lock:
+            segments, _info = model.transcribe(
+                audio, language=self._local_language(),
+                hotwords=self._hotwords() or None,
+                beam_size=5 if final else 1, temperature=0.0,
+                condition_on_previous_text=False, vad_filter=final,
+                without_timestamps=True, no_speech_threshold=0.6,
+                log_prob_threshold=-1.0, compression_ratio_threshold=2.4)
+            parts = [seg.text.strip() for seg in segments
+                     if not (getattr(seg, "no_speech_prob", 0.0) > 0.6
+                             and getattr(seg, "avg_logprob", 0.0) < -1.0)]
+        return " ".join(part for part in parts if part)
+
+    def _on_stream_update(self, settled: str, tail: str) -> None:
+        if self._window is None:
+            return
+        # Whisper marks a word it has only half heard with "..." - that is
+        # already what the grey colour says.
+        tail = re.sub(r"\s*(\.\.\.|…)$", "", tail)
+        if not tail:
+            settled = re.sub(r"\s*(\.\.\.|…)$", "", settled)
+        self._window.stream_update(self._apply_live_partial(settled),
+                                   self._apply_live_partial(tail))
+
+    def _on_stream_final(self, text: str) -> None:
+        text = self._postprocess_asr(text)
+        if text:
+            self._last_low_words = []
+            text = self._refine_transcript(text)
+        if self._window is not None:
+            self._window.stream_final(text, self._active_mode)
 
     def start_live(self) -> None:
         if self._live_active or self._state != "idle":
