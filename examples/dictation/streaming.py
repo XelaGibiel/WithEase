@@ -336,7 +336,8 @@ def number_value(word: str) -> int | None:
 # After these a small number is a quantity to read, so it becomes a digit too.
 _UNIT_WORDS = frozenset(
     "prozent euro cent uhr grad kilo kilogramm gramm meter kilometer "
-    "zentimeter millimeter liter stück minuten sekunden stunden".split())
+    "zentimeter millimeter liter stück minuten sekunden stunden "
+    "paragraph paragraf paragraphen paragrafen".split())
 
 
 def spoken_numbers(text: str) -> str:
@@ -403,16 +404,42 @@ def spoken_numbers(text: str) -> str:
         return 0 <= k < len(words) and words[k][1].lower() in (
             "plus", "minus", "+", "-", "++")
 
+    def drop(k: int, into: int) -> None:
+        """Remove word ``k``; its trailing punctuation moves to ``into``."""
+        words[into][2] += words[k][2]
+        words[k] = ["", "", ""]
+
     for k, entry in enumerate(words):
         low = entry[1].lower()
+        if not low:
+            continue
         if low == "plus" and (numeric(k + 1) or numeric(k - 1)
                               or signish(k + 1) or signish(k - 1)):
             entry[1] = "+"
-        elif low == "minus" and (numeric(k + 1) and (numeric(k - 1)
-                                                    or k == 0)):
-            entry[1] = "-"
+        elif low == "minus" and numeric(k + 1):
+            if numeric(k - 1) and not words[k - 1][2]:
+                entry[1] = "-"                        # 3 - 2
+            else:                                     # minus 5 Grad -> -5
+                words[k + 1][0] = entry[0] + words[k + 1][0]
+                words[k + 1][1] = "-" + words[k + 1][1]
+                words[k] = ["", "", ""]
         elif low == "prozent" and numeric(k - 1):
             entry[1] = "%"
+        elif low == "euro" and numeric(k - 1):
+            entry[1] = "€"
+        elif low == "grad" and numeric(k - 1):
+            if (k + 1 < len(words) and not entry[2]
+                    and words[k + 1][1].lower() == "celsius"):
+                entry[1] = "°C"                       # 5 °C
+                drop(k + 1, k)
+            else:
+                words[k - 1][1] += "°"                # a 90° angle
+                drop(k, k - 1)
+        elif low in ("paragraph", "paragraf") and numeric(k + 1):
+            entry[1] = "§"
+        elif low in ("paragraphen", "paragrafen") and numeric(k + 1):
+            entry[1] = "§§"
+    words = [w for w in words if any(w)]
 
     # 4) glue: "+ + 47" -> "++47", "C + +" -> "C++"; "5 + 3" keeps spaces
     text_out = ""
@@ -427,7 +454,9 @@ def spoken_numbers(text: str) -> str:
                 and not numeric(k - 1) and prev and not words[k - 1][2]
                 and len(prev) == 1)))
         text_out += (piece if glue or not text_out else " " + piece)
-    return text_out
+    # "fünf Euro fünfzig" -> "5,50 €"
+    return re.sub(r"\b(\d+) € (\d{1,2})\b(?![,.]\d)",
+                  lambda m: f"{m.group(1)},{int(m.group(2)):02d} €", text_out)
 
 
 

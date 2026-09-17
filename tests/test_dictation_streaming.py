@@ -653,3 +653,19 @@ def test_the_misheard_quotation_word_works():
     got = cde.apply_inline_punctuation(
         "Er sagte Anführerstriche unten Hallo Anführerstriche oben und ging.")
     assert got == "Er sagte „Hallo“ und ging."
+
+
+@pytest.mark.parametrize("text, want", [
+    ("Es kostet siebenundvierzig Euro.", "Es kostet 47 €."),
+    ("Es kostet fünf Euro fünfzig.", "Es kostet 5,50 €."),
+    ("Der Euro ist stark.", "Der Euro ist stark."),
+    ("Draußen sind minus fünf Grad.", "Draußen sind -5°."),
+    ("Heute sind zwanzig Grad Celsius.", "Heute sind 20 °C."),
+    ("Das Spiel ging drei minus zwei aus.", "Das Spiel ging 3 - 2 aus."),
+    ("Siehe Paragraph fünf.", "Siehe § 5."),
+    ("Nach Paragraf dreizehn ist das erlaubt.", "Nach § 13 ist das erlaubt."),
+    ("Die Paragraphen drei und 4 gelten.", "Die §§ 3 und 4 gelten."),
+    ("Dieser Paragraph ist wichtig.", "Dieser Paragraph ist wichtig."),
+])
+def test_euro_degrees_minus_and_paragraph_signs(text, want):
+    assert st.spoken_numbers(text) == want
