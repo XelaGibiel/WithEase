@@ -821,6 +821,11 @@ class StreamSession:
                     ending = True
                     break
                 self._take(c)
+                # A pause inside what piled up still ends the sentence there,
+                # or two sentences would reach the recogniser as one.
+                if (self._sentence and self._silence_bytes
+                        >= self.pause_s * _BYTES_PER_S):
+                    self._finish("pause")
             self._decide(ending)
 
     def _take(self, chunk: bytes) -> None:

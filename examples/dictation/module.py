@@ -220,6 +220,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "stream.engine.parakeet": "Parakeet (NVIDIA, Test)",
         "stream.engine.parakeet.missing": "Parakeet (Testumgebung fehlt)",
         "stream.pause": "Satzende nach Pause (Live)",
+        "segment": "Bei einer Sprechpause schon umwandeln",
+        "segment.hint": "Das Mikrofon bleibt an: Machst du eine Pause, wird das bisher Gesagte schon umgewandelt und erscheint im Fenster, während du weitersprichst. Du musst nicht nach jedem Satz „Beenden“ drücken. Gilt nur für das Diktierfenster.",
+        "segment.pause": "Pause bis zum Umwandeln",
+        "segment.pause.hint": "So lange musst du schweigen, damit das Gesagte umgewandelt wird. Kürzere Pausen sind Denkpausen und bleiben im selben Abschnitt.",
         "stream.canary": "Satzende mit Canary prüfen (Sprache fest)",
         "stream.canary.hint": "Parakeet wählt die Sprache selbst und liest ein einzelnes deutsches Wort manchmal als englisches. Canary bekommt die Sprache fest vorgegeben und schreibt den fertigen Satz; die grauen Wörter beim Sprechen bleiben beim schnellen Parakeet. Braucht etwa 4 GB mehr Grafikspeicher.",
         "stream.canary.missing": "Canary ist in der Testumgebung nicht vorhanden – ohne Canary schreibt Parakeet auch den fertigen Satz.",
@@ -547,6 +551,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "stream.engine.parakeet": "Parakeet (NVIDIA, test)",
         "stream.engine.parakeet.missing": "Parakeet (test environment missing)",
         "stream.pause": "Sentence ends after pause (live)",
+        "segment": "Convert as soon as you pause",
+        "segment.hint": "The microphone stays on: when you pause, what you said so far is converted and appears in the window while you keep talking. No need to press stop after every sentence. Dictation window only.",
+        "segment.pause": "Pause before converting",
+        "segment.pause.hint": "How long you have to be silent for what you said to be converted. Shorter pauses are thinking pauses and stay in the same part.",
         "stream.canary": "Check the finished sentence with Canary (fixed language)",
         "stream.canary.hint": "Parakeet picks the language itself and sometimes reads a single German word as English. Canary is given the language and writes the finished sentence; the grey words while speaking stay with the fast Parakeet. Needs about 4 GB more graphics memory.",
         "stream.canary.missing": "Canary is not in the test environment - without it Parakeet writes the finished sentence too.",
@@ -3054,6 +3062,30 @@ class DictationSettingsWidget(QWidget):
         rec.addRow("", self._local_model_note)
         rec.addRow("", self._model_status)
 
+        # Normal dictation: convert at every longer pause, microphone stays on.
+        self._segment_cb = QCheckBox(_t("segment"))
+        self._segment_cb.setChecked(
+            bool(self._settings.get("segment_on_pause", True)))
+        self._segment_cb.toggled.connect(
+            lambda on: (self._save("segment_on_pause", bool(on)),
+                        self._update_stream_rows()))
+        _whole_row_toggle(self._segment_cb)
+        rec.addRow("", self._segment_cb)
+        self._segment_note = _setting_note(_t("segment.hint"))
+        rec.addRow("", self._segment_note)
+        self._segment_pause = QDoubleSpinBox()
+        self._segment_pause.setRange(0.8, 5.0)
+        self._segment_pause.setSingleStep(0.1)
+        self._segment_pause.setDecimals(1)
+        self._segment_pause.setSuffix(" s")
+        self._segment_pause.setValue(
+            float(self._settings.get("segment_pause", 2.0)))
+        self._segment_pause.valueChanged.connect(
+            lambda v: self._save("segment_pause", round(float(v), 1)))
+        rec.addRow(_t("segment.pause"), self._segment_pause)
+        self._segment_pause_note = _setting_note(_t("segment.pause.hint"))
+        rec.addRow("", self._segment_pause_note)
+
         # Live dictation test - only for the local backend.
         self._stream_cb = QCheckBox(_t("stream"))
         self._stream_cb.setChecked(bool(self._settings.get("stream_enabled")))
@@ -4228,6 +4260,14 @@ class DictationSettingsWidget(QWidget):
         self._form_rec.setRowVisible(box, local)
         self._form_rec.setRowVisible(self._stream_note, local)
         details = local and box.isChecked()
+        # the live test does its own sentence cutting
+        segment = getattr(self, "_segment_cb", None)
+        if segment is not None:
+            self._form_rec.setRowVisible(segment, not details)
+            self._form_rec.setRowVisible(self._segment_note, not details)
+            pause = not details and segment.isChecked()
+            self._form_rec.setRowVisible(self._segment_pause, pause)
+            self._form_rec.setRowVisible(self._segment_pause_note, pause)
         self._form_rec.setRowVisible(self._stream_engine, details)
         self._form_rec.setRowVisible(self._stream_pause, details)
         parakeet_on = details and self._stream_engine.currentData() == "parakeet"
@@ -4577,6 +4617,7 @@ class DictationModule(BaseModule):
         self._media_key_active = False            # fallback media-key was sent
         self._media_pause_thread: threading.Thread | None = None
         self._audio_chunks: list[bytes] = []
+        self._segmenter: Any = None         # cuts a recording at pauses
         self._stream: Any = None
         self._record_started = 0.0
         self._max_timer: threading.Timer | None = None
@@ -5175,7 +5216,10 @@ class DictationModule(BaseModule):
                     self._active_mode = mode
                     threading.Thread(target=self.start_live, daemon=True).start()
                 return True
-            if self._state == "recording" and not hold_mode:
+            # (a part may be waiting for the model: the microphone still runs)
+            recording = self._state == "recording" or (
+                self._state == "loading" and self._segmenter is not None)
+            if recording and not hold_mode:
                 threading.Thread(target=self._stop_and_transcribe,
                                  daemon=True).start()
             elif self._state == "idle":
@@ -5328,10 +5372,18 @@ class DictationModule(BaseModule):
 
             self._live_level = 0.0
             self._level_sent = 0.0
+            # Cut at every longer pause and convert that part while the
+            # microphone keeps running (the format is known once it is open).
+            segmenter = self._make_segmenter() if self._segment_wanted() else None
+            self._segmenter = segmenter
+            fmt: dict[str, Any] = {"rate": 0, "channels": 1, "state": None}
 
             def callback(indata, _frames, _time, _status) -> None:
                 block = bytes(indata)
-                self._audio_chunks.append(block)
+                if segmenter is None:
+                    self._audio_chunks.append(block)
+                elif fmt["rate"]:
+                    segmenter.put(self._to_16k_mono(block, fmt))
                 # Publish the input level a few times a second.  Seeing that
                 # the microphone actually picks you up WHILE you speak is the
                 # thing a distant microphone makes impossible to judge – and
@@ -5358,8 +5410,12 @@ class DictationModule(BaseModule):
                     open_input_stream(sd, device, callback))
             except Exception as exc:
                 self._stream = None
+                self._segmenter = None
                 self._error(_t("err.mic", err=str(exc)[:80]))
                 return
+            if segmenter is not None:
+                fmt["channels"], fmt["rate"] = self._rec_channels, self._rec_rate
+                segmenter.start()
 
             self._record_started = time.monotonic()
             self._set_state("recording")
@@ -5514,6 +5570,10 @@ class DictationModule(BaseModule):
             if self._state != "recording":
                 return
             self._close_stream()
+            segmenter, self._segmenter = self._segmenter, None
+            if segmenter is not None:
+                segmenter.dropped = True    # what is still open is thrown away
+                segmenter.stop(timeout=0)
             self._set_state("idle")
 
     # Below this peak level a recording is quiet enough that Whisper starts
@@ -5592,6 +5652,9 @@ class DictationModule(BaseModule):
         return text
 
     def _stop_and_transcribe(self) -> None:
+        if self._segmenter is not None:
+            self._stop_segmented()
+            return
         with self._state_lock:
             if self._state != "recording":
                 return
@@ -5643,6 +5706,94 @@ class DictationModule(BaseModule):
             # Never end in silence.  An empty result is indistinguishable from
             # "the program is broken" unless it says something, and with a
             # far-field microphone it is the most common outcome of all.
+            self._say_nothing_heard("empty")
+
+    # -- converting at every pause ------------------------------------------
+
+    def _segment_wanted(self) -> bool:
+        """Cut the recording at longer pauses?  Only into the dictation
+        window: typed straight into another app a part would land wherever
+        the cursor happens to be by then.  Not for the command key, whose
+        utterances are short anyway, nor for a one-off capture."""
+        return (bool(self._settings.get("segment_on_pause", True))
+                and self._window_mode() and self._window is not None
+                and not self._capture_token
+                and self._active_mode != "command"
+                and audioop is not None)
+
+    @staticmethod
+    def _to_16k_mono(block: bytes, fmt: dict[str, Any]) -> bytes:
+        if fmt["channels"] >= 2:
+            block = audioop.tomono(block, 2, 0.5, 0.5)
+        if fmt["rate"] != _SAMPLE_RATE:
+            block, fmt["state"] = audioop.ratecv(
+                block, 2, 1, fmt["rate"], _SAMPLE_RATE, fmt["state"])
+        return block
+
+    def _make_segmenter(self) -> Any:
+        import streaming
+        pause = max(0.8, float(self._settings.get("segment_pause", 2.0)))
+        # No passes while speaking (step): Whisper runs once per part, with
+        # the same careful settings as a normal dictation.
+        session = streaming.StreamSession(
+            lambda pcm, final: self._segment_transcribe(session, pcm, final),
+            lambda *_: None,
+            lambda text: self._on_segment_final(session, text),
+            step_s=1e9, pause_s=pause, keep_silence_s=0.6,
+            max_sentence_s=25.0, detector=streaming.make_gate("normal"),
+            on_error=self._on_segment_error)
+        session.dropped = False     # set when the recording is thrown away
+        session.texts = 0           # parts that became text
+        return session
+
+    def _segment_transcribe(self, session: Any, pcm: bytes,
+                            final: bool) -> str:
+        if not final or session.dropped:
+            return ""
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(_SAMPLE_RATE)
+            w.writeframes(pcm)
+        text = self.transcribe(buf.getvalue())
+        _log.info("dictation part: %.2f s -> %d characters",
+                  len(pcm) / (2.0 * _SAMPLE_RATE), len(text or ""))
+        return text
+
+    def _on_segment_error(self, exc: Exception) -> None:
+        _log.warning("dictation part failed: %s", exc)
+        bus.publish("dictation.state", state="warn", detail=str(exc)[:120])
+
+    def _on_segment_final(self, session: Any, text: str) -> None:
+        """One part is converted: into the window, exactly like a recording
+        that was stopped by hand (voice commands included)."""
+        if session.dropped:
+            return
+        text = self._refine_transcript((text or "").strip())
+        if not text or self._window is None:
+            return
+        session.texts += 1
+        confirmed = self._confirmed_set()
+        low = [w for w in self._last_low_words
+               if w.casefold() not in confirmed]
+        self._window.handle_transcript(text, self._active_mode, low)
+
+    def _stop_segmented(self) -> None:
+        """The key (or "einfügen") ends the recording: the part still being
+        spoken is converted, then the chip goes back to idle."""
+        with self._state_lock:
+            # "loading": the first part is waiting for the model
+            if self._state not in ("recording", "loading"):
+                return
+            segmenter, self._segmenter = self._segmenter, None
+            if segmenter is None:
+                return
+            self._close_stream()
+            self._set_state("transcribing")
+        segmenter.stop(timeout=120)
+        self._set_state("idle")
+        if not segmenter.texts and not segmenter.dropped:
             self._say_nothing_heard("empty")
 
     def _say_nothing_heard(self, why: str) -> None:
