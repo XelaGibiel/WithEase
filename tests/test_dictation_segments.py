@@ -147,3 +147,61 @@ def test_the_settings_offer_it_only_without_the_live_test(app, module):
     page._stream_cb.setChecked(True)
     assert not page._segment_cb.isVisibleTo(page)
     page.deleteLater()
+
+
+# -- the countdown while you pause ---------------------------------------------
+
+def test_a_pause_counts_down_until_the_part_is_converted(module):
+    shown = []
+    session = st.StreamSession(lambda pcm, final: "x", lambda *_: None,
+                               lambda _t: None, step_s=1e9, pause_s=1.0,
+                               detector=st.EnergyGate(),
+                               on_silence=shown.append)
+    session.start()
+    import time
+    _feed(session, _tone(0.8))
+    time.sleep(0.2)
+    for _ in range(12):                  # a second and more of quiet, live
+        _feed(session, _silence(0.1))
+        time.sleep(0.03)
+    session.stop(timeout=5)
+    numbers = [s for s in shown if s is not None]
+    assert numbers and numbers[0] <= 0.7          # only after a short gap
+    assert numbers == sorted(numbers, reverse=True)
+    assert shown[-1] is None                       # gone once converted
+
+
+def test_speaking_again_takes_the_countdown_away(module):
+    shown = []
+    session = st.StreamSession(lambda pcm, final: "x", lambda *_: None,
+                               lambda _t: None, step_s=1e9, pause_s=2.0,
+                               detector=st.EnergyGate(),
+                               on_silence=shown.append)
+    session.start()
+    import time
+    _feed(session, _tone(0.8))
+    time.sleep(0.2)
+    _feed(session, _silence(0.6))
+    time.sleep(0.2)
+    _feed(session, _tone(0.3))
+    time.sleep(0.2)
+    assert any(s is not None for s in shown) and shown[-1] is None
+    session.stop(timeout=5)
+
+
+def test_the_chip_shows_the_seconds_left(app):
+    import module as dic
+    chip = dic.DictationIndicator()
+    chip._apply_state("recording", "")
+    assert chip._subtitle() == ""
+    chip._apply_pause(1.4, 2.0)
+    assert "1,4" in chip._subtitle() or "1.4" in chip._subtitle()
+    width = chip.width()
+    chip._apply_pause(0.3, 2.0)
+    assert chip.width() == width                   # the line does not twitch
+    chip._apply_pause(-1.0, 2.0)
+    assert chip._subtitle() == ""
+    chip._apply_pause(1.0, 2.0)
+    chip._apply_state("transcribing", "")
+    assert chip._subtitle() == ""
+    chip.deleteLater()

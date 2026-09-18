@@ -732,8 +732,15 @@ class StreamSession:
                  background_ratio: float = 0.0,
                  voice_level: float | None = None,
                  short_s: float = 0.0, context_s: float = 5.0,
-                 on_error: Callable[[Exception], None] | None = None) -> None:
+                 on_error: Callable[[Exception], None] | None = None,
+                 on_silence: Callable[[float | None], None] | None = None,
+                 ) -> None:
         self._transcribe = transcribe
+        # ``on_silence(seconds left)`` while you are quiet in the middle of a
+        # sentence: how long until the pause ends it.  None when that is
+        # over (you speak again, or the sentence is finished).
+        self._on_silence = on_silence
+        self._silence_shown: float | None = None
         self._on_update = on_update
         self._on_final = on_final
         self._on_error = on_error
@@ -827,6 +834,27 @@ class StreamSession:
                         >= self.pause_s * _BYTES_PER_S):
                     self._finish("pause")
             self._decide(ending)
+            self._report_silence()
+        self._silence_shown = None
+        if self._on_silence is not None:
+            self._on_silence(None)
+
+    # Quiet shorter than this is between two words, not a pause yet - a
+    # countdown there would only flicker.
+    _SILENCE_SHOWN_AFTER_S = 0.3
+
+    def _report_silence(self) -> None:
+        if self._on_silence is None:
+            return
+        left = None
+        if (self._sentence and self._silence_bytes
+                >= self._SILENCE_SHOWN_AFTER_S * _BYTES_PER_S
+                and self._speech_bytes >= self.min_speech_s * _BYTES_PER_S):
+            left = round(max(0.0, self.pause_s
+                             - self._silence_bytes / _BYTES_PER_S), 1)
+        if left != self._silence_shown:
+            self._silence_shown = left
+            self._on_silence(left)
 
     def _take(self, chunk: bytes) -> None:
         loud = self._detector.is_speech(chunk, bool(self._sentence))

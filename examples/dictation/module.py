@@ -424,6 +424,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         # The Escape hint is gone: the cancel pill beside the chip says
         # the same thing, and repeating it only made the chip wider.
         "chip.recording": "Aufnahme …",
+        "chip.pause": "Pause – umgewandelt in {s} s",
+        "num.decimal": ",",
         "nothing.heard": "Nichts erkannt – noch einmal versuchen",
         "nothing.quiet": "Nichts erkannt – Mikrofon zu leise",
         "nothing.short": "Zu kurz – Taste etwas länger halten",
@@ -753,6 +755,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "test.result": "Recognised text:\n\n{text}",
         "test.error": "Test failed:\n\n{err}",
         "chip.recording": "Recording …",
+        "chip.pause": "Pause – converting in {s} s",
+        "num.decimal": ".",
         "nothing.heard": "Nothing recognised – please try again",
         "nothing.quiet": "Nothing recognised – microphone too quiet",
         "nothing.short": "Too short – hold the key a little longer",
@@ -2087,6 +2091,7 @@ _CHIP_PULSE_PERIOD_MS = 1100
 class _ChipBridge(QObject):
     level = Signal(float)
     state = Signal(str, str)
+    pause = Signal(float, float)     # (seconds left, whole pause); left < 0 = none
 
 
 class DictationIndicator(QWidget):
@@ -2129,9 +2134,13 @@ class DictationIndicator(QWidget):
         self._fixable = False
         self._bridge.state.connect(self._apply_state)
         self._bridge.level.connect(self._apply_level)
+        self._bridge.pause.connect(self._apply_pause)
         self._level = 0.0
+        self._pause_left = -1.0
+        self._pause_total = 0.0
         bus.subscribe("dictation.state", self._on_state)
         bus.subscribe("dictation.level", self._on_level)
+        bus.subscribe("dictation.pause", self._on_pause)
 
     def _on_state(self, state: str, detail: str = "",
                   fixable: bool = False, **_: object) -> None:
@@ -2141,6 +2150,22 @@ class DictationIndicator(QWidget):
     def _on_level(self, level: float = 0.0, **_: object) -> None:
         # Published from the AUDIO thread – hand over to the GUI thread.
         self._bridge.level.emit(float(level))
+
+    def _on_pause(self, left: float = -1.0, total: float = 0.0,
+                  **_: object) -> None:
+        # Published from the recogniser's thread - hand over to the GUI thread.
+        self._bridge.pause.emit(float(left), float(total))
+
+    def _apply_pause(self, left: float, total: float) -> None:
+        """While you pause mid-recording: how long until what you said is
+        converted - so you can see how much thinking time is left."""
+        if self._state != "recording":
+            left = -1.0
+        had = self._pause_left >= 0
+        self._pause_left, self._pause_total = left, total
+        if (left >= 0) != had:
+            self._update_geometry()      # the countdown line comes or goes
+        self.update()
 
     def _apply_level(self, level: float) -> None:
         if self._state != "recording":
@@ -2152,6 +2177,8 @@ class DictationIndicator(QWidget):
         self._error_timer.stop()
         self._state = state
         self._detail = detail
+        if state != "recording":
+            self._pause_left = -1.0
         if self._suppressed and state != "idle":
             self._stop_pulse()
             return                     # a fullscreen window is in front
@@ -2293,7 +2320,18 @@ class DictationIndicator(QWidget):
             return _t("chip.reselect.hint")
         if self._state == "error" and getattr(self, "_fixable", False):
             return _t("chip.error.fix")
+        if self._state == "recording" and self._pause_left >= 0:
+            secs = f"{self._pause_left:.1f}".replace(".", _t("num.decimal"))
+            return _t("chip.pause", s=secs)
         return ""
+
+    def _subtitle_w(self) -> int:
+        """Width of the hint line.  The countdown is measured with its
+        longest text, so the line does not twitch while the digits change."""
+        sub = self._subtitle()
+        if self._state == "recording" and self._pause_left >= 0:
+            sub = _t("chip.pause", s="8" + _t("num.decimal") + "8")
+        return self._text_w(sub, self._sub_px(), bold=False) + 24
 
     # Gap between the status chip and the cancel pill beside it.
     _CANCEL_GAP = 8
@@ -2368,9 +2406,8 @@ class DictationIndicator(QWidget):
         w = self._chip_w()
         if self._cancel_rect() is not None:
             w += self._CANCEL_GAP + self._cancel_w()
-        sub = self._subtitle()
-        if sub:
-            w = max(w, self._text_w(sub, self._sub_px(), bold=False) + 24)
+        if self._subtitle():
+            w = max(w, self._subtitle_w())
         return w
 
     def _update_geometry(self) -> None:
@@ -2459,6 +2496,14 @@ class DictationIndicator(QWidget):
             sfont.setPixelSize(self._sub_px())
             sfont.setBold(False)
             p.setFont(sfont)
+            if self._state == "recording" and self._pause_total > 0:
+                # the time left as a bar that runs out, under the words
+                bar_h = max(2, round(sub_h * 0.1))
+                full = content_w - 16
+                left = max(0.0, min(1.0, self._pause_left / self._pause_total))
+                p.fillRect(QRect(_CHIP_MARGIN + 8, sub_y + sub_h - bar_h - 2,
+                                 max(1, round(full * left)), bar_h),
+                           QColor(255, 255, 255, 200))
             p.drawText(QRect(_CHIP_MARGIN, sub_y, content_w, sub_h),
                        Qt.AlignmentFlag.AlignCenter, sub)
         p.end()
@@ -5741,7 +5786,10 @@ class DictationModule(BaseModule):
             lambda text: self._on_segment_final(session, text),
             step_s=1e9, pause_s=pause, keep_silence_s=0.6,
             max_sentence_s=25.0, detector=streaming.make_gate("normal"),
-            on_error=self._on_segment_error)
+            on_error=self._on_segment_error,
+            on_silence=lambda left: bus.publish(
+                "dictation.pause", left=-1.0 if left is None else left,
+                total=pause))
         session.dropped = False     # set when the recording is thrown away
         session.texts = 0           # parts that became text
         return session
