@@ -205,3 +205,37 @@ def test_the_chip_shows_the_seconds_left(app):
     chip._apply_state("transcribing", "")
     assert chip._subtitle() == ""
     chip.deleteLater()
+
+
+def test_the_dot_at_the_pointer_comes_and_goes_with_the_pause(app):
+    import module as dic
+    if dic.PauseDot is None:
+        pytest.skip("core without pointer symbols")
+    dot = dic.PauseDot()
+    dot._set_pause(1.2, 2.0)
+    assert dot._logical_visible and dot._timer.isActive()
+    dot._set_pause(-1.0, 2.0)
+    assert not dot._logical_visible and not dot._timer.isActive()
+    dot._on_pause(left=1.0, total=2.0, dot=False)     # switched off
+    app.processEvents()
+    assert not dot._logical_visible
+    dot._set_pause(1.0, 2.0)
+    dot._on_state(state="transcribing")
+    app.processEvents()
+    assert not dot._logical_visible
+    # the pointer symbols keep a list of their own - take it out again
+    from withease.gui.widgets.cursor_indicator import IndicatorCoordinator
+    IndicatorCoordinator.get()._indicators.remove(dot)
+    dot.hide()
+
+
+def test_the_pause_says_whether_the_dot_is_wanted(module, monkeypatch):
+    import module as dic
+    sent = []
+    monkeypatch.setattr(dic.bus, "publish",
+                        lambda topic, **kw: sent.append((topic, kw)))
+    module._publish_pause(1.5, 2.0)
+    module._settings["pause_dot"] = False
+    module._publish_pause(None, 2.0)
+    assert sent == [("dictation.pause", {"left": 1.5, "total": 2.0, "dot": True}),
+                    ("dictation.pause", {"left": -1.0, "total": 2.0, "dot": False})]
