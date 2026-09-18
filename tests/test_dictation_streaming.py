@@ -17,6 +17,14 @@ sys.path.insert(0, os.path.join(
 import streaming as st  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_real_canary(monkeypatch):
+    """Canary may really be installed on the machine running the tests;
+    starting it would take a minute and several gigabytes of memory."""
+    import parakeet
+    monkeypatch.setattr(parakeet, "canary_available", lambda: False)
+
+
 # -- settling words ------------------------------------------------------------
 
 def test_a_word_settles_when_two_passes_agree():
@@ -855,3 +863,68 @@ def test_parakeet_starts_only_once(tmp_path, monkeypatch):
     for t in threads:
         t.join()
     assert calls == [1]
+
+
+
+def test_canary_writes_the_finished_sentence_in_the_set_language(module,
+                                                                 monkeypatch):
+    calls = []
+
+    class _Engine:
+        def __init__(self, text):
+            self.text = text
+
+        def ready(self):
+            return True
+
+        def transcribe(self, pcm, final=False, language=""):
+            calls.append((self.text, final, language))
+            return self.text
+    module._parakeet = _Engine("Had")
+    module._canary = _Engine("Hat")
+    monkeypatch.setattr(module, "_canary_wanted", lambda: True)
+    assert module._stream_parakeet(b"\x00\x00" * 800, True) == "Hat"
+    assert module._stream_parakeet(b"\x00\x00" * 800, False) == "Hat",         "grey words from Parakeet, with its look-alike fixed"
+    assert calls[0] == ("Hat", True, "de")
+    assert calls[1][0] == "Had"
+
+
+def test_without_canary_parakeet_finishes_the_sentence(module, monkeypatch):
+    class _Engine:
+        def transcribe(self, pcm, final=False, language=""):
+            return "Nine"
+    module._parakeet = _Engine()
+    monkeypatch.setattr(module, "_canary_wanted", lambda: False)
+    assert module._stream_parakeet(b"\x00\x00" * 800, True) == "Nein"
+
+
+def test_a_failing_canary_falls_back_to_parakeet(module, monkeypatch):
+    class _Broken:
+        def ready(self):
+            return True
+
+        def transcribe(self, *a, **k):
+            raise RuntimeError("out of memory")
+
+    class _Parakeet:
+        def transcribe(self, pcm, final=False, language=""):
+            return "Hallo"
+    module._canary, module._parakeet = _Broken(), _Parakeet()
+    monkeypatch.setattr(module, "_canary_wanted", lambda: True)
+    assert module._stream_parakeet(b"\x00\x00" * 800, True) == "Hallo"
+
+
+
+@pytest.mark.parametrize("text, want", [
+    ("Plus plus sieben und vierzig.", "++47."),
+    ("Es kostet sieben und vierzig Euro.", "Es kostet 47 €."),
+    ("Ich habe zwei und drei Äpfel.", "Ich habe zwei und drei Äpfel."),
+])
+def test_a_number_written_apart_is_one_number(text, want):
+    assert st.spoken_numbers(text) == want
+
+
+def test_a_lone_verb_is_no_question():
+    from postprocess import fix_question_marks
+    assert fix_question_marks("Ist.") == "Ist."
+    assert fix_question_marks("Hast du Zeit.") == "Hast du Zeit?"

@@ -220,6 +220,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "stream.engine.parakeet": "Parakeet (NVIDIA, Test)",
         "stream.engine.parakeet.missing": "Parakeet (Testumgebung fehlt)",
         "stream.pause": "Satzende nach Pause (Live)",
+        "stream.canary": "Satzende mit Canary prüfen (Sprache fest)",
+        "stream.canary.hint": "Parakeet wählt die Sprache selbst und liest ein einzelnes deutsches Wort manchmal als englisches. Canary bekommt die Sprache fest vorgegeben und schreibt den fertigen Satz; die grauen Wörter beim Sprechen bleiben beim schnellen Parakeet. Braucht etwa 4 GB mehr Grafikspeicher.",
+        "stream.canary.missing": "Canary ist in der Testumgebung nicht vorhanden – ohne Canary schreibt Parakeet auch den fertigen Satz.",
         "stream.pause.hint": "Kürzere Pausen sind Denkpausen: Der Satz bleibt offen und bekommt keinen Punkt. Erst nach so langer Stille ist der Satz fertig.",
         "stream.punct": "Satzzeichen (Live)",
         "stream.punct.auto": "Automatisch",
@@ -544,6 +547,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "stream.engine.parakeet": "Parakeet (NVIDIA, test)",
         "stream.engine.parakeet.missing": "Parakeet (test environment missing)",
         "stream.pause": "Sentence ends after pause (live)",
+        "stream.canary": "Check the finished sentence with Canary (fixed language)",
+        "stream.canary.hint": "Parakeet picks the language itself and sometimes reads a single German word as English. Canary is given the language and writes the finished sentence; the grey words while speaking stay with the fast Parakeet. Needs about 4 GB more graphics memory.",
+        "stream.canary.missing": "Canary is not in the test environment - without it Parakeet writes the finished sentence too.",
         "stream.pause.hint": "Shorter pauses are thinking pauses: the sentence stays open and gets no full stop. Only after this much silence is the sentence finished.",
         "stream.punct": "Punctuation (live)",
         "stream.punct.auto": "Automatic",
@@ -3070,7 +3076,19 @@ class DictationSettingsWidget(QWidget):
                                  self._stream_engine.itemData(i)))
         self._stream_engine.currentIndexChanged.connect(
             lambda _i: self._module.preload_stream_engine())
+        self._stream_engine.currentIndexChanged.connect(
+            lambda _i: self._update_stream_rows())
         rec.addRow(_t("stream.engine"), self._stream_engine)
+        self._stream_canary = QCheckBox(_t("stream.canary"))
+        self._stream_canary.setChecked(
+            bool(self._settings.get("stream_canary", True)))
+        self._stream_canary.toggled.connect(self._on_canary_toggled)
+        _whole_row_toggle(self._stream_canary)
+        rec.addRow("", self._stream_canary)
+        self._stream_canary_note = _setting_note(
+            _t("stream.canary.hint") if _parakeet.canary_available()
+            else _t("stream.canary.missing"))
+        rec.addRow("", self._stream_canary_note)
         self._stream_pause = QDoubleSpinBox()
         self._stream_pause.setRange(1.0, 8.0)
         self._stream_pause.setSingleStep(0.1)
@@ -4195,6 +4213,10 @@ class DictationSettingsWidget(QWidget):
         self._update_stream_rows()
         self._module.preload_stream_engine()
 
+    def _on_canary_toggled(self, on: bool) -> None:
+        self._save("stream_canary", bool(on))
+        self._module.preload_stream_engine()
+
     def _update_stream_rows(self) -> None:
         box = getattr(self, "_stream_cb", None)
         if box is None:
@@ -4205,6 +4227,9 @@ class DictationSettingsWidget(QWidget):
         details = local and box.isChecked()
         self._form_rec.setRowVisible(self._stream_engine, details)
         self._form_rec.setRowVisible(self._stream_pause, details)
+        parakeet_on = details and self._stream_engine.currentData() == "parakeet"
+        self._form_rec.setRowVisible(self._stream_canary, parakeet_on)
+        self._form_rec.setRowVisible(self._stream_canary_note, parakeet_on)
         self._form_rec.setRowVisible(self._stream_pause_note, details)
         self._form_rec.setRowVisible(self._stream_punct, details)
         self._form_rec.setRowVisible(self._stream_punct_note, details)
@@ -4567,6 +4592,7 @@ class DictationModule(BaseModule):
         self._live_mic: Any = None
         self._live_starting = False
         self._parakeet: Any = None
+        self._canary: Any = None               # Canary: language set, final pass
         self._vosk: Any = None
         self._live_stream: Any = None
         self._live_queue: Any = None
@@ -4655,6 +4681,9 @@ class DictationModule(BaseModule):
         if self._parakeet is not None:
             self._parakeet.stop()
             self._parakeet = None
+        if self._canary is not None:
+            self._canary.stop()
+            self._canary = None
         self._whisper_proc.stop()       # shut down the out-of-process worker
         if self._whispercpp is not None:
             self._whispercpp.stop()
@@ -5980,6 +6009,8 @@ class DictationModule(BaseModule):
                     if self._parakeet is None:
                         self._parakeet = parakeet.ParakeetEngine()
                     self._parakeet.start()
+                    if self._canary_wanted():
+                        self._ensure_canary()
                 elif self._local_in_process():
                     self._ensure_model_loaded()
                 _log.info("live recogniser preloaded (%s)",
@@ -6099,8 +6130,14 @@ class DictationModule(BaseModule):
                     self._parakeet = parakeet.ParakeetEngine()
                 if not self._parakeet.ready():
                     self._parakeet.start()
-                engines.append(
-                    ("Parakeet", lambda pcm: self._stream_parakeet(pcm, True)))
+                engines.append(("Parakeet", lambda pcm: (
+                    __import__("streaming").fix_short_english(
+                        self._parakeet.transcribe(pcm, True),
+                        self._local_language()))))
+                if self._canary_wanted():
+                    canary = self._ensure_canary()
+                    engines.append(("Canary", lambda pcm: canary.transcribe(
+                        pcm, True, language=self._local_language())))
         except Exception:
             _log.warning("parakeet not ready for pronunciation", exc_info=True)
         try:
@@ -6262,14 +6299,41 @@ class DictationModule(BaseModule):
     def _stream_spoken_marks(self) -> bool:
         return self._settings.get("stream_punct", "auto") == "spoken"
 
-    def _stream_parakeet(self, pcm: bytes, final: bool) -> str:
-        """Parakeet, with its English look-alikes of short German words fixed.
+    def _canary_wanted(self) -> bool:
+        if not self._settings.get("stream_canary", True):
+            return False
+        try:
+            import parakeet
+            return parakeet.canary_available()
+        except Exception:
+            return False
 
-        Measured: handing short words to Whisper instead made them worse
-        ("hat" became "Hut"), so Parakeet keeps them."""
+    def _ensure_canary(self) -> Any:
+        import parakeet
+        if self._canary is None:
+            self._canary = parakeet.canary_engine()
+        if not self._canary.ready():
+            self._canary.start()
+        return self._canary
+
+    def _stream_parakeet(self, pcm: bytes, final: bool) -> str:
+        """Parakeet while speaking; the finished sentence from Canary.
+
+        Parakeet picks the language itself and reads a single short German
+        word as English now and then ("Had" for "hat").  Canary is told the
+        language, so it has the last word; it is slower, which only matters
+        for the grey words, and those stay with Parakeet.  Measured: handing
+        short words to Whisper instead made them worse ("hat" -> "Hut")."""
         import streaming
+        language = self._local_language()
+        if final and self._canary_wanted():
+            try:
+                return self._ensure_canary().transcribe(pcm, True,
+                                                        language=language)
+            except Exception:
+                _log.warning("canary failed, Parakeet instead", exc_info=True)
         return streaming.fix_short_english(
-            self._parakeet.transcribe(pcm, final), self._local_language())
+            self._parakeet.transcribe(pcm, final), language)
 
     def _on_stream_update(self, settled: str, tail: str) -> None:
         if self._window is None:

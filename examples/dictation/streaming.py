@@ -495,6 +495,12 @@ def spoken_numbers(text: str) -> str:
     them ("plus sieben", "sieben Prozent")."""
     if not text:
         return text
+    # "sieben und vierzig" written apart (Canary does) is one number
+    text = re.sub(
+        r"\b(ein|zwei|drei|vier|fünf|fuenf|sechs|sieben|acht|neun)\s+und\s+"
+        r"(zwanzig|dreißig|dreissig|vierzig|fünfzig|fuenfzig|sechzig|siebzig|"
+        r"achtzig|neunzig)\b",
+        lambda m: m.group(1) + "und" + m.group(2), text, flags=re.IGNORECASE)
     tokens = re.findall(r"\S+", text)
 
     def core(token: str) -> tuple[str, str, str]:

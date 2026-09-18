@@ -53,11 +53,31 @@ def available() -> bool:
     return bool(env_dir())
 
 
+CANARY_MODEL = "nemo-canary-1b-v2"
+CANARY_DIR = "canary-model"
+
+
+def canary_available() -> bool:
+    """Canary sits in the same test folder, in ``canary-model``."""
+    folder = env_dir()
+    return bool(folder) and os.path.isfile(
+        os.path.join(folder, CANARY_DIR, "encoder-model.onnx"))
+
+
+def canary_engine() -> "ParakeetEngine":
+    """NVIDIA's sister model: slower than Parakeet, but it can be told the
+    language, so a single German word is never read as English."""
+    return ParakeetEngine(model_dir=CANARY_DIR, model_name=CANARY_MODEL)
+
+
 class ParakeetEngine:
     """The worker process, started once and kept warm."""
 
-    def __init__(self, folder: str = "") -> None:
+    def __init__(self, folder: str = "", model_dir: str = "model",
+                 model_name: str = "") -> None:
         self._folder = folder or env_dir()
+        self._model_dir = model_dir
+        self._model_name = model_name
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
         # start() may be called by the start-up preload and by a dictation
@@ -88,13 +108,17 @@ class ParakeetEngine:
             raise RuntimeError("Parakeet-Testumgebung nicht gefunden")
         worker = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "parakeet_worker.py")
-        log_path = os.path.join(self._folder, "worker.log")
+        name = self._model_name or "parakeet"
+        log_path = os.path.join(self._folder, f"worker-{name}.log")
         self._log_file = open(log_path, "w", encoding="utf-8")
+        env = dict(os.environ)
+        if self._model_name:
+            env["WITHEASE_ASR_MODEL"] = self._model_name
         self._proc = subprocess.Popen(
             [python_in(self._folder), worker,
-             os.path.join(self._folder, "model")],
+             os.path.join(self._folder, self._model_dir)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=self._log_file, text=True, encoding="utf-8",
+            stderr=self._log_file, text=True, encoding="utf-8", env=env,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         ready = self._read_line(_START_TIMEOUT)
         if not ready.get("ready"):
@@ -103,7 +127,7 @@ class ParakeetEngine:
                                + str(ready.get("error", "keine Antwort")))
         self.device = str(ready.get("device", ""))
         self._ready = True
-        _log.info("parakeet worker ready on %s", self.device)
+        _log.info("%s worker ready on %s", name, self.device)
 
     def _read_line(self, timeout: float) -> dict:
         box: list[str] = []
@@ -123,7 +147,8 @@ class ParakeetEngine:
         except ValueError:
             return {}
 
-    def transcribe(self, pcm16: bytes, final: bool = False) -> str:
+    def transcribe(self, pcm16: bytes, final: bool = False,
+                   language: str = "") -> str:
         with self._lock:
             if not self.ready():
                 self.start()
@@ -135,6 +160,8 @@ class ParakeetEngine:
             request = {"id": self._next_id,
                        "pcm": base64.b64encode(pad + pcm16 + pad).decode(
                            "ascii")}
+            if language:
+                request["language"] = language
             self._proc.stdin.write(json.dumps(request) + "\n")
             self._proc.stdin.flush()
             answer = self._read_line(60)

@@ -18,6 +18,14 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import pronunciation as pr  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_real_canary(monkeypatch):
+    """Canary may really be installed on the machine running the tests;
+    starting it would take a minute and several gigabytes of memory."""
+    import parakeet
+    monkeypatch.setattr(parakeet, "canary_available", lambda: False)
+
+
 @pytest.fixture(scope="module")
 def app():
     return QApplication.instance() or QApplication([])

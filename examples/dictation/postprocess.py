@@ -237,7 +237,10 @@ def fix_question_marks(text: str) -> str:
             continue
         core = tok.rstrip()
         first = re.split(r"[\s,]", core.strip(), 1)[0].lower().strip(".,!?…")
-        if core.endswith(".") and not core.endswith("..") and first in _Q_OPENERS:
+        # A lone "Ist." or "Hat." is an answer, not a question - a question
+        # needs at least the verb and what it asks about.
+        if (core.endswith(".") and not core.endswith("..")
+                and first in _Q_OPENERS and len(core.split()) >= 2):
             tokens[i] = core[:-1] + "?" + tok[len(core):]   # keep trailing ws
     return "".join(tokens)
 

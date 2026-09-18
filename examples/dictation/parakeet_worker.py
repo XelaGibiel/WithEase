@@ -20,7 +20,13 @@ import os
 import sys
 import time
 
-MODEL = "nemo-parakeet-tdt-0.6b-v3"
+# Parakeet by default; the same worker also runs Canary, which - unlike
+# Parakeet - can be told the language.
+MODEL = os.environ.get("WITHEASE_ASR_MODEL", "nemo-parakeet-tdt-0.6b-v3")
+
+
+def _options(language: str) -> dict:
+    return {"language": language} if language and "canary" in MODEL else {}
 
 
 # The answers get a channel of their own.  Libraries write to stdout while
@@ -75,7 +81,8 @@ def main() -> int:
         model, device = _load(
             model_dir, os.environ.get("WITHEASE_PARAKEET_DEVICE", "auto"),
             os.environ.get("WITHEASE_PARAKEET_QUANT", ""))
-        model.recognize(np.zeros(16000, dtype=np.float32), sample_rate=16000)
+        model.recognize(np.zeros(16000, dtype=np.float32), sample_rate=16000,
+                        **_options("de"))
     except Exception as exc:                      # report, never hang
         _say({"ready": False, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return 1
@@ -91,8 +98,9 @@ def main() -> int:
             audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
             audio /= 32768.0
             started = time.perf_counter()
-            text = model.recognize(audio, sample_rate=16000) if len(audio) \
-                else ""
+            options = _options(str(request.get("language") or ""))
+            text = model.recognize(audio, sample_rate=16000, **options) \
+                if len(audio) else ""
             _say({"id": request.get("id"), "text": str(text or "").strip(),
                   "ms": round((time.perf_counter() - started) * 1000)})
         except Exception as exc:
