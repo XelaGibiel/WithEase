@@ -1526,7 +1526,12 @@ class DictationWindow(QWidget):
                 self._stream_stop = None
                 text = self._attach_leading_mark(text)
             if text.strip():
-                self._on_transcript(text, mode, [])
+                # A full stop you said yourself ("Punkt") is never taken back.
+                self._editor.join_after_pause = marks == "auto"
+                try:
+                    self._on_transcript(text, mode, [])
+                finally:
+                    self._editor.join_after_pause = True
             self._remember_stop(text, marks)
 
     def _continue_after_stop(self, text: str) -> str:

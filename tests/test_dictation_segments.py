@@ -243,3 +243,53 @@ def test_the_dot_sits_right_after_the_text_cursor(app):
     win._apply_state("transcribing")
     assert not dot.showing()
     win.deleteLater()
+
+
+# -- a full stop that was only a thinking pause ----------------------------------
+
+@pytest.mark.parametrize("previous, text, expected", [
+    ("zwischen einem Satz lasse.", "Damit auch wirklich ein Punkt kommt.",
+     "zwischen einem Satz lasse, damit auch wirklich ein Punkt kommt."),
+    ("Ich komme morgen.", "Und bringe Kuchen mit.",
+     "Ich komme morgen und bringe Kuchen mit."),
+    ("Ruf mich an.", "Wenn es wieder vorkommt.",
+     "Ruf mich an, wenn es wieder vorkommt."),
+    # real sentence starts stay as they are
+    ("Ich komme morgen.", "Wenn es regnet, bleibe ich zu Hause.",
+     "Ich komme morgen. Wenn es regnet, bleibe ich zu Hause."),
+    ("Ich komme morgen.", "Das Wetter ist gut.",
+     "Ich komme morgen. Das Wetter ist gut."),
+    ("Ich komme morgen.", "Aber erst spät.",
+     "Ich komme morgen. Aber erst spät."),
+    # a dot that is no sentence end
+    ("Wir treffen uns am 16.", "Und dann sehen wir weiter.",
+     "Wir treffen uns am 16. Und dann sehen wir weiter."),
+    ("Das gilt z.B.", "Und so weiter.", "Das gilt z.B. Und so weiter."),
+    ("Na gut...", "Und dann?", "Na gut... Und dann?"),
+])
+def test_a_pause_full_stop_is_taken_back(app, previous, text, expected):
+    from PySide6.QtWidgets import QPlainTextEdit
+
+    import editor_actions as ea
+    edit = QPlainTextEdit()
+    edit.setPlainText(previous)
+    cursor = edit.textCursor()
+    cursor.movePosition(cursor.MoveOperation.End)
+    edit.setTextCursor(cursor)
+    ea.Editor(edit).insert_dictation(text)
+    assert edit.toPlainText() == expected
+    edit.deleteLater()
+
+
+def test_two_parts_become_one_sentence_in_the_window(app):
+    import dictation_window as dw
+    win = dw.DictationWindow(on_insert=lambda text: True,
+                             on_copy=lambda text: None)
+    win._on_transcript("Da ist die Frage, ob ich lieber Pausen zwischen "
+                       "einem Satz lasse.", "auto", [])
+    win._on_transcript("Damit auch wirklich ein Punkt gesetzt wird.",
+                       "auto", [])
+    assert win.text() == ("Da ist die Frage, ob ich lieber Pausen zwischen "
+                          "einem Satz lasse, damit auch wirklich ein Punkt "
+                          "gesetzt wird.")
+    win.deleteLater()

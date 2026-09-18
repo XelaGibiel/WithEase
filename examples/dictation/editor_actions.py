@@ -108,6 +108,9 @@ class Editor:
         # (misheard, spoken) of the most recent selection-replacement, for the
         # error memory to learn from; cleared once read.
         self.last_correction: tuple[str, str] | None = None
+        # Take back a full stop that was only a thinking pause ("lasse." +
+        # "Damit ..."); off while full stops are spoken on purpose.
+        self.join_after_pause = True
 
     # -- helpers --------------------------------------------------------
 
@@ -170,7 +173,23 @@ class Editor:
             doc = self._text()
             pos = cur.position()
             after = doc[pos:]
-            text = join_dictation(doc[:pos], text, after)
+            # A thinking pause ended the part before with a full stop, and
+            # this part carries on the same sentence ("lasse. Damit" ->
+            # "lasse, damit"): the full stop goes, the sentence continues.
+            joined = None
+            if self.join_after_pause:
+                try:
+                    from streaming import continue_after_pause
+                    joined = continue_after_pause(doc[:pos], text)
+                except ImportError:
+                    pass
+            if joined is not None:
+                cut, text = joined
+                cur.setPosition(pos - cut)
+                cur.setPosition(pos, QTextCursor.MoveMode.KeepAnchor)
+                cur.removeSelectedText()
+            else:
+                text = join_dictation(doc[:pos], text, after)
             # …and a space on the OTHER side too, or a word dictated into the
             # middle glues to the one that follows ("sehrgut").
             if after[:1].isalnum() and not text.endswith(" "):

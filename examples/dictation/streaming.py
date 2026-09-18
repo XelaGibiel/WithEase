@@ -259,6 +259,33 @@ def merge_continuations(text: str) -> str:
     return re.sub(r"\.\s+([A-ZÄÖÜ][a-zäöüß]+)\b", join, text)
 
 
+def continue_after_pause(previous: str, text: str) -> tuple[int, str] | None:
+    """A new part that continues the sentence before it.
+
+    Every part the recogniser hears ends with a full stop, also when the
+    pause was only for thinking: "... zwischen einem Satz lasse." + "Damit
+    auch ...".  When the new part starts with a word that does not open a
+    sentence, that full stop goes: returns ``(characters to remove at the
+    end of previous, text to insert instead)`` - here ``(1, ", damit auch
+    ...")``.  None when nothing is to be joined."""
+    stripped = (previous or "").rstrip(" ")
+    if not stripped.endswith(".") or stripped.endswith(".."):
+        return None
+    before = re.search(r"(\S+)\.$", stripped)
+    if before is None:
+        return None
+    last = before.group(1).lower()
+    # "z.B." or a date ("16.") end in a dot that is not a sentence end
+    if last in _ABBREVIATIONS or last.rstrip(".") in _ABBREVIATIONS or             last[-1:].isdigit():
+        return None
+    match = re.match(r"([A-ZÄÖÜ][a-zäöüß]+)\b(.*)", (text or "").strip(), re.S)
+    if match is None or not continues(match.group(1), match.group(2)):
+        return None
+    word = match.group(1).lower()
+    cut = len(previous) - len(stripped) + 1
+    return cut, (" " if word in NO_COMMA else ", ") + word + match.group(2)
+
+
 # -- short words ---------------------------------------------------------------
 
 # Parakeet picks the language by itself, and a single short German word is
