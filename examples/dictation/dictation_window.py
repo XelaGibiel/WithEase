@@ -1801,6 +1801,9 @@ class DictationWindow(QWidget):
             self._report(text, _t("msg.cheatsheet"))
             return
         if cmd.kind == "history_show":
+            if self._compact:
+                # the history only exists in the full view
+                self.set_compact(False)
             if not self._history_shown:
                 self._toggle_history()
             n = self._history.count()

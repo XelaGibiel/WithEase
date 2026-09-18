@@ -808,3 +808,13 @@ def test_the_view_can_be_switched_by_voice(app):
     assert not win._compact
     assert win.text() == "", "a command, not text"
     win.close()
+
+
+def test_asking_for_the_history_leaves_the_compact_view(app):
+    win = make(app)[0]
+    win.show()
+    win.set_compact(True)
+    feed(app, win, "Verlauf")
+    assert not win._compact
+    assert win._history_panel.isVisibleTo(win)
+    win.close()
