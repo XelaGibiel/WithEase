@@ -3081,7 +3081,7 @@ class DictationSettingsWidget(QWidget):
         rec.addRow(_t("stream.engine"), self._stream_engine)
         self._stream_canary = QCheckBox(_t("stream.canary"))
         self._stream_canary.setChecked(
-            bool(self._settings.get("stream_canary", True)))
+            bool(self._settings.get("stream_canary", False)))
         self._stream_canary.toggled.connect(self._on_canary_toggled)
         _whole_row_toggle(self._stream_canary)
         rec.addRow("", self._stream_canary)
@@ -4880,6 +4880,7 @@ class DictationModule(BaseModule):
                     compact=bool(self._settings.get("win_compact", False)),
                     compact_geometry=self._settings.get("win_geo_compact"),
                     on_compact_changed=self._save_compact,
+                    on_finish_listening=self.finish_listening,
                     on_compact_geometry_changed=self._save_compact_geometry,
                     ai_visible=bool(
                         self._settings.get("ai_panel_visible", True)),
@@ -5993,6 +5994,35 @@ class DictationModule(BaseModule):
     def _stream_engine_name(self) -> str:
         return self._settings.get("stream_engine", "whisper")
 
+    def finish_listening(self, keep: bool = True) -> None:
+        """The window wants to insert, copy or close while the microphone
+        still runs.  ``keep``: finish what is being said and deliver it;
+        otherwise just stop.  The window hears ``listening_done`` after
+        everything recognised has been sent to it - never before."""
+        def run() -> None:
+            try:
+                deadline = time.monotonic() + 60
+                while self._live_starting and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                if self._live_session is not None:
+                    self.stop_stream()
+                elif self._state == "recording":
+                    if keep:
+                        self._stop_and_transcribe()
+                    else:
+                        self._abort_recording()
+                # a recognition already under way: wait for it to land
+                while (self._state in ("transcribing", "loading")
+                       and time.monotonic() < deadline):
+                    time.sleep(0.05)
+            except Exception:
+                _log.exception("could not finish the recording")
+            finally:
+                if self._window is not None:
+                    self._window.listening_done()
+        threading.Thread(target=run, daemon=True,
+                         name="finish-listening").start()
+
     def preload_stream_engine(self) -> None:
         """Get the live recogniser ready in the background, so the first
         live dictation starts at once instead of waiting for the model.
@@ -6072,6 +6102,9 @@ class DictationModule(BaseModule):
             background_ratio=(0.45 if self._settings.get("stream_noise")
                               == "strict" else 0.25),
             voice_level=getattr(self, "_stream_voice_level", None),
+            # single words get the previous sentence as context - not with
+            # Canary, which invents words at the seam
+            short_s=0.0 if self._canary_wanted() else 1.5,
             on_error=lambda exc: _log.warning("live pass failed: %s", exc))
 
         def feed(block: bytes) -> None:
@@ -6300,7 +6333,7 @@ class DictationModule(BaseModule):
         return self._settings.get("stream_punct", "auto") == "spoken"
 
     def _canary_wanted(self) -> bool:
-        if not self._settings.get("stream_canary", True):
+        if not self._settings.get("stream_canary", False):
             return False
         try:
             import parakeet

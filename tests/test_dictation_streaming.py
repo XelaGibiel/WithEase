@@ -928,3 +928,151 @@ def test_a_lone_verb_is_no_question():
     from postprocess import fix_question_marks
     assert fix_question_marks("Ist.") == "Ist."
     assert fix_question_marks("Hast du Zeit.") == "Hast du Zeit?"
+
+
+
+# -- a single word heard after the previous sentence ------------------------------------
+
+_CTX = ("Kannst du mir bei Gelegenheit die Rechnung raussuchen, die wir "
+        "letzte Woche bei Mediamarkt bekommen haben?")
+
+
+@pytest.mark.parametrize("full, want", [
+    (_CTX + " Ja.", "Ja."),
+    (_CTX[:-7] + " habens. Obama.", "Obama."),
+    (_CTX[:-1] + " S. Obama.", "Obama."),
+    (_CTX + " Plus plus 47.", "Plus plus 47."),
+    ("Etwas ganz anderes hier.", None),
+    (_CTX, None),
+])
+def test_the_context_sentence_is_cut_off_again(full, want):
+    assert st.strip_context(full, _CTX) == want
+
+
+class _LanguageGuesser:
+    """Like Parakeet: alone a short word comes out English, after a German
+    sentence it comes out German."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, pcm, final):
+        self.calls += 1
+        seconds = len(pcm) / (st.RATE * 2)
+        if seconds > 2.5:
+            return "Das ist ein Satz. Ja." if seconds > 3.2 else "Das ist ein Satz."
+        return "Yeah." if seconds < 1.5 else "Das ist ein Satz."
+
+
+def test_a_short_word_gets_the_previous_sentence_as_context():
+    finals = []
+    rec = _LanguageGuesser()
+    s = st.StreamSession(rec, lambda *_: None, finals.append, short_s=1.5,
+                         context_s=2.0)
+    _run(s, _silence(0.3) + _tone(2.0) + _silence(1.2))     # a sentence
+    _run(s, _silence(0.3) + _tone(0.4) + _silence(1.2))     # then "ja"
+    assert finals[-1] == "Ja."
+    assert s.last_finish.get("context") is True
+
+
+def test_without_context_the_word_stands_alone():
+    finals = []
+    s = st.StreamSession(_LanguageGuesser(), lambda *_: None, finals.append,
+                         short_s=0.0)
+    _run(s, _silence(0.3) + _tone(2.0) + _silence(1.2))
+    _run(s, _silence(0.3) + _tone(0.4) + _silence(1.2))
+    assert finals[-1] == "Yeah."
+
+
+def test_the_first_word_of_a_session_has_no_context_to_use():
+    finals = []
+    s = st.StreamSession(_LanguageGuesser(), lambda *_: None, finals.append,
+                         short_s=1.5)
+    _run(s, _silence(0.3) + _tone(0.4) + _silence(1.2))
+    assert finals[-1] == "Yeah."
+    assert "context" not in s.last_finish
+
+
+# -- insert / close while the microphone still runs ----------------------------------------
+
+def _listening_window(app, finish_calls):
+    import dictation_window as dw
+    inserted = []
+    w = dw.DictationWindow(on_insert=lambda text: inserted.append(text) or True,
+                           on_finish_listening=finish_calls.append)
+    w._apply_state("recording", "Live")
+    return w, inserted
+
+
+def test_insert_waits_for_the_last_sentence(app):
+    calls = []
+    w, inserted = _listening_window(app, calls)
+    w._edit.setPlainText("Erster Satz.")
+    _cursor_to_end(w)
+    w._do_insert()
+    assert calls == [True] and inserted == [], "the microphone is stopped first"
+    # the last sentence arrives, then the module reports the microphone off
+    w._apply_stream_final("Zweiter Satz.", "auto", "auto")
+    w._apply_state("idle")
+    w._on_listening_done()
+    assert inserted == ["Erster Satz. Zweiter Satz."]
+    w.close()
+
+
+def test_pressing_twice_stops_only_once(app):
+    calls = []
+    w, inserted = _listening_window(app, calls)
+    w._edit.setPlainText("Text")
+    w._do_insert()
+    w._do_insert()
+    assert calls == [True]
+    w._apply_state("idle")
+    w._on_listening_done()
+    assert inserted == ["Text"]
+    w.close()
+
+
+def test_close_drops_what_the_microphone_still_delivers(app):
+    calls = []
+    w, inserted = _listening_window(app, calls)
+    w._edit.setPlainText("Weg damit")
+    w._close_and_clear()
+    assert calls == [False]
+    w._apply_stream("Nachzügler", "")
+    w._apply_stream_final("Nachzügler.", "auto", "auto")
+    w._on_transcript_checked("Nachzügler", "auto", [])
+    assert w.text() == ""
+    w._apply_state("idle")
+    w._apply_state("recording", "Live")          # the next session writes again
+    w._apply_stream_final("Neu.", "auto", "auto")
+    assert w.text() == "Neu."
+    w.close()
+
+
+def test_without_a_running_microphone_insert_is_immediate(app):
+    calls = []
+    w, inserted = _listening_window(app, calls)
+    w._apply_state("idle")
+    w._edit.setPlainText("Sofort")
+    w._do_insert()
+    assert calls == [] and inserted == ["Sofort"]
+    w.close()
+
+
+def test_the_module_finishes_a_live_session_then_reports(module, monkeypatch):
+    import threading
+    order = []
+
+    class _Win:
+        def listening_done(self):
+            order.append("done")
+    module._window = _Win()
+    module._live_session = object()
+    monkeypatch.setattr(module, "stop_stream",
+                        lambda: (order.append("stopped"),
+                                 setattr(module, "_live_session", None)))
+    monkeypatch.setattr(threading, "Thread",
+                        lambda target, **_k: type(
+                            "T", (), {"start": lambda self: target()})())
+    module.finish_listening(True)
+    assert order == ["stopped", "done"]

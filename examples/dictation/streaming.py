@@ -661,6 +661,46 @@ def apply_spoken_marks(text: str) -> str:
                   lambda m: m.group(1) + m.group(2).upper(), text)
 
 
+# -- context for single words ----------------------------------------------------
+
+# Short words a recogniser really writes on their own; any other token of one
+# or two letters left over at the cut is a crumb of the context sentence.
+_SHORT_WORDS = frozenset(
+    "ja so da du er es ob um zu in an im am wo ab oh ok ich wir sie der die "
+    "das den dem ein und oder aber nur mit von bei auf aus".split())
+
+
+def strip_context(full: str, context: str) -> str | None:
+    """What was said AFTER the context sentence, or None when the two cannot
+    be lined up safely.
+
+    ``full`` is the recognition of context + the new utterance, ``context``
+    the recognition of the context alone.  They are lined up word by word
+    (the context may come out slightly differently the second time), and
+    everything after the last shared word is the new utterance."""
+    import difflib
+    words = (full or "").split()
+    ctx = [_norm(w) for w in (context or "").split() if _norm(w)]
+    if not words or not ctx:
+        return None
+    normed = [_norm(w) for w in words]
+    matcher = difflib.SequenceMatcher(None, ctx, normed, autojunk=False)
+    blocks = [b for b in matcher.get_matching_blocks() if b.size]
+    if not blocks or sum(b.size for b in blocks) < max(1, len(ctx) // 2):
+        return None
+    rest = words[blocks[-1].b + blocks[-1].size:]
+    # the context's last words came out a little different the second time
+    # ("haben?" / "habens.") - a close look-alike still belongs to it
+    for tail_word in ctx[blocks[-1].a + blocks[-1].size:]:
+        if rest and difflib.SequenceMatcher(
+                None, tail_word, _norm(rest[0])).ratio() >= 0.6:
+            rest = rest[1:]
+    while rest and len(_norm(rest[0])) <= 2 and _norm(rest[0]) not in _SHORT_WORDS:
+        rest = rest[1:]                 # "S." - a crumb of the last word
+    text = " ".join(rest).lstrip(" .,;:!?…")
+    return text or None
+
+
 def rms16(chunk: bytes) -> float:
     try:
         import audioop
@@ -691,6 +731,7 @@ class StreamSession:
                  first_pass_s: float = 0.0, detector=None,
                  background_ratio: float = 0.0,
                  voice_level: float | None = None,
+                 short_s: float = 0.0, context_s: float = 5.0,
                  on_error: Callable[[Exception], None] | None = None) -> None:
         self._transcribe = transcribe
         self._on_update = on_update
@@ -719,6 +760,13 @@ class StreamSession:
         self.voice_level = voice_level
         self._levels_now: list[float] = []
         self.last_finish: dict = {}
+        # A single word gives a recogniser nothing to go by - Parakeet then
+        # guesses the language.  Heard after the previous sentence it is read
+        # as German, like everything around it.  ``short_s``: utterances with
+        # less speech than this get the previous sentence as context (0 = off).
+        self.short_s = short_s
+        self.context_s = context_s
+        self._last_audio = b""
         self._agreement = Agreement()
         self._preroll: collections.deque[bytes] = collections.deque()
         self._preroll_bytes = 0
@@ -885,7 +933,17 @@ class StreamSession:
             self.last_finish = {**info, "result": "quieter than your voice"}
             self._on_final("")
             return
-        text = self._run_engine(audio, final=True)
+        text = None
+        if (self.short_s and self._last_audio
+                and speech < self.short_s * _BYTES_PER_S):
+            text = self._with_context(audio)
+            if text is not None:
+                info["context"] = True
+        if text is None:
+            text = self._run_engine(audio, final=True)
+        if text and not info.get("context"):
+            self._last_audio = audio[-int(self.context_s * _BYTES_PER_S) // 2
+                                     * 2:]
         if text is None:
             self.last_finish = {**info, "result": "recogniser failed"}
         else:
@@ -894,6 +952,17 @@ class StreamSession:
                 self.voice_level = (level if not self.voice_level
                                     else 0.8 * self.voice_level + 0.2 * level)
         self._on_final(text or "")
+
+    def _with_context(self, audio: bytes) -> str | None:
+        """Recognise a short utterance behind the previous sentence and cut
+        that sentence off again.  None when it cannot be done cleanly."""
+        context = self._last_audio
+        alone = self._run_engine(context, final=True)
+        gap = b"\x00\x00" * int(0.3 * RATE)
+        full = self._run_engine(context + gap + audio, final=True)
+        if not alone or not full:
+            return None
+        return strip_context(full, alone)
 
     def _run_engine(self, audio: bytes, final: bool) -> str | None:
         started = time.perf_counter()

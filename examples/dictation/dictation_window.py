@@ -736,6 +736,7 @@ class DictationWindow(QWidget):
     """Floating dictation buffer with voice-driven editing and a history."""
 
     _transcript_sig = Signal(str, str, list)   # (text, mode, low-conf words)
+    _listening_done_sig = Signal()             # the microphone is off again
     _state_sig = Signal(str, str)              # (state, mode-label)
     _open_sig = Signal()
     _hide_sig = Signal()                       # hide the window (thread-safe)
@@ -772,6 +773,7 @@ class DictationWindow(QWidget):
                  compact: bool = False,
                  compact_geometry: list | None = None,
                  on_compact_changed: Callable[[bool], None] | None = None,
+                 on_finish_listening: Callable[[bool], None] | None = None,
                  on_compact_geometry_changed: Callable[[list], None]
                  | None = None,
                  ai_visible: bool = True,
@@ -807,6 +809,12 @@ class DictationWindow(QWidget):
         self._on_compact_geometry_changed = (on_compact_geometry_changed
                                              or (lambda _g: None))
         self._has_target = False
+        # Insert / copy / close while the microphone still runs: finish (or
+        # drop) what is being said first, then do it.
+        self._on_finish_listening = on_finish_listening
+        self._after_listening: Callable[[], None] | None = None
+        self._drop_listening = False
+        self._cur_state = "idle"
         self._ai_shown = bool(ai_visible)
         self._restore_geometry = geometry
         self._pending_low_words: list[str] = []   # flagged-but-still-here words
@@ -1070,7 +1078,8 @@ class DictationWindow(QWidget):
         self._update_counter()
         self._edit.installEventFilter(self)      # Escape cancels „nimm N“
         self._load_initial_history(history or [])
-        self._transcript_sig.connect(self._on_transcript)
+        self._transcript_sig.connect(self._on_transcript_checked)
+        self._listening_done_sig.connect(self._on_listening_done)
         self._state_sig.connect(self._apply_state)
         self._open_sig.connect(self.open_for_dictation)
         self._hide_sig.connect(self.hide)
@@ -1099,6 +1108,35 @@ class DictationWindow(QWidget):
             self._restore_view_geometry()
 
     # -- public, thread-safe API ---------------------------------------
+
+    def listening_done(self) -> None:
+        """The module finished (or dropped) the running recording."""
+        self._listening_done_sig.emit()
+
+    def _on_transcript_checked(self, text: str, mode: str = "auto",
+                               low_words: list | None = None) -> None:
+        if self._drop_listening:
+            return                  # the window was closed while listening
+        self._on_transcript(text, mode, low_words)
+
+    def _listening(self) -> bool:
+        return (self._on_finish_listening is not None
+                and self._cur_state in ("recording", "loading", "transcribing"))
+
+    def _after_listening_done(self, action: Callable[[], None]) -> bool:
+        """Run ``action`` once the microphone is off; True when deferred."""
+        if not self._listening():
+            return False
+        if self._after_listening is None:
+            self._set_hint(_t("msg.finishing"))
+            self._on_finish_listening(True)
+        self._after_listening = action
+        return True
+
+    def _on_listening_done(self) -> None:
+        action, self._after_listening = self._after_listening, None
+        if action is not None:
+            action()
 
     def handle_transcript(self, text: str, mode: str = "auto",
                           low_words: list | None = None) -> None:
@@ -1313,7 +1351,7 @@ class DictationWindow(QWidget):
         settled = " ".join(settled.split())
         tail = " ".join(tail.split())
         combined = f"{settled} {tail}".strip()
-        if not combined or self._stream_goes_elsewhere():
+        if not combined or self._stream_goes_elsewhere() or self._drop_listening:
             return
         plain = QTextCharFormat()
         run = self._stream_run_intact()
@@ -1353,6 +1391,8 @@ class DictationWindow(QWidget):
 
     def _apply_stream_final(self, text: str, mode: str,
                             marks: str = "auto") -> None:
+        if self._drop_listening:
+            return
         run = self._stream_run_intact()
         self._stream_run = None
         replacing, self._stream_replacing = self._stream_replacing, None
@@ -1676,6 +1716,9 @@ class DictationWindow(QWidget):
     # -- main-thread slots ---------------------------------------------
 
     def _apply_state(self, state: str, mode: str = "") -> None:
+        if state == "recording" and self._cur_state == "idle":
+            self._drop_listening = False       # a new recording: keep again
+        self._cur_state = state
         key, colour = _STATE.get(state, _STATE["idle"])
         label = _t(key)         # translated HERE, not in the table at import
         if state == "loading" and mode:
@@ -1847,6 +1890,10 @@ class DictationWindow(QWidget):
             self._report(text, res.message or f"Befehl: {cmd.kind}")
 
     def _do_insert(self, keep_open: bool = False) -> None:
+        # Forgot to stop the microphone: the sentence still being spoken is
+        # finished first and goes in too.
+        if self._after_listening_done(lambda: self._do_insert(keep_open)):
+            return
         text = self.text().strip()
         if not text:
             return
@@ -1892,6 +1939,8 @@ class DictationWindow(QWidget):
     def _do_copy_and_close(self) -> None:
         if self._confirm_pending:
             return                            # already copying and closing
+        if self._after_listening_done(self._do_copy_and_close):
+            return
         text = self.text().strip()
         if not text:
             self._close_and_clear()
@@ -2023,6 +2072,13 @@ class DictationWindow(QWidget):
         self._clear_buffer()
 
     def _close_and_clear(self) -> None:
+        if self._listening():
+            # Closing means "throw it away": the microphone goes off and
+            # whatever it still delivers is not written anywhere.
+            self._drop_listening = True
+            self._after_listening = None
+            self._stream_run = None
+            self._on_finish_listening(False)
         self._save_geometry()
         self._archive()
         self._clear_buffer()
