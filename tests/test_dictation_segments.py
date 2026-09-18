@@ -207,35 +207,39 @@ def test_the_chip_shows_the_seconds_left(app):
     chip.deleteLater()
 
 
-def test_the_dot_at_the_pointer_comes_and_goes_with_the_pause(app):
+def test_the_pause_goes_to_the_chip_and_the_window(module, monkeypatch):
     import module as dic
-    if dic.PauseDot is None:
-        pytest.skip("core without pointer symbols")
-    dot = dic.PauseDot()
-    dot._set_pause(1.2, 2.0)
-    assert dot._logical_visible and dot._timer.isActive()
-    dot._set_pause(-1.0, 2.0)
-    assert not dot._logical_visible and not dot._timer.isActive()
-    dot._on_pause(left=1.0, total=2.0, dot=False)     # switched off
-    app.processEvents()
-    assert not dot._logical_visible
-    dot._set_pause(1.0, 2.0)
-    dot._on_state(state="transcribing")
-    app.processEvents()
-    assert not dot._logical_visible
-    # the pointer symbols keep a list of their own - take it out again
-    from withease.gui.widgets.cursor_indicator import IndicatorCoordinator
-    IndicatorCoordinator.get()._indicators.remove(dot)
-    dot.hide()
-
-
-def test_the_pause_says_whether_the_dot_is_wanted(module, monkeypatch):
-    import module as dic
-    sent = []
+    sent, shown = [], []
     monkeypatch.setattr(dic.bus, "publish",
                         lambda topic, **kw: sent.append((topic, kw)))
+    module._window.pause_countdown = lambda left, total: shown.append(left)
     module._publish_pause(1.5, 2.0)
     module._settings["pause_dot"] = False
+    module._publish_pause(1.0, 2.0)
     module._publish_pause(None, 2.0)
-    assert sent == [("dictation.pause", {"left": 1.5, "total": 2.0, "dot": True}),
-                    ("dictation.pause", {"left": -1.0, "total": 2.0, "dot": False})]
+    assert sent == [("dictation.pause", {"left": 1.5, "total": 2.0}),
+                    ("dictation.pause", {"left": 1.0, "total": 2.0}),
+                    ("dictation.pause", {"left": -1.0, "total": 2.0})]
+    assert shown == [1.5, -1.0, -1.0]          # switched off: no dot
+
+
+def test_the_dot_sits_right_after_the_text_cursor(app):
+    import dictation_window as dw
+    win = dw.DictationWindow(on_insert=lambda text: True, on_copy=lambda text: None)
+    win._edit.setPlainText("Hallo Welt")
+    cursor = win._edit.textCursor()
+    cursor.movePosition(cursor.MoveOperation.End)
+    win._edit.setTextCursor(cursor)
+    win._apply_state("recording")
+    win._apply_pause(1.2, 2.0)
+    dot = win._pause_dot
+    assert dot.showing() and dot.isVisibleTo(win._edit.viewport())
+    caret = win._edit.cursorRect()
+    assert dot.x() > caret.right()
+    assert dot.geometry().top() <= caret.center().y() <= dot.geometry().bottom()
+    win._apply_pause(-1.0, 2.0)
+    assert not dot.showing()
+    win._apply_pause(1.0, 2.0)
+    win._apply_state("transcribing")
+    assert not dot.showing()
+    win.deleteLater()

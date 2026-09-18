@@ -88,7 +88,6 @@ from PySide6.QtGui import (
     QIcon,
     QPainter,
     QPainterPath,
-    QPen,
     QPixmap,
 )
 from PySide6.QtWidgets import (
@@ -225,8 +224,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "segment.hint": "Das Mikrofon bleibt an: Machst du eine Pause, wird das bisher Gesagte schon umgewandelt und erscheint im Fenster, während du weitersprichst. Du musst nicht nach jedem Satz „Beenden“ drücken. Gilt nur für das Diktierfenster.",
         "segment.pause": "Pause bis zum Umwandeln",
         "segment.pause.hint": "So lange musst du schweigen, damit das Gesagte umgewandelt wird. Kürzere Pausen sind Denkpausen und bleiben im selben Abschnitt.",
-        "pause_dot": "Pause am Mauszeiger anzeigen",
-        "pause_dot.hint": "Sobald du still bist, erscheint neben dem Mauszeiger ein pulsierender grüner Punkt, der wie eine Uhr abläuft: Ist er leer, wird das Gesagte umgewandelt. Sprichst du weiter, verschwindet er.",
+        "pause_dot": "Pause am Textende anzeigen",
+        "pause_dot.hint": "Sobald du still bist, erscheint im Diktierfenster direkt hinter dem Textcursor – dort, wo der neue Text hinkommt – ein pulsierender grüner Punkt, der wie eine Uhr abläuft: Ist er leer, wird das Gesagte umgewandelt. Sprichst du weiter, verschwindet er.",
         "stream.canary": "Satzende mit Canary prüfen (Sprache fest)",
         "stream.canary.hint": "Parakeet wählt die Sprache selbst und liest ein einzelnes deutsches Wort manchmal als englisches. Canary bekommt die Sprache fest vorgegeben und schreibt den fertigen Satz; die grauen Wörter beim Sprechen bleiben beim schnellen Parakeet. Braucht etwa 4 GB mehr Grafikspeicher.",
         "stream.canary.missing": "Canary ist in der Testumgebung nicht vorhanden – ohne Canary schreibt Parakeet auch den fertigen Satz.",
@@ -560,8 +559,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "segment.hint": "The microphone stays on: when you pause, what you said so far is converted and appears in the window while you keep talking. No need to press stop after every sentence. Dictation window only.",
         "segment.pause": "Pause before converting",
         "segment.pause.hint": "How long you have to be silent for what you said to be converted. Shorter pauses are thinking pauses and stay in the same part.",
-        "pause_dot": "Show the pause at the mouse pointer",
-        "pause_dot.hint": "As soon as you are quiet, a pulsing green dot appears next to the mouse pointer and runs out like a clock: when it is empty, what you said is converted. Speak again and it disappears.",
+        "pause_dot": "Show the pause at the end of the text",
+        "pause_dot.hint": "As soon as you are quiet, a pulsing green dot appears in the dictation window right after the text cursor - where the new text will go - and runs out like a clock: when it is empty, what you said is converted. Speak again and it disappears.",
         "stream.canary": "Check the finished sentence with Canary (fixed language)",
         "stream.canary.hint": "Parakeet picks the language itself and sometimes reads a single German word as English. Canary is given the language and writes the finished sentence; the grey words while speaking stay with the fast Parakeet. Needs about 4 GB more graphics memory.",
         "stream.canary.missing": "Canary is not in the test environment - without it Parakeet writes the finished sentence too.",
@@ -2512,105 +2511,6 @@ class DictationIndicator(QWidget):
             p.drawText(QRect(_CHIP_MARGIN, sub_y, content_w, sub_h),
                        Qt.AlignmentFlag.AlignCenter, sub)
         p.end()
-
-
-class _PauseBridge(QObject):
-    pause = Signal(float, float)     # (seconds left, whole pause); left < 0 = none
-    stop = Signal()
-
-
-try:
-    from withease.gui.widgets.cursor_indicator import (
-        CursorIndicator as _CursorIndicator)
-except Exception:                     # an older core: no dot, the chip still counts
-    _CursorIndicator = None
-
-if _CursorIndicator is not None:
-    class PauseDot(_CursorIndicator):
-        """A green dot beside the mouse pointer while you pause.
-
-        The eyes are at the pointer, not at the top of the screen.  The dot
-        pulses and runs out like a clock: full when the pause begins, empty
-        when what you said is converted.  It lives with the other pointer
-        symbols (target, snail), so it sits beside them and hides over a
-        fullscreen window like they do."""
-
-        _GREEN = "#43A047"
-        _PULSE_MS = 40
-        _PULSE_PERIOD_MS = 900
-
-        def __init__(self) -> None:
-            super().__init__("")
-            self._left = -1.0
-            self._total = 0.0
-            self._opacity = 1.0
-            self._elapsed = 0
-            self._timer = QTimer(self)
-            self._timer.setInterval(self._PULSE_MS)
-            self._timer.timeout.connect(self._on_pulse)
-            self._pause_bridge = _PauseBridge()
-            self._pause_bridge.pause.connect(self._set_pause)
-            self._pause_bridge.stop.connect(lambda: self._set_pause(-1.0, 0.0))
-            bus.subscribe("dictation.pause", self._on_pause)
-            bus.subscribe("dictation.state", self._on_state)
-
-        def _on_pause(self, left: float = -1.0, total: float = 0.0,
-                      dot: bool = True, **_: object) -> None:
-            # From the recogniser's thread - over to the GUI thread.
-            self._pause_bridge.pause.emit(float(left) if dot else -1.0,
-                                          float(total))
-
-        def _on_state(self, state: str = "", **_: object) -> None:
-            if state != "recording":
-                self._pause_bridge.stop.emit()
-
-        def _set_pause(self, left: float, total: float) -> None:
-            if left < 0 or total <= 0:
-                self._left = -1.0
-                self._timer.stop()
-                if self._logical_visible:
-                    self._do_hide()
-                return
-            self._left, self._total = left, total
-            if not self._logical_visible:
-                self._elapsed = 0
-                self._timer.start()
-                self._guarded_show()
-            self.update()
-
-        def _on_pulse(self) -> None:
-            import math
-            self._elapsed += self._PULSE_MS
-            phase = ((self._elapsed % self._PULSE_PERIOD_MS)
-                     / self._PULSE_PERIOD_MS)
-            self._opacity = 0.7 + 0.3 * math.cos(phase * 2 * math.pi)
-            self.update()
-
-        def paintEvent(self, _event: object) -> None:  # noqa: N802
-            if self._left < 0 or self._total <= 0:
-                return
-            p = QPainter(self)
-            p.setRenderHint(QPainter.RenderHint.Antialiasing)
-            side = min(self.width(), self.height())
-            ring = QRect(3, 3, side - 6, side - 6)
-            # dark ground: readable on white and on dark backgrounds alike
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(0, 0, 0, 150))
-            p.drawEllipse(ring)
-            # the time left, as a slice that shrinks clockwise from the top
-            p.setOpacity(self._opacity)
-            p.setBrush(QColor(self._GREEN))
-            share = max(0.0, min(1.0, self._left / self._total))
-            p.drawPie(ring, 90 * 16, -round(share * 360 * 16))
-            p.setOpacity(1.0)
-            pen = QPen(QColor(255, 255, 255, 230))
-            pen.setWidthF(1.5)
-            p.setPen(pen)
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(ring)
-            p.end()
-else:
-    PauseDot = None
 
 
 # ---------------------------------------------------------------------------
@@ -4811,7 +4711,6 @@ class DictationModule(BaseModule):
         self._whisper_proc.on_phase = self._model_phase
         self._whispercpp: Any = None     # whisper.cpp server, started lazily
         self._indicator: DictationIndicator | None = None
-        self._pause_dot: Any = None       # the countdown at the mouse pointer
         self._window: Any = None         # DictationWindow (created on the GUI thread)
         self._window_hwnd: int = 0       # our window's native handle (to exclude)
         self._target_hwnd: int | None = None   # app to paste into on "einfügen"
@@ -4996,11 +4895,6 @@ class DictationModule(BaseModule):
             self._indicator.register_with_coordinator()
             self._indicator.set_chip_scale(
                 float(self._settings.get("chip_scale", 1.0)))
-        if self._pause_dot is None and PauseDot is not None:
-            try:
-                self._pause_dot = PauseDot()
-            except Exception:
-                _log.warning("pause dot unavailable", exc_info=True)
 
     # ------------------------------------------------------------------
     # Dictation window (output mode = "window")
@@ -5879,10 +5773,13 @@ class DictationModule(BaseModule):
 
     def _publish_pause(self, left: float | None, total: float) -> None:
         """How long until the pause ends the part - for the chip and the
-        dot at the mouse pointer."""
-        bus.publish("dictation.pause", left=-1.0 if left is None else left,
-                    total=total,
-                    dot=bool(self._settings.get("pause_dot", True)))
+        dot at the end of the text in the window."""
+        left = -1.0 if left is None else left
+        bus.publish("dictation.pause", left=left, total=total)
+        window = self._window
+        if window is not None and hasattr(window, "pause_countdown"):
+            window.pause_countdown(
+                left if self._settings.get("pause_dot", True) else -1.0, total)
 
     def _segment_wanted(self) -> bool:
         """Cut the recording at longer pauses?  Only into the dictation

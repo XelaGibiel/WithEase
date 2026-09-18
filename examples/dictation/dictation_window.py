@@ -356,6 +356,90 @@ def _win_force_foreground(hwnd: int) -> None:
         pass
 
 
+class _PauseDot(QWidget):
+    """A green dot right where the next text will appear, while you pause.
+
+    That is where the eyes are when dictating - not at the top of the
+    screen, not at the mouse pointer.  It pulses and runs out like a clock:
+    full when the pause begins, empty when what you said is converted."""
+
+    _GREEN = QColor("#43A047")
+    _PULSE_MS = 40
+    _PULSE_PERIOD_MS = 900
+
+    def __init__(self, edit: QPlainTextEdit) -> None:
+        super().__init__(edit.viewport())
+        self._edit = edit
+        self._left = -1.0
+        self._total = 0.0
+        self._opacity = 1.0
+        self._elapsed = 0
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._timer = QTimer(self)
+        self._timer.setInterval(self._PULSE_MS)
+        self._timer.timeout.connect(self._on_pulse)
+        # the caret moves (new text, scrolling): the dot goes with it
+        edit.cursorPositionChanged.connect(self._sync)
+        edit.verticalScrollBar().valueChanged.connect(self._sync)
+        edit.textChanged.connect(self._sync)
+        self.hide()
+
+    def showing(self) -> bool:
+        return self._left >= 0
+
+    def set_pause(self, left: float, total: float) -> None:
+        if left < 0 or total <= 0:
+            self._left = -1.0
+            self._timer.stop()
+            self.hide()
+            return
+        self._left, self._total = left, total
+        if not self._timer.isActive():
+            self._elapsed = 0
+            self._timer.start()
+        self._sync()
+
+    def _sync(self) -> None:
+        if self._left < 0:
+            return
+        caret = self._edit.cursorRect()
+        side = max(14, min(26, caret.height()))
+        # just after the caret, centred on its line
+        self.setGeometry(caret.right() + 4,
+                         caret.center().y() - side // 2, side, side)
+        self.show()
+        self.raise_()
+        self.update()
+
+    def _on_pulse(self) -> None:
+        import math
+        self._elapsed += self._PULSE_MS
+        phase = (self._elapsed % self._PULSE_PERIOD_MS) / self._PULSE_PERIOD_MS
+        self._opacity = 0.7 + 0.3 * math.cos(phase * 2 * math.pi)
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 (Qt override)
+        if self._left < 0 or self._total <= 0:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        ring = QRectF(1.5, 1.5, self.width() - 3.0, self.height() - 3.0)
+        # a faint full circle: how long the whole pause is
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(67, 160, 71, 55))
+        p.drawEllipse(ring)
+        # the time left, as a slice that shrinks clockwise from the top
+        p.setOpacity(self._opacity)
+        p.setBrush(self._GREEN)
+        share = max(0.0, min(1.0, self._left / self._total))
+        p.drawPie(ring, 90 * 16, -round(share * 360 * 16))
+        p.setOpacity(1.0)
+        p.setPen(QPen(self._GREEN, 1.2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(ring)
+        p.end()
+
+
 class _BadgeOverlay(QWidget):
     """Transparent overlay on the editor's viewport that paints numbered badges
     (①②③ …) at given document positions, for the "nimm N" choices."""
@@ -752,6 +836,7 @@ class DictationWindow(QWidget):
     _stream_sig = Signal(str, str)             # live test: settled, tail
     _stream_final_sig = Signal(str, str, str)  # sentence, mode, marks
     _take_sel_sig = Signal(str)                # selection taken from the target
+    _pause_sig = Signal(float, float)          # pause: seconds left, whole pause
 
     def __init__(self, on_insert: Callable[[str], None] | None = None,
                  on_copy: Callable[[str], None] | None = None,
@@ -893,6 +978,7 @@ class DictationWindow(QWidget):
         self._edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._edit.setMinimumWidth(280)
         self._badges = _BadgeOverlay(self._edit)
+        self._pause_dot = _PauseDot(self._edit)
         # A pill shown centred over the editor while a KI-Aktion runs, so it is
         # obvious that the text is still being worked on.
         self._busy_chip = QLabel("✨  KI arbeitet …", self._edit.viewport())
@@ -1093,6 +1179,7 @@ class DictationWindow(QWidget):
         self._stream_final_sig.connect(self._apply_stream_final)
         self._edit.textChanged.connect(self._hide_problem_chip)
         self._take_sel_sig.connect(self._apply_take_selected)
+        self._pause_sig.connect(self._apply_pause)
         self._partial_sig.connect(self._apply_partial)
         self._final_sig.connect(self._apply_final)
         self._polish_sig.connect(self._apply_polish)
@@ -1321,6 +1408,16 @@ class DictationWindow(QWidget):
     # -- live dictation (thread-safe) ----------------------------------
 
     # -- live dictation test (thread-safe) --------------------------------
+
+    def pause_countdown(self, left: float, total: float) -> None:
+        """While you pause mid-recording: seconds until what you said is
+        converted (``left`` < 0: no pause, the dot goes).  Thread-safe."""
+        self._pause_sig.emit(float(left), float(total))
+
+    def _apply_pause(self, left: float, total: float) -> None:
+        if self._cur_state != "recording":
+            left = -1.0
+        self._pause_dot.set_pause(left, total)
 
     def stream_update(self, settled: str, tail: str) -> None:
         """Show the sentence being spoken: ``settled`` black, ``tail`` grey."""
@@ -1719,6 +1816,8 @@ class DictationWindow(QWidget):
         if state == "recording" and self._cur_state == "idle":
             self._drop_listening = False       # a new recording: keep again
         self._cur_state = state
+        if state != "recording":
+            self._pause_dot.set_pause(-1.0, 0.0)
         key, colour = _STATE.get(state, _STATE["idle"])
         label = _t(key)         # translated HERE, not in the table at import
         if state == "loading" and mode:
