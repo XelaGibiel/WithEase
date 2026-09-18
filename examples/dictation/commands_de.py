@@ -501,6 +501,13 @@ def _m_help_history(t: str) -> Command | None:
     if t in ("verlauf", "verlauf zeigen", "zeig den verlauf",
              "zeige den verlauf"):
         return Command("history_show")
+    if t in ("kompakte ansicht", "kompakt", "kompaktansicht",
+             "kleine ansicht", "fenster kompakt", "fenster verkleinern"):
+        return Command("view_compact")
+    if t in ("volle ansicht", "große ansicht", "grosse ansicht",
+             "normale ansicht", "fenster vergrößern", "fenster vergroessern",
+             "alle knöpfe", "alle knoepfe"):
+        return Command("view_full")
     return None
 
 
@@ -596,6 +603,8 @@ CHEAT_SHEET: list[tuple[str, list[tuple[str, str]]]] = [
         ("kopieren", "Text in die Zwischenablage"),
         ("Ziel wählen", "andere Ziel-App bestimmen"),
         ("Fenster schließen", "Diktierfenster schließen"),
+        ("kompakte Ansicht · volle Ansicht",
+         "nur das Nötigste zeigen oder alle Knöpfe"),
     ]),
 ]
 

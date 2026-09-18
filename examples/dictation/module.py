@@ -4848,6 +4848,10 @@ class DictationModule(BaseModule):
                     on_lookup_snippet=self.lookup_snippet,
                     history_visible=bool(
                         self._settings.get("history_visible", False)),
+                    compact=bool(self._settings.get("win_compact", False)),
+                    compact_geometry=self._settings.get("win_geo_compact"),
+                    on_compact_changed=self._save_compact,
+                    on_compact_geometry_changed=self._save_compact_geometry,
                     ai_visible=bool(
                         self._settings.get("ai_panel_visible", True)),
                     geometry=self._settings.get("win_geo"),
@@ -5023,6 +5027,14 @@ class DictationModule(BaseModule):
 
     def _save_geometry(self, geom: list) -> None:
         self._settings["win_geo"] = list(geom)
+        self.on_settings_changed()
+
+    def _save_compact(self, compact: bool) -> None:
+        self._settings["win_compact"] = bool(compact)
+        self.on_settings_changed()
+
+    def _save_compact_geometry(self, geom: list) -> None:
+        self._settings["win_geo_compact"] = list(geom)
         self.on_settings_changed()
 
     def _save_history_visible(self, visible: bool) -> None:

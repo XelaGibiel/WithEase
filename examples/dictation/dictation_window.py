@@ -769,6 +769,11 @@ class DictationWindow(QWidget):
                  on_ai_toggle: Callable[[bool], None] | None = None,
                  ai_actions: list | None = None,
                  history_visible: bool = False,
+                 compact: bool = False,
+                 compact_geometry: list | None = None,
+                 on_compact_changed: Callable[[bool], None] | None = None,
+                 on_compact_geometry_changed: Callable[[list], None]
+                 | None = None,
                  ai_visible: bool = True,
                  geometry: list | None = None,
                  history: list[str] | None = None,
@@ -794,6 +799,14 @@ class DictationWindow(QWidget):
         self._on_history_toggle = on_history_toggle or (lambda _v: None)
         self._on_ai_toggle = on_ai_toggle or (lambda _v: None)
         self._history_shown = bool(history_visible)
+        # Compact view: only the text, the status and the three buttons that
+        # matter - everything else stays reachable by voice.
+        self._compact = bool(compact)
+        self._compact_geometry = compact_geometry
+        self._on_compact_changed = on_compact_changed or (lambda _c: None)
+        self._on_compact_geometry_changed = (on_compact_geometry_changed
+                                             or (lambda _g: None))
+        self._has_target = False
         self._ai_shown = bool(ai_visible)
         self._restore_geometry = geometry
         self._pending_low_words: list[str] = []   # flagged-but-still-here words
@@ -859,6 +872,9 @@ class DictationWindow(QWidget):
         self._history_btn.setToolTip(_wrap_tip(_t("tip.history")))
         self._history_btn.clicked.connect(self._toggle_history)
         top.addWidget(self._history_btn, 0, Qt.AlignmentFlag.AlignRight)
+        self._compact_btn = QPushButton()
+        self._compact_btn.clicked.connect(self._toggle_compact)
+        top.addWidget(self._compact_btn, 0, Qt.AlignmentFlag.AlignRight)
         layout.addLayout(top)
 
         # --- middle: editor (left) + history (right) in a stable splitter ---
@@ -981,6 +997,7 @@ class DictationWindow(QWidget):
         self._counter = QLabel("")               # live char/word count
         tools.addWidget(self._counter)
         layout.addLayout(tools)
+        self._tools_layout = tools
 
         # Readout of what Whisper heard + what happened with it.  Fixed height,
         # no word-wrap and high-contrast so it stays readable in light *and*
@@ -1077,6 +1094,9 @@ class DictationWindow(QWidget):
                 self.setGeometry(*[int(v) for v in self._restore_geometry])
             except Exception:
                 pass
+        self._apply_view()
+        if self._compact:
+            self._restore_view_geometry()
 
     # -- public, thread-safe API ---------------------------------------
 
@@ -1156,7 +1176,7 @@ class DictationWindow(QWidget):
         """Show the KI-Aktionen column only when it holds actions AND the user
         hasn't folded it away; the top-left toggle appears only when there is
         something to fold."""
-        has = bool(self._ai_actions)
+        has = bool(self._ai_actions) and not getattr(self, "_compact", False)
         self._ai_toggle.setVisible(has)
         self._ai_widget.setVisible(has and self._ai_shown)
         self._ai_toggle.setText(_t("btn.ai.open") if self._ai_shown
@@ -1771,6 +1791,11 @@ class DictationWindow(QWidget):
             self._report(text, _t("msg.closing"))
             self._close_and_clear()
             return
+        if cmd.kind in ("view_compact", "view_full"):
+            self.set_compact(cmd.kind == "view_compact")
+            self._report(text, _t("msg.view_compact" if self._compact
+                                  else "msg.view_full"))
+            return
         if cmd.kind == "show_help":
             self._show_cheatsheet()
             self._report(text, _t("msg.cheatsheet"))
@@ -2003,12 +2028,83 @@ class DictationWindow(QWidget):
 
     def _save_geometry(self) -> None:
         g = self.geometry()
-        self._on_geometry_changed([g.x(), g.y(), g.width(), g.height()])
+        geom = [g.x(), g.y(), g.width(), g.height()]
+        if self._compact:
+            self._compact_geometry = geom
+            self._on_compact_geometry_changed(geom)
+        else:
+            self._restore_geometry = geom
+            self._on_geometry_changed(geom)
+
+    # -- compact view ---------------------------------------------------------
+
+    def _toggle_compact(self) -> None:
+        self.set_compact(not self._compact)
+
+    def set_compact(self, compact: bool) -> None:
+        compact = bool(compact)
+        if compact == self._compact:
+            return
+        self._save_geometry()            # the size of the view being left
+        self._compact = compact
+        self._apply_view()
+        self._restore_view_geometry()
+        self._on_compact_changed(compact)
+
+    def _restore_view_geometry(self) -> None:
+        """Each view keeps its own size; a first compact view keeps the
+        position and width and is only as tall as it needs to be."""
+        stored = self._compact_geometry if self._compact \
+            else self._restore_geometry
+        if stored and len(stored) == 4:
+            try:
+                self.setGeometry(*[int(v) for v in stored])
+                return
+            except Exception:
+                pass
+        if self._compact:
+            g = self.geometry()
+            # room for about four lines of text at the chosen font size
+            lines = QFontMetrics(self._edit.font()).lineSpacing() * 4
+            height = max(260, self.minimumSizeHint().height() + lines)
+            self.resize(max(360, min(g.width(), 520)), height)
+
+    def _apply_view(self) -> None:
+        full = not self._compact
+        # the full window needs room for its toolbar; the compact one only
+        # for the text and three buttons
+        if full:
+            self.setMinimumSize(620, 340)
+        else:
+            self.setMinimumSize(360, 200)
+        self._compact_btn.setText(_t("win.full") if self._compact
+                                  else _t("win.compact"))
+        self._compact_btn.setToolTip(_wrap_tip(
+            _t("tip.full") if self._compact else _t("tip.compact")))
+        self._history_btn.setVisible(full)
+        self._history_panel.setVisible(full and self._history_shown)
+        if full:
+            self._update_ai_panel()
+        else:
+            self._ai_toggle.setVisible(False)
+            self._ai_widget.setVisible(False)
+        for i in range(self._tools_layout.count()):
+            widget = self._tools_layout.itemAt(i).widget()
+            if widget is not None:
+                widget.setVisible(full)
+        self._hint.setVisible(full)
+        self._insert_keep_btn.setVisible(full)
+        self._copy_close_btn.setVisible(full)
+        # in the compact view only the warning that no app is chosen
+        self._target_label.setVisible(full or not self._has_target)
 
     def _apply_target(self, name: str) -> None:
         name = (name or "").strip()
         if len(name) > 60:
             name = name[:59] + "…"
+        self._has_target = bool(name)
+        if hasattr(self, "_compact_btn"):
+            self._apply_view()
         if name:
             self._target_label.setText(_t("win.target_is", app=name))
             self._target_label.setStyleSheet("")     # inherit the theme palette

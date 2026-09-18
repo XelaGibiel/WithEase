@@ -732,3 +732,79 @@ def test_ai_preview_diff_highlights_changes():
     html = dw._diff_html("der Termin passt.", "der Termin passt?")
     assert "passt?" in html and "background" in html   # changed word highlighted
     assert dw._diff_html("gleich", "gleich").strip().startswith("gleich")
+
+
+# -- compact view -----------------------------------------------------------------
+
+def _visible(win, widget):
+    return widget.isVisibleTo(win)
+
+
+def test_the_compact_view_keeps_only_what_matters(app):
+    win = dw.DictationWindow(ai_actions=[{"name": "E-Mail", "prompt": "x"}])
+    win.show()
+    app.processEvents()
+    assert _visible(win, win._insert_keep_btn) and _visible(win, win._hint)
+
+    win.set_compact(True)
+    for widget in (win._insert_btn, win._copy_btn, win._close_btn,
+                   win._edit, win._status, win._compact_btn):
+        assert _visible(win, widget), widget
+    for widget in (win._insert_keep_btn, win._copy_close_btn, win._hint,
+                   win._history_btn, win._ai_widget, win._ai_toggle,
+                   win._reselect_btn, win._counter):
+        assert not _visible(win, widget), widget
+    assert "Voll" in win._compact_btn.text()
+
+    win.set_compact(False)
+    assert _visible(win, win._insert_keep_btn) and _visible(win, win._hint)
+    assert _visible(win, win._ai_widget), "the AI column comes back"
+    win.close()
+
+
+def test_the_missing_target_warning_stays_in_the_compact_view(app):
+    win = dw.DictationWindow(compact=True)
+    win.show()
+    win._apply_target("")
+    assert _visible(win, win._target_label)
+    win._apply_target("Editor")
+    assert not _visible(win, win._target_label)
+    win.close()
+
+
+def test_the_choice_and_each_size_are_remembered(app):
+    saved, full_geo, compact_geo = [], [], []
+    win = dw.DictationWindow(
+        on_compact_changed=saved.append,
+        on_geometry_changed=full_geo.append,
+        on_compact_geometry_changed=compact_geo.append)
+    win.show()
+    win.resize(800, 600)
+    win.set_compact(True)
+    assert saved == [True]
+    assert full_geo and full_geo[-1][2:] == [800, 600], "the full size is kept"
+    win.resize(500, 250)
+    win.set_compact(False)
+    assert compact_geo[-1][2:] == [500, 250]
+    assert win.width() == 800, "back to the full size"
+    win.set_compact(True)
+    assert win.width() == 500, "and to the compact one"
+    win.close()
+
+
+def test_it_opens_in_the_view_it_was_left_in(app):
+    win = dw.DictationWindow(compact=True, compact_geometry=[50, 60, 420, 240])
+    assert "Voll" in win._compact_btn.text()
+    assert win.width() == 420
+    win.close()
+
+
+def test_the_view_can_be_switched_by_voice(app):
+    win = make(app)[0]
+    win.show()
+    feed(app, win, "kompakte Ansicht")
+    assert win._compact
+    feed(app, win, "volle Ansicht")
+    assert not win._compact
+    assert win.text() == "", "a command, not text"
+    win.close()
