@@ -1076,3 +1076,46 @@ def test_the_module_finishes_a_live_session_then_reports(module, monkeypatch):
                             "T", (), {"start": lambda self: target()})())
     module.finish_listening(True)
     assert order == ["stopped", "done"]
+
+
+
+# -- the graphics card keeps only what is used -------------------------------------------
+
+def test_whisper_is_not_preloaded_while_the_live_test_uses_parakeet(module,
+                                                                    monkeypatch):
+    module._settings.update({"stream_enabled": True,
+                             "stream_engine": "parakeet"})
+    assert module._whisper_idle()
+    module._settings["stream_engine"] = "whisper"
+    assert not module._whisper_idle()
+    module._settings.update({"stream_enabled": False,
+                             "stream_engine": "parakeet"})
+    assert not module._whisper_idle()
+
+
+def test_unused_models_are_released(module, monkeypatch):
+    released = []
+    module._settings.update({"stream_enabled": True,
+                             "stream_engine": "parakeet"})
+    module._local_model = object()
+    monkeypatch.setattr(module, "unload_model",
+                        lambda: released.append("whisper"))
+
+    class _Canary:
+        def stop(self):
+            released.append("canary")
+    module._canary = _Canary()
+    monkeypatch.setattr(module, "_canary_wanted", lambda: False)
+    module.release_unused_models()
+    assert released == ["whisper", "canary"]
+    assert module._canary is None
+
+
+def test_nothing_is_released_that_is_still_used(module, monkeypatch):
+    released = []
+    module._settings.update({"stream_enabled": False})
+    module._local_model = object()
+    monkeypatch.setattr(module, "unload_model",
+                        lambda: released.append("whisper"))
+    module.release_unused_models()
+    assert released == []

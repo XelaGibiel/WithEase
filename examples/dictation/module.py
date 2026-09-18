@@ -3075,7 +3075,8 @@ class DictationSettingsWidget(QWidget):
             lambda i: self._save("stream_engine",
                                  self._stream_engine.itemData(i)))
         self._stream_engine.currentIndexChanged.connect(
-            lambda _i: self._module.preload_stream_engine())
+            lambda _i: (self._module.release_unused_models(),
+                        self._module.preload_stream_engine()))
         self._stream_engine.currentIndexChanged.connect(
             lambda _i: self._update_stream_rows())
         rec.addRow(_t("stream.engine"), self._stream_engine)
@@ -4211,10 +4212,12 @@ class DictationSettingsWidget(QWidget):
     def _on_stream_toggled(self, on: bool) -> None:
         self._save("stream_enabled", bool(on))
         self._update_stream_rows()
+        self._module.release_unused_models()
         self._module.preload_stream_engine()
 
     def _on_canary_toggled(self, on: bool) -> None:
         self._save("stream_canary", bool(on))
+        self._module.release_unused_models()
         self._module.preload_stream_engine()
 
     def _update_stream_rows(self) -> None:
@@ -4664,7 +4667,8 @@ class DictationModule(BaseModule):
         backend = self._settings.get("backend", "local")
         if backend == "live":                       # safety net if not migrated
             backend = "local"
-        if self._settings.get("preload_model") and backend == "local":
+        if (self._settings.get("preload_model") and backend == "local"
+                and not self._whisper_idle()):
             threading.Thread(target=self._preload_model, daemon=True).start()
         self.preload_stream_engine()
         bus.publish("module.started", module_id=self.MODULE_ID)
@@ -6022,6 +6026,24 @@ class DictationModule(BaseModule):
                     self._window.listening_done()
         threading.Thread(target=run, daemon=True,
                          name="finish-listening").start()
+
+    def _whisper_idle(self) -> bool:
+        """With the live test on Parakeet the dictation key never reaches
+        Whisper - keeping it in the graphics card is 3-4 GB for nothing.
+        ("Aussprache anlernen" loads it by itself when it is needed.)"""
+        return (self._stream_wanted()
+                and self._stream_engine_name() == "parakeet")
+
+    def release_unused_models(self) -> None:
+        """Let go of what the current settings no longer use: Whisper while
+        the live test runs on Parakeet, Canary while it is switched off."""
+        if self._whisper_idle() and self._local_model is not None:
+            _log.info("whisper released - the live test uses Parakeet")
+            self.unload_model()
+        if self._canary is not None and not self._canary_wanted():
+            _log.info("canary released - switched off")
+            self._canary.stop()
+            self._canary = None
 
     def preload_stream_engine(self) -> None:
         """Get the live recogniser ready in the background, so the first
