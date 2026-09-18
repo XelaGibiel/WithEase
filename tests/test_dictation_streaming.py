@@ -742,3 +742,116 @@ def test_the_live_microphone_feeds_the_level_bar(module):
     finally:
         bus.unsubscribe("dictation.level", listen)
     assert levels and levels[-1] > 0.4
+
+
+# -- marked words, lost sentences, loading -------------------------------------------------
+
+def _select(win, start, end):
+    cur = win._edit.textCursor()
+    cur.setPosition(start)
+    cur.setPosition(end, cur.MoveMode.KeepAnchor)
+    win._edit.setTextCursor(cur)
+
+
+def test_a_marked_word_is_replaced_by_the_live_sentence(app, win):
+    win._edit.setPlainText("Ich habe den Nachricht heute gelesen.")
+    _select(win, 9, 22)                                   # "den Nachricht"
+    win._apply_stream("die", "Nachricht")
+    assert win.text() == "Ich habe die Nachricht heute gelesen."
+    win._apply_stream_final("Die Nachricht.", "auto", "auto")
+    assert win.text() == "Ich habe die Nachricht heute gelesen."
+
+
+def test_a_marked_word_stays_when_nothing_was_recognised(app, win):
+    win._edit.setPlainText("Ich habe den Brief gelesen.")
+    _select(win, 13, 18)                                  # "Brief"
+    win._apply_stream("", "hm")
+    win._apply_stream_final("", "auto", "auto")
+    assert win.text() == "Ich habe den Brief gelesen."
+
+
+def test_the_command_key_does_not_swallow_a_sentence_that_was_shown(app, win):
+    win._edit.setPlainText("Hallo")
+    _cursor_to_end(win)
+    win._apply_stream("das ist", "gut")
+    win._apply_stream_final("Das ist gut.", "command", "auto")
+    assert win.text() == "Hallo das ist gut."
+
+
+def test_while_the_correction_window_waits_nothing_is_written(app, win):
+    class _Dialog:
+        def __init__(self):
+            self.heard = []
+
+        def isVisible(self):
+            return True
+
+        def handle_voice(self, text):
+            self.heard.append(text)
+    dialog = _Dialog()
+    win._correction_dialog = dialog
+    win._edit.setPlainText("Hallo")
+    win._apply_stream("Brief", "")
+    assert win.text() == "Hallo"
+    win._apply_stream_final("Brief", "auto", "auto")
+    assert dialog.heard == ["Brief"] and win.text() == "Hallo"
+    win._correction_dialog = None
+
+
+def test_the_chip_says_loading_not_recognising(module, monkeypatch):
+    states = []
+    monkeypatch.setattr(module, "_set_state",
+                        lambda state, detail="": states.append((state, detail)))
+    monkeypatch.setattr(module, "_capture_target", lambda: None)
+    module._settings.update({"stream_enabled": True,
+                             "stream_engine": "parakeet"})
+
+    class _Slow:
+        def ready(self):
+            return False
+
+        def start(self):
+            raise RuntimeError("stop here")
+    module._parakeet = _Slow()
+    monkeypatch.setattr(module, "_error", lambda *a, **k: None)
+    module.start_stream()
+    assert states and states[0][0] == "loading"
+    assert "Parakeet" in states[0][1]
+
+
+def test_the_live_recogniser_is_preloaded_at_start(module, monkeypatch):
+    started = []
+
+    class _Engine:
+        def start(self):
+            started.append(True)
+    module._settings.update({"stream_enabled": True,
+                             "stream_engine": "parakeet"})
+    import parakeet
+    monkeypatch.setattr(parakeet, "available", lambda: True)
+    module._parakeet = _Engine()
+    import threading
+    monkeypatch.setattr(threading, "Thread",
+                        lambda target, **_k: type(
+                            "T", (), {"start": lambda self: target()})())
+    module.preload_stream_engine()
+    assert started == [True]
+
+
+def test_parakeet_starts_only_once(tmp_path, monkeypatch):
+    import threading
+    import parakeet
+    engine = parakeet.ParakeetEngine(str(tmp_path))
+    calls = []
+
+    def slow_start():
+        calls.append(1)
+        engine._ready = True
+        engine._proc = type("P", (), {"poll": lambda self: None})()
+    monkeypatch.setattr(engine, "_start", slow_start)
+    threads = [threading.Thread(target=engine.start) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert calls == [1]

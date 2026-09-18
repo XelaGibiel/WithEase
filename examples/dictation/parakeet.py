@@ -60,16 +60,30 @@ class ParakeetEngine:
         self._folder = folder or env_dir()
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
+        # start() may be called by the start-up preload and by a dictation
+        # at the same moment; only one worker may come of it.
+        self._start_lock = threading.Lock()
+        self._ready = False
         self._next_id = 0
         self.device = ""
 
     def alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
+    def ready(self) -> bool:
+        """Started AND the model is loaded."""
+        return self._ready and self.alive()
+
     def start(self) -> None:
-        """Start the worker and wait for the model.  Raises on failure."""
-        if self.alive():
-            return
+        """Start the worker and wait for the model.  Raises on failure.
+        A second caller waits for the first instead of starting another."""
+        with self._start_lock:
+            if self.ready():
+                return
+            self._start()
+
+    def _start(self) -> None:
+        self._ready = False
         if not self._folder:
             raise RuntimeError("Parakeet-Testumgebung nicht gefunden")
         worker = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -88,6 +102,7 @@ class ParakeetEngine:
             raise RuntimeError("Parakeet startet nicht: "
                                + str(ready.get("error", "keine Antwort")))
         self.device = str(ready.get("device", ""))
+        self._ready = True
         _log.info("parakeet worker ready on %s", self.device)
 
     def _read_line(self, timeout: float) -> dict:
@@ -110,7 +125,7 @@ class ParakeetEngine:
 
     def transcribe(self, pcm16: bytes, final: bool = False) -> str:
         with self._lock:
-            if not self.alive():
+            if not self.ready():
                 self.start()
             self._next_id += 1
             # Half a second of silence either side: without it a short word
@@ -128,6 +143,7 @@ class ParakeetEngine:
             return str(answer.get("text", ""))
 
     def stop(self) -> None:
+        self._ready = False
         proc, self._proc = self._proc, None
         if proc is not None:
             try:

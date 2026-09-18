@@ -3068,6 +3068,8 @@ class DictationSettingsWidget(QWidget):
         self._stream_engine.currentIndexChanged.connect(
             lambda i: self._save("stream_engine",
                                  self._stream_engine.itemData(i)))
+        self._stream_engine.currentIndexChanged.connect(
+            lambda _i: self._module.preload_stream_engine())
         rec.addRow(_t("stream.engine"), self._stream_engine)
         self._stream_pause = QDoubleSpinBox()
         self._stream_pause.setRange(1.0, 8.0)
@@ -4191,6 +4193,7 @@ class DictationSettingsWidget(QWidget):
     def _on_stream_toggled(self, on: bool) -> None:
         self._save("stream_enabled", bool(on))
         self._update_stream_rows()
+        self._module.preload_stream_engine()
 
     def _update_stream_rows(self) -> None:
         box = getattr(self, "_stream_cb", None)
@@ -4637,6 +4640,7 @@ class DictationModule(BaseModule):
             backend = "local"
         if self._settings.get("preload_model") and backend == "local":
             threading.Thread(target=self._preload_model, daemon=True).start()
+        self.preload_stream_engine()
         bus.publish("module.started", module_id=self.MODULE_ID)
 
     def stop(self) -> None:
@@ -5948,6 +5952,30 @@ class DictationModule(BaseModule):
     def _stream_engine_name(self) -> str:
         return self._settings.get("stream_engine", "whisper")
 
+    def preload_stream_engine(self) -> None:
+        """Get the live recogniser ready in the background, so the first
+        live dictation starts at once instead of waiting for the model.
+        Silent: nothing is shown unless someone is actually waiting."""
+        if not self._stream_wanted():
+            return
+
+        def run() -> None:
+            try:
+                if self._stream_engine_name() == "parakeet":
+                    import parakeet
+                    if not parakeet.available():
+                        return
+                    if self._parakeet is None:
+                        self._parakeet = parakeet.ParakeetEngine()
+                    self._parakeet.start()
+                elif self._local_in_process():
+                    self._ensure_model_loaded()
+                _log.info("live recogniser preloaded (%s)",
+                          self._stream_engine_name())
+            except Exception:
+                _log.warning("live recogniser preload failed", exc_info=True)
+        threading.Thread(target=run, daemon=True, name="live-preload").start()
+
     def start_stream(self) -> None:
         """Open the window, get the recogniser ready, open the microphone."""
         try:
@@ -5979,8 +6007,8 @@ class DictationModule(BaseModule):
                 if not parakeet.available():
                     raise ConfigError(_t("stream.engine.parakeet.missing"))
                 self._parakeet = parakeet.ParakeetEngine()
-            if not self._parakeet.alive():
-                self._set_state("transcribing",
+            if not self._parakeet.ready():
+                self._set_state("loading",
                                 _t("stream.loading", engine="Parakeet"))
                 self._parakeet.start()
             transcribe = self._stream_parakeet
@@ -6057,7 +6085,7 @@ class DictationModule(BaseModule):
             if parakeet.available():
                 if self._parakeet is None:
                     self._parakeet = parakeet.ParakeetEngine()
-                if not self._parakeet.alive():
+                if not self._parakeet.ready():
                     self._parakeet.start()
                 engines.append(
                     ("Parakeet", lambda pcm: self._stream_parakeet(pcm, True)))

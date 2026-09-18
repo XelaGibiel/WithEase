@@ -816,6 +816,9 @@ class DictationWindow(QWidget):
         # Where the last live sentence put its automatic full stop, so the
         # next one can take it back when it turns out to continue it.
         self._stream_stop: int | None = None
+        # The text a live sentence replaces ("markiere X" or a mouse
+        # selection), so the finished sentence can replace it properly.
+        self._stream_replacing: str | None = None
         self._prov_end: int | None = None
         self._last_final_end: int | None = None
         self._run_start: int | None = None     # start of the un-polished run
@@ -1290,11 +1293,18 @@ class DictationWindow(QWidget):
         settled = " ".join(settled.split())
         tail = " ".join(tail.split())
         combined = f"{settled} {tail}".strip()
-        if not combined:
+        if not combined or self._stream_goes_elsewhere():
             return
         plain = QTextCharFormat()
         run = self._stream_run_intact()
         if run is None:
+            cur = self._edit.textCursor()
+            if cur.hasSelection():
+                # A marked word is replaced, as in the normal dictation -
+                # the live text used to land behind it instead.
+                self._stream_replacing = cur.selectedText()
+                cur.removeSelectedText()
+                self._edit.setTextCursor(cur)
             start, end = self._begin_run_at_cursor(combined, plain)
         else:
             start, end, _written = run
@@ -1314,10 +1324,18 @@ class DictationWindow(QWidget):
             cur.setCharFormat(self._prov_format())
         self._stream_run = (start, end, self.text()[start:end])
 
+    def _stream_goes_elsewhere(self) -> bool:
+        """While the correction window waits for the replacement, or the
+        next word is being spelled, speech is not text for the document."""
+        return self._spell_mode or (
+            self._correction_dialog is not None
+            and self._correction_dialog.isVisible())
+
     def _apply_stream_final(self, text: str, mode: str,
                             marks: str = "auto") -> None:
         run = self._stream_run_intact()
         self._stream_run = None
+        replacing, self._stream_replacing = self._stream_replacing, None
         if run is not None:
             start, end, _written = run
             cur = self._edit.textCursor()
@@ -1325,12 +1343,25 @@ class DictationWindow(QWidget):
             cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
             cur.removeSelectedText()
             doc = self.text()
+            if replacing is not None:
+                # Put the marked text back and mark it again: the normal
+                # path then replaces it - or it simply stays when nothing
+                # was recognised.
+                cur.insertText(replacing)
+                if text.strip():
+                    cur.setPosition(start)
+                    cur.setPosition(start + len(replacing),
+                                    QTextCursor.MoveMode.KeepAnchor)
             # the separating space the live text brought along
-            if start > 0 and doc[start - 1:start] == " " and (
+            elif start > 0 and doc[start - 1:start] == " " and (
                     not text.strip() or start == len(doc)
                     or not doc[start:start + 1].strip()):
                 cur.deletePreviousChar()
             self._edit.setTextCursor(cur)
+        # The live text was on screen: what was seen must not vanish because
+        # the utterance was started with the command key and is no command.
+        if mode == "command":
+            mode = "auto"
         if text.strip():
             if marks == "auto":
                 text = self._continue_after_stop(text)
