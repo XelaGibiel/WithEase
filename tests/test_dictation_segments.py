@@ -293,3 +293,38 @@ def test_two_parts_become_one_sentence_in_the_window(app):
                           "einem Satz lasse, damit auch wirklich ein Punkt "
                           "gesetzt wird.")
     win.deleteLater()
+
+
+# -- spoken "Punkt" and "neue Zeile" inside a part ------------------------------
+
+@pytest.mark.parametrize("spoken, expected", [
+    ("Ich habe folgenden Fehler Punkt.", "Ich habe folgenden Fehler."),
+    ("Ich habe folgenden Fehler Punkt. Neue Zeile.",
+     "Ich habe folgenden Fehler.\n"),
+    ("Fehler Punkt, neue Zeile. Wenn mir kein Punkt gesetzt wurde.",
+     "Fehler.\nWenn mir kein Punkt gesetzt wurde."),
+    ("Erster Satz. Neuer Absatz. Zweiter Satz.",
+     "Erster Satz.\n\nZweiter Satz."),
+    ("Ich komme morgen Punkt", "Ich komme morgen."),
+    # the words stay words
+    ("Das bringt es auf den Punkt.", "Das bringt es auf den Punkt."),
+    ("Das ist ein guter Punkt.", "Das ist ein guter Punkt."),
+    ("Treffen um Punkt 12 Uhr.", "Treffen um Punkt 12 Uhr."),
+    ("Ich brauche eine neue Zeile in der Tabelle.",
+     "Ich brauche eine neue Zeile in der Tabelle."),
+])
+def test_spoken_marks_inside_a_part(spoken, expected):
+    import commands_de as cde
+    assert cde.apply_inline_punctuation(spoken) == expected
+
+
+def test_a_line_break_at_the_end_of_a_part_arrives(app):
+    import dictation_window as dw
+    win = dw.DictationWindow(on_insert=lambda text: True,
+                             on_copy=lambda text: None)
+    win._on_transcript("Ich habe folgenden Fehler Punkt. Neue Zeile.",
+                       "auto", [])
+    win._on_transcript("Wenn mir kein Punkt gesetzt wurde.", "auto", [])
+    assert win.text() == ("Ich habe folgenden Fehler.\n"
+                          "Wenn mir kein Punkt gesetzt wurde.")
+    win.deleteLater()

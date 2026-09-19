@@ -113,6 +113,66 @@ def _inline_replace(text: str, mapping: dict, left: str, right: str,
     return text
 
 
+# "Punkt" and "Komma" are words too ("auf den Punkt", "ein guter Punkt"),
+# so mid-sentence they stay.  At the END of a sentence - the last word, or
+# right before "neue Zeile" - they are what was meant: the mark.  Unless
+# they are clearly the noun: an article or preposition in front ("den
+# Punkt"), or one with an adjective in between ("ein guter Punkt").
+_DETERMINERS = frozenset(
+    "der die das den dem des ein eine einen einem eines einer kein keine "
+    "keinen keinem keines diesen dieser diesem dieses jeder jeden jedem "
+    "jedes welchen welcher meinen deinen seinen ihren unseren euren "
+    "am zum beim im vom auf in an bis um".split())
+
+_LINE_BREAKS = {"neue zeile": "\n", "neuer zeile": "\n",
+                "zeilenumbruch": "\n", "neuer absatz": "\n\n",
+                "neue absatz": "\n\n"}
+_BREAK_RE = "|".join(p.replace(" ", r"\s+") for p in
+                     sorted(_LINE_BREAKS, key=len, reverse=True))
+
+
+def _is_the_noun(before: str) -> bool:
+    words = re.findall(r"[\wäöüÄÖÜß]+", before)[-2:]
+    if not words:
+        return False
+    last = words[-1]
+    if last.lower() in _DETERMINERS:
+        return True
+    # "ein guter Punkt": a lowercase word with an article in front of it
+    return (len(words) == 2 and last.islower()
+            and words[0].lower() in _DETERMINERS)
+
+
+def _spoken_sentence_marks(text: str) -> str:
+    """"Fehler Punkt. Neue Zeile." -> "Fehler.\n" and friends."""
+    marks = {"punkt": ".", "komma": ","}
+    pattern = re.compile(
+        r"[ \t]*\b(Punkt|Komma)\b[ \t]*[.,]?(?=[ \t]*(?:$|\n|(?:"
+        + _BREAK_RE + r")\b))", re.IGNORECASE)
+
+    def put(m: re.Match) -> str:
+        if _is_the_noun(m.string[:m.start()]):
+            return m.group(0)
+        return marks[m.group(1).lower()]
+    return pattern.sub(put, text)
+
+
+def _spoken_line_breaks(text: str) -> str:
+    """"neue Zeile" / "neuer Absatz" inside dictated text, where a sentence
+    ends - not "eine neue Zeile in der Tabelle"."""
+    pattern = re.compile(
+        r"(^|[.!?,:;][ \t]*)[ \t]*\b(" + _BREAK_RE + r")\b[ \t]*[.,!]?[ \t]*",
+        re.IGNORECASE)
+
+    def put(m: re.Match) -> str:
+        kind = " ".join(m.group(2).lower().split())
+        lead = m.group(1).rstrip(" \t,")       # the comma went with the command
+        return lead + _LINE_BREAKS[kind]
+    text = pattern.sub(put, text)
+    # Whisper starts the next sentence in lower case after a comma
+    return re.sub(r"\n([a-zäöü])", lambda m: "\n" + m.group(1).upper(), text)
+
+
 def apply_inline_punctuation(text: str) -> str:
     """Turn spoken punctuation words inside dictated text into symbols.
 
@@ -131,6 +191,8 @@ def apply_inline_punctuation(text: str) -> str:
     # commas belong to the spoken word, not to the text, so they go with it.
     text = _inline_replace(text, _INLINE_OPEN, r"[ \t]*(?:[,;][ \t]*)?",
                            r"[\s.,;:]*", space_before=True)
+    text = _spoken_sentence_marks(text)
+    text = _spoken_line_breaks(text)
     return text
 
 # German number words → int (for "nimm zwei", "die letzten drei Wörter").

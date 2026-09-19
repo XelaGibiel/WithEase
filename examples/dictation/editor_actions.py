@@ -139,8 +139,10 @@ class Editor:
     def insert_dictation(self, text: str) -> ActionResult:
         """Insert recognised dictation text.  Replaces the current selection
         (this is how 'markiere X' → say replacement and 'korrigiere X' work)."""
-        text = text.strip()
-        if not text:
+        # Only spaces: a dictated "neue Zeile" at the end is a line break
+        # that has to arrive.
+        text = text.strip(" 	")
+        if not text.strip():
             return ActionResult("info", message="leer")
         cur = self.te.textCursor()
         was_correction = self._awaiting_correction
