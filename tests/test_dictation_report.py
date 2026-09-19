@@ -137,3 +137,11 @@ def test_the_compact_view_shows_only_the_flag(app):
     win.set_compact(False)
     assert win._report_btn.text().startswith("⚑ ")
     win.deleteLater()
+
+
+def test_the_model_row_goes_with_the_cloud(app, module):
+    page = module.get_settings_widget()
+    assert page._local_model.isVisibleTo(page)
+    page._backend.setCurrentIndex(page._backend.findData("cloud"))
+    assert not page._local_model.isVisibleTo(page)
+    page.deleteLater()

@@ -3122,6 +3122,7 @@ class DictationSettingsWidget(QWidget):
         # A one-off download of up to 1.5 GB is not something to discover by
         # hovering – it belongs next to the choice that triggers it.
         rec.addRow(_t("local_model"), model_row)
+        self._model_row = model_row           # the row is the layout
         self._local_model_note = _setting_note(_t("local.hint"))
         rec.addRow("", self._local_model_note)
         rec.addRow("", self._model_status)
@@ -4248,7 +4249,7 @@ class DictationSettingsWidget(QWidget):
             self._form_rec.setRowVisible(widget, cloud)
         # The model row's field is a layout (combo + "Jetzt laden"), so the
         # row is addressed through the combo; its note is its own row.
-        self._form_rec.setRowVisible(self._local_model, not cloud)
+        self._form_rec.setRowVisible(self._model_row, not cloud)
         self._form_rec.setRowVisible(self._local_model_note, not cloud)
         # The setup box stays visible for the whole local backend – so the
         # "Automatisch installieren" button is always reachable (also to set up
