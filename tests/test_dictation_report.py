@@ -116,11 +116,15 @@ def test_without_the_callback_there_is_no_button(app):
 
 def test_the_settings_show_where_errors_go(app, module, tmp_path):
     page = module.get_settings_widget()
-    assert not page._report_open.isEnabled()          # no folder yet
+    button = page._report_open
+    # the card around it is greyed out while the module is off - the
+    # button's own state is what counts here
+    card = button.parentWidget()
+    assert not button.isEnabledTo(card)               # no folder yet
     module._settings["report_dir"] = str(tmp_path)
     page._show_report_dir()
     assert page._report_dir.text() == str(tmp_path)
-    assert page._report_open.isEnabled()
+    assert button.isEnabledTo(card)
     page.deleteLater()
 
 
