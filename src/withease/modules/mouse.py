@@ -9,6 +9,8 @@ Features:
 - Click-Lock (hold left button without physical press)
 - Keyboard keys as left / right / double click
 - Screen zones: jump cursor to predefined screen regions via hotkey
+- Find the cursor again: after the mouse stood still for a while, the first
+  movement shows the highlight - unless the cursor is near the screen centre
 """
 from __future__ import annotations
 
@@ -89,6 +91,9 @@ class MouseModule(BaseModule):
         self._centering_stop = threading.Event()
         self._symbol_shown = False       # centering target currently displayed
         self._center_pos = (0, 0)        # where the cursor was centred to
+        # "Cursor wiederfinden": its own light polling thread
+        self._find_thread: threading.Thread | None = None
+        self._find_stop = threading.Event()
         self._original_mouse_speed: int | None = None
 
         action_manager.register(Action(
@@ -139,12 +144,15 @@ class MouseModule(BaseModule):
         self._kb_subscribed = True
 
         self._start_centering_loop()
+        self._start_find_loop()
         self._apply_direction_arrow()
         self._apply_cursor_spotlight()
         bus.publish("module.started", module_id=self.MODULE_ID)
 
     def stop(self) -> None:
         self._stop_centering_loop()
+        self._find_stop.set()
+        self._find_thread = None
 
         if self._mouse_listener:
             self._mouse_listener.stop()
@@ -590,6 +598,82 @@ class MouseModule(BaseModule):
                     color=color, radius=radius,
                     arrow=arrow, arrow_thickness=arrow_thickness,
                     duration_ms=duration_ms)
+
+    # -- finding the cursor again ------------------------------------------
+
+    # Less movement than this is a shaky hand or a nudged desk, not "I am
+    # looking for the pointer".
+    _FIND_MOVE_PX = 4
+
+    def _start_find_loop(self) -> None:
+        self._find_stop.set()
+        self._find_stop = threading.Event()
+        self._find_thread = threading.Thread(
+            target=self._find_loop, args=(self._find_stop,), daemon=True,
+            name="mouse-find-cursor")
+        self._find_thread.start()
+
+    def _find_wanted(self) -> bool:
+        return bool(self._enabled and self._settings.get("highlight_enabled")
+                    and self._settings.get("highlight_auto"))
+
+    def _find_loop(self, stop: threading.Event) -> None:
+        """Watch the pointer: the first movement after it stood still for
+        ``highlight_auto_delay`` seconds shows the highlight - where you are
+        about to look for it anyway.  Keyboard use does not count as "moved":
+        typing for a minute is exactly when the pointer gets lost."""
+        last_pos = self._cursor_pos()
+        still_since = time.monotonic()
+        while not stop.wait(0.05):
+            if not self._find_wanted():
+                last_pos, still_since = self._cursor_pos(), time.monotonic()
+                if stop.wait(0.2):
+                    break
+                continue
+            pos = self._cursor_pos()
+            if (abs(pos[0] - last_pos[0]) < self._FIND_MOVE_PX
+                    and abs(pos[1] - last_pos[1]) < self._FIND_MOVE_PX):
+                continue
+            now = time.monotonic()
+            delay = float(self._settings.get("highlight_auto_delay", 3.0))
+            if now - still_since >= delay and not self._near_centre(pos):
+                self._highlight_cursor()
+            last_pos, still_since = pos, now
+
+    def _near_centre(self, pos: tuple[int, int]) -> bool:
+        """Inside the free area in the middle of the pointer's screen?  Its
+        radius is a share of the screen height (``highlight_auto_free``, in
+        percent), so it means the same on every resolution."""
+        left, top, right, bottom = self._monitor_rect(pos)
+        cx, cy = (left + right) / 2, (top + bottom) / 2
+        radius = (bottom - top) * float(
+            self._settings.get("highlight_auto_free", 25)) / 100.0
+        return (pos[0] - cx) ** 2 + (pos[1] - cy) ** 2 <= radius ** 2
+
+    def _monitor_rect(self, pos: tuple[int, int]) -> tuple[int, int, int, int]:
+        """The screen the pointer is on (several monitors: that one)."""
+        if sys.platform == "win32":
+            try:
+                class _MONITORINFO(ctypes.Structure):
+                    _fields_ = [("cbSize", wintypes.DWORD),
+                                ("rcMonitor", wintypes.RECT),
+                                ("rcWork", wintypes.RECT),
+                                ("dwFlags", wintypes.DWORD)]
+                user32 = ctypes.windll.user32
+                user32.MonitorFromPoint.restype = wintypes.HMONITOR
+                monitor = user32.MonitorFromPoint(
+                    wintypes.POINT(int(pos[0]), int(pos[1])), 2)  # NEAREST
+                info = _MONITORINFO()
+                info.cbSize = ctypes.sizeof(info)
+                if monitor and user32.GetMonitorInfoW(
+                        monitor, ctypes.byref(info)):
+                    r = info.rcMonitor
+                    return (int(r.left), int(r.top), int(r.right),
+                            int(r.bottom))
+            except Exception:
+                pass
+        w, h = _screen_size()
+        return (0, 0, w, h)
 
     # ------------------------------------------------------------------
     # Click-Lock

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -266,6 +267,41 @@ class MouseSettingsWidget(QWidget):
         highlight_form.addRow(tr("module.mouse.highlight.hotkey"),
                               self._highlight_hotkey)
 
+        # Automatically: the first movement after the pointer stood still
+        self._highlight_auto_cb = QCheckBox(tr("module.mouse.highlight.auto"))
+        self._highlight_auto_cb.setChecked(
+            bool(self._settings.get("highlight_auto", False)))
+        self._highlight_auto_cb.toggled.connect(self._on_auto_toggled)
+        highlight_form.addRow("", checkbox_with_hint(
+            self._highlight_auto_cb, tr("module.mouse.highlight.auto.hint")))
+
+        self._highlight_auto_delay = QDoubleSpinBox()
+        self._highlight_auto_delay.setRange(1.0, 60.0)
+        self._highlight_auto_delay.setSingleStep(0.5)
+        self._highlight_auto_delay.setDecimals(1)
+        self._highlight_auto_delay.setSuffix(" s")
+        self._highlight_auto_delay.setValue(
+            float(self._settings.get("highlight_auto_delay", 3.0)))
+        self._highlight_auto_delay.valueChanged.connect(
+            lambda v: self._save("highlight_auto_delay", round(v, 1)))
+        highlight_form.addRow(
+            label_with_hint(tr("module.mouse.highlight.auto_delay"),
+                            tr("module.mouse.highlight.auto_delay.hint")),
+            self._highlight_auto_delay)
+
+        self._highlight_auto_free = ValueSlider(0, 50, suffix=" %")
+        self._highlight_auto_free.setValue(
+            int(self._settings.get("highlight_auto_free", 25)))
+        self._highlight_auto_free.setTickPosition(
+            QSlider.TickPosition.TicksBelow)
+        self._highlight_auto_free.setTickInterval(10)
+        self._highlight_auto_free.valueChanged.connect(
+            lambda v: self._save("highlight_auto_free", v))
+        highlight_form.addRow(
+            label_with_hint(tr("module.mouse.highlight.auto_free"),
+                            tr("module.mouse.highlight.auto_free.hint")),
+            self._highlight_auto_free)
+
         # Pulsing rings toggle
         self._highlight_rings_cb = QCheckBox(
             tr("module.mouse.highlight.rings"))
@@ -314,7 +350,6 @@ class MouseSettingsWidget(QWidget):
                               self._highlight_radius)
 
         # Pulse duration
-        from PySide6.QtWidgets import QDoubleSpinBox
         self._highlight_duration = QDoubleSpinBox()
         self._highlight_duration.setRange(0.5, 10.0)
         self._highlight_duration.setSingleStep(0.1)
@@ -443,6 +478,7 @@ class MouseSettingsWidget(QWidget):
         self._on_persistent_arrow_toggled(
             self._arrow_persistent_cb.isChecked())
         self._on_circle_toggled(self._circle_cb.isChecked())
+        self._on_auto_toggled(self._highlight_auto_cb.isChecked())
 
         # ── Keyboard as mouse buttons ────────────────────────────────
         self._kbclick_sec = CollapsibleSection(
@@ -594,6 +630,12 @@ class MouseSettingsWidget(QWidget):
         # Corner + size only make sense when the permanent arrow is on.
         self._highlight_form.setRowVisible(self._arrow_corner, enabled)
         self._highlight_form.setRowVisible(self._arrow_size, enabled)
+
+    def _on_auto_toggled(self, enabled: bool) -> None:
+        self._save("highlight_auto", enabled)
+        # how long still, and the free middle: only for the automatic mode
+        self._highlight_form.setRowVisible(self._highlight_auto_delay, enabled)
+        self._highlight_form.setRowVisible(self._highlight_auto_free, enabled)
 
     def _on_circle_toggled(self, enabled: bool) -> None:
         self._save("highlight_permanent_circle", enabled)
