@@ -326,6 +326,10 @@ def _m_correct(t: str) -> Command | None:
              "satz wiederholen", "letzten satz wiederholen",
              "letzten satz neu"):
         return Command("redo_dictation")
+    if t in ("streich das", "streiche das", "streich das weg",
+             "streiche das weg", "streichen", "weg damit", "streich es",
+             "streiche es"):
+        return Command("strike_last")
     if t in ("korrigiere das", "korrigier das", "korrigiere letztes"):
         return Command("correct_last")
     m = re.fullmatch(r"(?:korrigiere|korrigier) (.+)", t)
@@ -646,6 +650,9 @@ CHEAT_SHEET: list[tuple[str, list[tuple[str, str]]]] = [
     ("Löschen", [
         ("lösche <Wort>", "dieses Wort löschen"),
         ("lösche das", "Markierung oder zuletzt Eingefügtes löschen"),
+        ("streich das", "den zuletzt diktierten Abschnitt löschen, um ihn "
+                        "neu zu sprechen – mehrmals: Abschnitt für Abschnitt "
+                        "zurück"),
         ("lösche diesen Satz", "den Satz am Cursor löschen"),
         ("lösche den letzten Satz", "den letzten Satz im Text löschen"),
         ("alles löschen", "Fenster leeren"),

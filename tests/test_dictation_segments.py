@@ -328,3 +328,72 @@ def test_a_line_break_at_the_end_of_a_part_arrives(app):
     assert win.text() == ("Ich habe folgenden Fehler.\n"
                           "Wenn mir kein Punkt gesetzt wurde.")
     win.deleteLater()
+
+
+# -- "Streich das": take the last part back to speak it again ------------------
+
+def _window(app):
+    import dictation_window as dw
+    return dw.DictationWindow(on_insert=lambda text: True,
+                              on_copy=lambda text: None)
+
+
+def test_streich_das_removes_the_last_part(app):
+    win = _window(app)
+    win._on_transcript("Erster Satz.", "auto", [])
+    win._on_transcript("Der falsch erkannte Satz.", "auto", [])
+    win._on_transcript("Streich das.", "auto", [])
+    assert win.text() == "Erster Satz."
+    win._on_transcript("Der richtige Satz.", "auto", [])
+    assert win.text() == "Erster Satz. Der richtige Satz."
+    win.deleteLater()
+
+
+def test_said_again_it_goes_back_part_by_part(app):
+    win = _window(app)
+    for part in ("Eins.", "Zwei.", "Drei."):
+        win._on_transcript(part, "auto", [])
+    win._on_transcript("Streich das.", "auto", [])
+    win._on_transcript("Streiche das.", "auto", [])
+    assert win.text() == "Eins."
+    win._on_transcript("Weg damit.", "auto", [])
+    assert win.text() == ""
+    win._on_transcript("Streich das.", "auto", [])      # nothing left
+    assert win.text() == ""
+    win.deleteLater()
+
+
+def test_a_full_stop_taken_back_after_a_pause_returns(app):
+    win = _window(app)
+    win._on_transcript("Ich komme morgen.", "auto", [])
+    win._on_transcript("Weil es regnet.", "auto", [])
+    assert win.text() == "Ich komme morgen, weil es regnet."
+    win._on_transcript("Streich das.", "auto", [])
+    assert win.text() == "Ich komme morgen."
+    win.deleteLater()
+
+
+def test_a_part_edited_meanwhile_is_left_alone(app):
+    win = _window(app)
+    win._on_transcript("Hallo Welt.", "auto", [])
+    win._edit.setPlainText("Hallo schöne Welt.")      # edited by hand
+    win._on_transcript("Streich das.", "auto", [])
+    assert win.text() == "Hallo schöne Welt."
+    win.deleteLater()
+
+
+def test_a_part_dictated_into_the_middle_leaves_one_space(app):
+    import editor_actions as ea
+    from PySide6.QtWidgets import QPlainTextEdit
+    edit = QPlainTextEdit()
+    edit.setPlainText("Hallo Welt")
+    cursor = edit.textCursor()
+    cursor.setPosition(6)
+    edit.setTextCursor(cursor)
+    editor = ea.Editor(edit)
+    editor.insert_dictation("schöne")
+    assert edit.toPlainText() == "Hallo schöne Welt"
+    import commands_de as cde
+    editor.apply(cde.parse("streich das"))
+    assert edit.toPlainText() == "Hallo Welt"
+    edit.deleteLater()

@@ -104,6 +104,11 @@ class Editor:
         self.te = text_edit
         self._pending: dict | None = None      # deferred multi-match op
         self._last_insert: tuple[int, int] | None = None
+        # Every dictated run, newest last: (start, end, text, restore) -
+        # "streich das" takes them back one by one.  ``restore`` is what the
+        # run replaced (a marked word, a full stop taken back after a pause)
+        # and comes back with it.
+        self._runs: list[tuple[int, int, str, str]] = []
         self._awaiting_correction = False
         # (misheard, spoken) of the most recent selection-replacement, for the
         # error memory to learn from; cleared once read.
@@ -167,6 +172,7 @@ class Editor:
             if old and was_correction:
                 self.last_correction = (old, text)
         trailing = ""
+        replaced = cur.selectedText() if cur.hasSelection() else ""
         if not cur.hasSelection():
             # Spacing AND capitalisation from what stands before the cursor –
             # Whisper capitalises every utterance like its own sentence, so a
@@ -189,6 +195,7 @@ class Editor:
                 cut, text = joined
                 cur.setPosition(pos - cut)
                 cur.setPosition(pos, QTextCursor.MoveMode.KeepAnchor)
+                replaced = cur.selectedText()
                 cur.removeSelectedText()
             else:
                 text = join_dictation(doc[:pos], text, after)
@@ -205,6 +212,7 @@ class Editor:
         # The trailing space is NOT part of the run: "lösche das" must remove
         # the words, not the separator that belongs to the sentence.
         self._last_insert = (start, end)
+        self._runs = (self._runs + [(start, end, text, replaced)])[-20:]
         self.te.setTextCursor(cur)
         return ActionResult("ok")
 
@@ -469,6 +477,7 @@ class Editor:
     def _do_clear(self, _d):
         self.te.clear()
         self._last_insert = None
+        self._runs = []
         return ActionResult("ok")
 
     # -- punctuation / formatting --------------------------------------
@@ -524,6 +533,31 @@ class Editor:
 
     def _do_replace(self, d):
         return self._resolve("replace", d["from"], {"to": d["to"]})
+
+    def _do_strike_last(self, _d):
+        """"Streich das": the last dictated run goes, so it can be spoken
+        again - and what it replaced comes back.  Said again, the run
+        before goes too.  A run edited meanwhile is left alone."""
+        doc = self._text()
+        while self._runs:
+            start, end, text, restore = self._runs.pop()
+            if doc[start:end] != text:
+                break                   # edited since - not ours to delete
+            cur = self.te.textCursor()
+            cur.setPosition(start)
+            cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            cur.insertText(restore)
+            # the space that separated it from the text after it
+            doc = self._text()
+            pos = cur.position()
+            if (pos < len(doc) and doc[pos] == " "
+                    and (pos == 0 or doc[pos - 1] in " \n")):
+                cur.deleteChar()
+            self.te.setTextCursor(cur)
+            self._last_insert = None
+            return ActionResult("ok", message="gestrichen – sprich es neu")
+        self._runs = []
+        return ActionResult("info", message="nichts zu streichen")
 
     def _do_redo_dictation(self, _d):
         """Select the last dictated text so the next utterance re-records it
