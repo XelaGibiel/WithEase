@@ -146,7 +146,7 @@ class Editor:
         (this is how 'markiere X' → say replacement and 'korrigiere X' work)."""
         # Only spaces: a dictated "neue Zeile" at the end is a line break
         # that has to arrive.
-        text = text.strip(" 	")
+        text = text.strip(" \t")
         if not text.strip():
             return ActionResult("info", message="leer")
         cur = self.te.textCursor()
@@ -493,6 +493,7 @@ class Editor:
         char = d.get("char", "")
         glue = d.get("glue")
         cur = self.te.textCursor()
+        removed = ""
         if glue != "left":
             # closing punctuation: remove the space directly before the
             # cursor - and a mark the recogniser put there on its own
@@ -509,10 +510,17 @@ class Editor:
             if cut:
                 cur.setPosition(pos - cut)
                 cur.setPosition(pos, QTextCursor.MoveMode.KeepAnchor)
+                removed = cur.selectedText()
                 cur.removeSelectedText()
             elif pos > 0 and text[pos - 1] == " ":
+                removed = " "
                 cur.deletePreviousChar()
+        start = cur.position()
         cur.insertText(char)
+        # a spoken mark is a part of its own: "Streich das" takes it back
+        # and returns what it replaced
+        self._runs = (self._runs + [(start, cur.position(), char,
+                                     removed)])[-20:]
         self.te.setTextCursor(cur)
         return ActionResult("ok")
 

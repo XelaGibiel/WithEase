@@ -1740,7 +1740,10 @@ class DictationWindow(QWidget):
             self._report(text, _t("msg.as_text"))
             return
 
-        cmd = cde.parse(text)
+        # "mixed": the dictation key with commands - one-word commands only
+        # in their longer form
+        cmd = (cde.command_in_dictation(text) if mode == "mixed"
+               else cde.parse(text))
         if cmd is None:
             if mode == "command":
                 # Command key but nothing matched: do not dump text into buffer.

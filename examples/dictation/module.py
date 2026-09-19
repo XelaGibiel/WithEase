@@ -183,7 +183,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hotkey.command": "Befehls-Taste (optional)",
         "hotkey.command.hint": "Wenn gesetzt: Diese Taste ist nur für Befehle (Cursor, markiere …), die Diktier-Taste nur für Text. So werden Befehl und Diktat sauber getrennt.",
         "commands_in_dictation": "Befehle auch beim Diktieren erkennen",
-        "commands_in_dictation.hint": "Wie bei Dragon: Ein Befehl wie „Streich das“, „neue Zeile“ oder „einfügen“ wirkt auch mit der Diktier-Taste – wenn du ihn allein sagst, mit einer Pause davor und danach (bis der grüne Punkt leer ist). Mitten im Satz bleibt er Text. Die Befehlstaste funktioniert weiter wie bisher.",
+        "commands_in_dictation.hint": "Wie bei Dragon: Ein Befehl wie „Streich das“, „neue Zeile“ oder „einfügen“ wirkt auch mit der Diktier-Taste – wenn du ihn allein sagst, mit einer Pause davor und danach (bis der grüne Punkt leer ist). Mitten im Satz bleibt er Text. Befehle aus nur einem Wort gelten dabei in der längeren Form („Text kopieren“, „Text einfügen“, „Fenster schließen“), damit ein diktiertes Wort nie etwas auslöst; Satzzeichen wie „Fragezeichen“ und „rückgängig“ gehen auch allein. Die Befehlstaste funktioniert weiter wie bisher.",
         "mode": "Aufnahmemodus",
         "mode.hint": "Halten: Aufnahme läuft, solange die Taste gedrückt wird – sie endet von selbst.\nUmschalten: Einmal drücken startet, noch einmal beendet – besser, wenn längeres Halten schwerfällt.",
         "mode.toggle": "Umschalten",
@@ -509,7 +509,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hotkey.command": "Command key (optional)",
         "hotkey.command.hint": "When set: this key is for commands only (Cursor, select …) and the dictation key for text only – a clean split between command and dictation.",
         "commands_in_dictation": "Recognise commands while dictating too",
-        "commands_in_dictation.hint": "Like Dragon: a command such as 'Streich das', 'neue Zeile' or 'einfügen' also works with the dictation key - when you say it on its own, with a pause before and after (until the green dot is empty). Inside a sentence it stays text. The command key keeps working as before.",
+        "commands_in_dictation.hint": "Like Dragon: a command such as 'Streich das', 'neue Zeile' or 'einfügen' also works with the dictation key - when you say it on its own, with a pause before and after (until the green dot is empty). Inside a sentence it stays text. One-word commands count in their longer form there ('Text kopieren', 'Text einfügen', 'Fenster schließen'), so a dictated word never triggers anything; marks like 'Fragezeichen' and 'rückgängig' work alone too. The command key keeps working as before.",
         "mode": "Recording mode",
         "mode.hint": "Hold: recording runs for as long as the key is held – it stops by itself.\nToggle: press once to start, again to stop – better if holding a key for longer is difficult.",
         "mode.toggle": "Toggle",
@@ -2061,7 +2061,8 @@ def _write_error_report(folder: str, parts: list[dict], window_text: str,
             f.write(part["wav"])
         lines += [f"Teil {i} ({part['time']}, Taste: {part['mode']}) - {name}",
                   f"  erkannt:    {part['raw']}",
-                  f"  eingefügt:  {part['text']}"]
+                  f"  bearbeitet: {part['text']}",
+                  f"  im Fenster: {part.get('shown', part['text'])}"]
         if part.get("low"):
             lines.append(f"  unsicher:   {', '.join(part['low'])}")
         lines.append("")
@@ -5189,9 +5190,12 @@ class DictationModule(BaseModule):
             if combo == self._trigger:
                 # With a command key the dictation key is text only - unless
                 # commands are wanted in dictation too (said after a pause).
-                mode = ("text" if self._command_trigger
-                        and not self._settings.get("commands_in_dictation")
-                        else "auto")
+                if not self._command_trigger:
+                    mode = "auto"
+                elif self._settings.get("commands_in_dictation"):
+                    mode = "mixed"
+                else:
+                    mode = "text"
             elif self._command_trigger and combo == self._command_trigger:
                 mode = "command"
             else:
@@ -5850,6 +5854,13 @@ class DictationModule(BaseModule):
             return cmd is not None and cmd.kind == "report_error"
         parts = [dict(p) for p in self._recent_parts
                  if p["text"] is not None and not is_the_request(p)]
+        for part in parts:
+            # the window still turns spoken marks into signs ("Anführungs-
+            # striche unten" -> „) - show what really arrived there
+            cmd = cde.parse(part["text"]) if part["text"] else None
+            part["shown"] = (f"(Befehl: {cmd.kind})" if cmd is not None
+                             and part["mode"] != "text"
+                             else cde.apply_inline_punctuation(part["text"]))
         if not parts:
             answer(_t("report.nothing"))
             return

@@ -519,6 +519,10 @@ def join_dictation(previous: str, new_text: str,
         sep = ""
     else:
         sep = " "
+    # "\u201c" opens an English quote but CLOSES a German one („…“): after a
+    # German pair it is a closing mark, and the next word needs its space.
+    if last == "\u201c" and stripped.count("\u201e") >= stripped.count("\u201c"):
+        sep = " "
 
     if not starts_sentence and following.strip():
         # Mid-sentence insertion: the sentence continues after us, so the full

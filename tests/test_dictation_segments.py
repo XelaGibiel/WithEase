@@ -444,4 +444,65 @@ def test_the_dictation_key_takes_commands_only_when_wanted(module, monkeypatch):
     assert module._active_mode == "text"          # as before: text only
     module._settings["commands_in_dictation"] = True
     module._on_key_event(0x6B, 0, False, False, True)
-    assert module._active_mode == "auto"          # a command alone counts
+    assert module._active_mode == "mixed"         # a command alone counts
+
+
+# -- spaces and spoken commas (from a kept error report) --------------------------
+
+@pytest.mark.parametrize("parts, expected", [
+    (["Bei so Befehlen wie Anführungsstriche unten kopieren Anführungsstriche "
+      "oben.", "Macht zum Beispiel ein Dragon etwas anders."],
+     "Bei so Befehlen wie „kopieren“ Macht zum Beispiel ein Dragon etwas "
+     "anders."),
+    (["so etwas wie Anführungsstriche unten, Text kopieren, Anführungsstriche "
+      "oben.", "Oder so etwas wie"],
+     "so etwas wie „Text kopieren“ oder so etwas wie"),
+    (["einen Doppelte Wörter Befehl.", "Komma, damit es nicht vorkommt."],
+     "einen Doppelte Wörter Befehl, damit es nicht vorkommt."),
+    (["einen Doppelte Wörter Befehl, Komma, damit es nicht vorkommt."],
+     "einen Doppelte Wörter Befehl, damit es nicht vorkommt."),
+    (["Punkt 12 Uhr treffen wir uns."], "Punkt 12 Uhr treffen wir uns."),
+    (["Der Punkt, Komma, ist wichtig."], "Der Punkt, ist wichtig."),
+])
+def test_spaces_and_spoken_commas(app, parts, expected):
+    win = _window(app)
+    for part in parts:
+        win._on_transcript(part, "text", [])
+    assert win.text() == expected
+    win.deleteLater()
+
+
+# -- the dictation key with commands: one-word commands need their long form -------
+
+def test_a_single_word_stays_text_with_the_dictation_key(app):
+    import dictation_window as dw
+    copied = []
+    win = dw.DictationWindow(on_insert=lambda text: True,
+                             on_copy=copied.append)
+    win._on_transcript("Was soll ich tun?", "mixed", [])
+    win._on_transcript("Kopieren.", "mixed", [])
+    assert copied == [] and win.text().endswith("Kopieren.")
+    win._on_transcript("Text kopieren.", "mixed", [])
+    assert copied and "Text kopieren" not in win.text()
+    win.deleteLater()
+
+
+def test_marks_and_undo_work_alone_with_the_dictation_key(app):
+    win = _window(app)
+    win._on_transcript("Kommst du morgen.", "mixed", [])
+    win._on_transcript("Fragezeichen.", "mixed", [])
+    assert win.text() == "Kommst du morgen?"
+    win._on_transcript("Streich das.", "mixed", [])
+    assert win.text() == "Kommst du morgen."
+    win.deleteLater()
+
+
+def test_the_command_key_still_takes_one_word(app):
+    import dictation_window as dw
+    copied = []
+    win = dw.DictationWindow(on_insert=lambda text: True,
+                             on_copy=copied.append)
+    win._edit.setPlainText("Hallo")
+    win._on_transcript("Kopieren.", "command", [])
+    assert copied == ["Hallo"]
+    win.deleteLater()

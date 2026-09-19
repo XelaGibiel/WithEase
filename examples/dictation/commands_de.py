@@ -146,6 +146,16 @@ def _is_the_noun(before: str) -> bool:
 def _spoken_sentence_marks(text: str) -> str:
     """"Fehler Punkt. Neue Zeile." -> "Fehler.\n" and friends."""
     marks = {"punkt": ".", "komma": ","}
+    # Wrapped in the recogniser's own commas ("Befehl, Komma, damit") the
+    # word was spoken on its own - it is the mark.
+    text = re.sub(r"[ \t]*[,.][ \t]*\b(Komma|Punkt)\b[ \t]*[,.]",
+                  lambda m: marks[m.group(1).lower()], text,
+                  flags=re.IGNORECASE)
+    # At the very start of a part ("Komma, damit ..." after a pause) - but
+    # "Punkt 12 Uhr" is a time.
+    text = re.sub(r"^[ \t]*\b(Komma|Punkt)\b[ \t]*[,.]?(?![ \t]*\d)",
+                  lambda m: marks[m.group(1).lower()], text,
+                  flags=re.IGNORECASE)
     pattern = re.compile(
         r"[ \t]*\b(Punkt|Komma)\b[ \t]*[.,]?(?=[ \t]*(?:$|\n|(?:"
         + _BREAK_RE + r")\b))", re.IGNORECASE)
@@ -545,6 +555,25 @@ def _m_number_date(t: str) -> Command | None:
              "uhrzeit einfuegen", "wie spät ist es"):
         return Command("insert_time")
     return None
+
+
+# Said with the dictation key, a one-word command would fire on a dictated
+# word ("Kopieren." as the answer to a question).  There - like Dragon - only
+# the longer forms count ("Text kopieren", "Fenster schließen"); these single
+# words stay commands because nobody dictates them as text on their own.
+_SINGLE_WORDS_IN_DICTATION = frozenset(
+    list(PUNCT_WORDS) + ["zeilenumbruch", "rückgängig", "rueckgaengig"])
+
+
+def command_in_dictation(text: str) -> "Command | None":
+    """``parse`` for the dictation key with commands switched on."""
+    cmd = parse(text)
+    if cmd is None:
+        return None
+    words = normalise(text).split()
+    if len(words) == 1 and words[0] not in _SINGLE_WORDS_IN_DICTATION:
+        return None
+    return cmd
 
 
 def _m_help_history(t: str) -> Command | None:
