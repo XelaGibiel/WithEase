@@ -616,8 +616,12 @@ def fix_dates(text: str) -> str:
 
     Deliberately conservative: only a real month name triggers it, an
     impossible day is left untouched, and nothing else in the sentence is
-    changed.  Text that is already numeric ("20.08.2026") is not matched at
-    all, so running this twice is safe.
+    changed.  Running this twice is safe.
+
+    A date the recogniser already wrote in digits gets two-digit day and
+    month too: "6.10.2026" -> "06.10.2026".  Without a year only after a
+    word that introduces a date ("am 6.10."), so a chapter "6.10." stays;
+    a time ("6.10 Uhr") has no dot after the month and is never touched.
     """
     if not text:
         return text
@@ -643,4 +647,27 @@ def fix_dates(text: str) -> str:
             out = out[:-1]
         return out
 
-    return _DATE_RE.sub(repl, text)
+    return _pad_numeric_dates(_DATE_RE.sub(repl, text))
+
+
+_NUMERIC_DATE_RE = re.compile(
+    r"(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})(?![\d.])")
+_NUMERIC_DAY_RE = re.compile(
+    r"\b(am|vom|bis|zum|ab|seit|bis zum|den|dem)(\s+)(\d{1,2})\.(\d{1,2})\."
+    r"(?![\d])", re.IGNORECASE)
+
+
+def _pad_numeric_dates(text: str) -> str:
+    def full(m: re.Match) -> str:
+        day, month = int(m.group(1)), int(m.group(2))
+        if not (1 <= day <= 31 and 1 <= month <= 12):
+            return m.group(0)
+        return f"{day:02d}.{month:02d}.{m.group(3)}"
+
+    def short(m: re.Match) -> str:
+        day, month = int(m.group(3)), int(m.group(4))
+        if not (1 <= day <= 31 and 1 <= month <= 12):
+            return m.group(0)
+        return f"{m.group(1)}{m.group(2)}{day:02d}.{month:02d}."
+
+    return _NUMERIC_DAY_RE.sub(short, _NUMERIC_DATE_RE.sub(full, text))

@@ -676,3 +676,23 @@ def test_dictation_still_waits_for_the_whole_pause(module):
     time.sleep(0.3)
     assert module._window.got == []               # "Teil 1." is no command
     session.stop(timeout=5)
+
+
+# -- dates: day and month always two digits -------------------------------------------
+
+@pytest.mark.parametrize("said, written", [
+    ("Wohlmöglich 6.10.2026 gemeint", "Wohlmöglich 06.10.2026 gemeint"),
+    ("Am 6.10. treffen wir uns.", "Am 06.10. treffen wir uns."),
+    ("am 1.2.26 war es kalt", "am 01.02.26 war es kalt"),
+    ("Am 6. Oktober 2026.", "Am 06.10.2026."),
+    ("Termin 31.12.2026.", "Termin 31.12.2026."),
+    # no dates
+    ("um 6.10 Uhr", "um 6.10 Uhr"),
+    ("Kapitel 6.10. lesen", "Kapitel 6.10. lesen"),
+    ("Version 1.2.3", "Version 1.2.3"),
+    ("IP 10.1.1.20", "IP 10.1.1.20"),
+    ("der 32.1.2026", "der 32.1.2026"),
+])
+def test_dates_get_two_digit_day_and_month(said, written):
+    from postprocess import fix_dates
+    assert fix_dates(said) == written
