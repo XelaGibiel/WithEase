@@ -696,3 +696,29 @@ def test_dictation_still_waits_for_the_whole_pause(module):
 def test_dates_get_two_digit_day_and_month(said, written):
     from postprocess import fix_dates
     assert fix_dates(said) == written
+
+
+# -- a much quieter voice (the TV) is not you ---------------------------------------
+
+def test_a_much_quieter_voice_is_dropped_and_kept_for_reports(module, monkeypatch):
+    monkeypatch.setattr(module, "on_settings_changed", lambda: None)
+    module._settings["segment_pause"] = 1.0
+    module._window.pause_kind = lambda kind: None
+    session = module._make_segmenter()
+    session.start()
+    _live_feed(session, _tone(1.0, amplitude=8000) + _silence(1.3))  # you
+    _live_feed(session, _tone(1.0, amplitude=600) + _silence(1.3))   # the TV
+    module._segmenter = session
+    module._state = "recording"
+    module._stop_segmented()
+    assert module._window.got == [("Teil 1.", "auto")]
+    assert len(module.heard) == 1                 # the TV never reached Whisper
+    dropped = module._recent_parts[-1]
+    assert dropped["raw"] == "" and "leiser" in dropped["text"]
+    assert module._settings["voice_level"] > 3000  # your level, remembered
+
+
+def test_the_learned_level_is_used_from_the_first_part(module):
+    module._settings["voice_level"] = 7000
+    session = module._make_segmenter()
+    assert session.voice_level == 7000 and session.background_ratio == 0.25

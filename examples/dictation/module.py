@@ -225,6 +225,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "report.dir.hint": "Sagst du „Fehler merken“ oder klickst auf „⚑ Fehler merken“, werden die letzten Abschnitte mit ihrer Aufnahme, dem erkannten und dem eingefügten Text hier gespeichert – nur dann, nie von selbst. Bis dahin hält WithEase nur die letzten fünf Abschnitte im Arbeitsspeicher.",
         "report.pick.title": "Wo sollen gemerkte Fehler gespeichert werden?",
         "report.saved": "Fehler gemerkt: {n} Abschnitt(e) in {folder}",
+        "report.dropped_quiet": "(verworfen: viel leiser als deine Stimme)",
         "report.nothing": "Noch nichts zum Merken – diktiere zuerst etwas.",
         "report.cancelled": "Kein Ordner gewählt – nichts gespeichert.",
         "report.failed": "Konnte nicht gespeichert werden: {err}",
@@ -552,6 +553,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "report.dir.hint": "When you say 'Fehler merken' or click '⚑ Keep this error', the last parts are saved here with their recording, the recognised and the inserted text - only then, never by themselves. Until then WithEase keeps just the last five parts in memory.",
         "report.pick.title": "Where should kept errors be saved?",
         "report.saved": "Error kept: {n} part(s) in {folder}",
+        "report.dropped_quiet": "(dropped: much quieter than your voice)",
         "report.nothing": "Nothing to keep yet - dictate something first.",
         "report.cancelled": "No folder chosen - nothing saved.",
         "report.failed": "Could not be saved: {err}",
@@ -5586,6 +5588,7 @@ class DictationModule(BaseModule):
             if segmenter is not None:
                 segmenter.dropped = True    # what is still open is thrown away
                 segmenter.stop(timeout=0)
+                self._keep_voice_level(segmenter)
             self._set_state("idle")
 
     # Below this peak level a recording is quiet enough that Whisper starts
@@ -5774,7 +5777,14 @@ class DictationModule(BaseModule):
             # (just past the silence the part keeps, so the audio no longer
             # changes while you stay quiet)
             preview_after_s=0.7,
-            on_preview=lambda text: self._on_part_preview(session, text))
+            on_preview=lambda text: self._on_part_preview(session, text),
+            # A voice much quieter than yours - the TV, someone in the next
+            # room - is not you: a part under a quarter of your usual level
+            # is dropped.  Your level is learned from the parts that became
+            # text and kept across recordings (and restarts).
+            background_ratio=0.25,
+            voice_level=self._settings.get("voice_level") or None,
+            on_skipped=self._remember_skipped)
         session.dropped = False     # set when the recording is thrown away
         session.texts = 0           # parts that became text
         # the preview's result, reused when the part ends with the same audio:
@@ -5863,9 +5873,30 @@ class DictationModule(BaseModule):
             self._close_stream()
             self._set_state("transcribing")
         segmenter.stop(timeout=120)
+        self._keep_voice_level(segmenter)
         self._set_state("idle")
         if not segmenter.texts and not segmenter.dropped:
             self._say_nothing_heard("empty")
+
+    def _keep_voice_level(self, segmenter: Any) -> None:
+        """Remember how loud you speak, for the next recording."""
+        level = getattr(segmenter, "voice_level", None)
+        if level and round(level) != round(
+                float(self._settings.get("voice_level") or 0)):
+            self._settings["voice_level"] = round(float(level))
+            self.on_settings_changed()
+
+    def _remember_skipped(self, pcm: bytes, reason: str) -> None:
+        """A part dropped before recognition - for "Fehler merken" only."""
+        _log.info("dictation part dropped: %s", reason)
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(_SAMPLE_RATE)
+            w.writeframes(pcm)
+        self._remember_part(buf.getvalue(), "")
+        self._finish_part(_t("report.dropped_quiet"))
 
     # -- "Fehler merken" ------------------------------------------------------
 
@@ -5921,9 +5952,11 @@ class DictationModule(BaseModule):
         for part in parts:
             # the window still turns spoken marks into signs ("Anführungs-
             # striche unten" -> „) - show what really arrived there
-            cmd = cde.parse(part["text"]) if part["text"] else None
+            cmd = (cde.parse(part["text"])
+                   if part["text"] and part["raw"] else None)
             part["shown"] = (f"(Befehl: {cmd.kind})" if cmd is not None
                              and part["mode"] != "text"
+                             else part["text"] if not part["raw"]
                              else cde.apply_inline_punctuation(part["text"]))
         if not parts:
             answer(_t("report.nothing"))

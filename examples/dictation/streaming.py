@@ -291,7 +291,12 @@ class StreamSession:
                  on_silence: Callable[[float | None], None] | None = None,
                  preview_after_s: float = 0.0,
                  on_preview: Callable[[str], None] | None = None,
+                 on_skipped: Callable[[bytes, str], None] | None = None,
                  ) -> None:
+        # ``on_skipped(audio, reason)``: a part thrown away before the
+        # recogniser saw it ("quieter than your voice") - kept by the caller
+        # so a wrongly dropped part can still be looked at.
+        self._on_skipped = on_skipped
         self._transcribe = transcribe
         # ``on_silence(seconds left)`` while you are quiet in the middle of a
         # sentence: how long until the pause ends it.  None when that is
@@ -540,6 +545,8 @@ class StreamSession:
             return
         if background:
             self.last_finish = {**info, "result": "quieter than your voice"}
+            if self._on_skipped is not None:
+                self._on_skipped(audio, "quieter than your voice")
             self._on_final("")
             return
         text = self._run_engine(audio, final=True)
