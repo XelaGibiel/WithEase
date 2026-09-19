@@ -1756,6 +1756,16 @@ class DictationWindow(QWidget):
             return
 
         # Window-level commands handled here; editing commands go to the editor.
+        if cmd.kind == "paste":
+            from PySide6.QtWidgets import QApplication
+            clip = QApplication.clipboard().text()
+            if clip.strip():
+                self._editor.paste_text(clip)
+                self._forward_correction()
+                self._report(text, _t("msg.pasted"))
+            else:
+                self._report(text, _t("msg.clipboard_empty"))
+            return
         if cmd.kind == "insert":
             # sets its own hint (success closes or stays open, else fallback)
             self._do_insert(keep_open=bool(cmd.data.get("keep_open")))

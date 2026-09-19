@@ -129,7 +129,8 @@ def test_spell_and_literal():
 
 
 def test_window_commands():
-    assert k("einfügen") == "insert"
+    assert k("übernehmen") == "insert"
+    assert k("einfügen") == "paste"
     assert k("kopieren") == "copy"
     assert k("schließen") == "close"
 
@@ -173,7 +174,8 @@ def test_pick_with_filler_words():
 
 
 def test_command_aliases():
-    assert k("Text einfügen") == "insert"
+    assert k("Text einfügen") == "paste"
+    assert k("Text übernehmen") == "insert"
     assert k("Text kopieren") == "copy"
     assert k("Fenster zu") == "close"
     assert k("An zu Ende") == "goto_end"
@@ -212,7 +214,7 @@ def test_whisper_punctuation_is_ignored():
     assert k("Neuer Absatz.") == "paragraph"
     assert k("Lösche das.") == "delete"
     assert k("Alles löschen.") == "clear"
-    assert k("Einfügen.") == "insert"
+    assert k("Übernehmen.") == "insert"
     assert k("Kopieren.") == "copy"
     assert k("Rückgängig.") == "undo"
     assert cde.parse("Ersetze Haus, durch Garten.").data["to"] == "Garten"

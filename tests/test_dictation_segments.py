@@ -506,3 +506,32 @@ def test_the_command_key_still_takes_one_word(app):
     win._on_transcript("Kopieren.", "command", [])
     assert copied == ["Hallo"]
     win.deleteLater()
+
+
+# -- "Text einfügen" pastes, "Text übernehmen" hands over ---------------------------
+
+def test_text_einfuegen_pastes_the_clipboard(app):
+    from PySide6.QtWidgets import QApplication
+    import dictation_window as dw
+    inserted = []
+    win = dw.DictationWindow(on_insert=lambda text: inserted.append(text) or True,
+                             on_copy=lambda text: None)
+    QApplication.clipboard().setText("aus der Zwischenablage")
+    win._on_transcript("Hier kommt", "text", [])
+    win._on_transcript("Text einfügen.", "mixed", [])
+    assert win.text() == "Hier kommt aus der Zwischenablage"
+    assert inserted == []                          # nothing handed over
+    win._on_transcript("Streich das.", "mixed", [])
+    assert win.text() == "Hier kommt"
+    win.deleteLater()
+
+
+def test_text_uebernehmen_hands_the_text_over(app):
+    import dictation_window as dw
+    inserted = []
+    win = dw.DictationWindow(on_insert=lambda text: inserted.append(text) or True,
+                             on_copy=lambda text: None)
+    win._on_transcript("Ein Satz.", "text", [])
+    win._on_transcript("Text übernehmen.", "mixed", [])
+    assert inserted == ["Ein Satz."]
+    win.deleteLater()

@@ -293,14 +293,20 @@ def _m_window(t: str) -> Command | None:
     # Checked BEFORE the plain "einfügen": hand the text over but keep the
     # window open, so a long text can be dictated paragraph by paragraph
     # without reopening and re-picking the target every time.
-    if t in ("einfügen und weiter", "einfuegen und weiter",
-             "übernehmen und weiter", "uebernehmen und weiter",
-             "text einfügen und weiter", "text einfuegen und weiter",
-             "einfügen und offen lassen", "einfuegen und offen lassen"):
+    # Two words, two meanings - never mixed up: "übernehmen" hands the text
+    # to the target app, "einfügen" pastes the clipboard into this window.
+    if t in ("übernehmen und weiter", "uebernehmen und weiter",
+             "text übernehmen und weiter", "text uebernehmen und weiter",
+             "übernehmen und offen lassen", "uebernehmen und offen lassen"):
         return Command("insert", {"keep_open": True})
-    if t in ("einfügen", "einfuegen", "text einfügen", "text einfuegen",
-             "übernehmen", "uebernehmen", "fertig"):
+    if t in ("übernehmen", "uebernehmen", "text übernehmen",
+             "text uebernehmen", "fertig"):
         return Command("insert")
+    if t in ("einfügen", "einfuegen", "text einfügen", "text einfuegen",
+             "zwischenablage einfügen", "zwischenablage einfuegen",
+             "aus der zwischenablage einfügen",
+             "aus der zwischenablage einfuegen"):
+        return Command("paste")
     if t in ("kopieren", "text kopieren", "in die zwischenablage"):
         return Command("copy")
     if t in ("ziel wählen", "ziel waehlen", "ziel merken", "ziel-app wählen",
@@ -698,9 +704,10 @@ CHEAT_SHEET: list[tuple[str, list[tuple[str, str]]]] = [
         ("Verlauf 2", "das zweitletzte Diktat zurückholen (1 bis 9)"),
     ]),
     ("Fenster", [
-        ("einfügen", "Text in die Ziel-App einfügen und schließen"),
-        ("einfügen und weiter", "einfügen, Fenster bleibt für den nächsten "
-                                "Absatz offen"),
+        ("Text übernehmen", "Text in die Ziel-App übernehmen und schließen"),
+        ("Text übernehmen und weiter", "übernehmen, Fenster bleibt für den "
+                                       "nächsten Absatz offen"),
+        ("Text einfügen", "die Zwischenablage hier im Fenster einfügen"),
         ("kopieren", "Text in die Zwischenablage"),
         ("Ziel wählen", "andere Ziel-App bestimmen"),
         ("Fenster schließen", "Diktierfenster schließen"),

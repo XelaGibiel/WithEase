@@ -223,6 +223,28 @@ class Editor:
         self.te.setTextCursor(cur)
         return ActionResult("ok")
 
+    def paste_text(self, text: str) -> ActionResult:
+        """"Text einfügen": the clipboard as it is - no capitals changed, no
+        marks dropped - only a separating space where words would touch."""
+        cur = self.te.textCursor()
+        replaced = cur.selectedText() if cur.hasSelection() else ""
+        if cur.hasSelection():
+            cur.removeSelectedText()
+        doc = self._text()
+        pos = cur.position()
+        if pos > 0 and doc[pos - 1].isalnum() and text[:1].isalnum():
+            text = " " + text
+        start = pos
+        cur.insertText(text)
+        end = cur.position()
+        if doc[pos:pos + 1].isalnum() and text[-1:].isalnum():
+            cur.insertText(" ")
+            cur.setPosition(end)
+        self._last_insert = (start, end)
+        self._runs = (self._runs + [(start, end, text, replaced)])[-20:]
+        self.te.setTextCursor(cur)
+        return ActionResult("ok")
+
     # -- command dispatch ----------------------------------------------
 
     def apply(self, cmd) -> ActionResult:

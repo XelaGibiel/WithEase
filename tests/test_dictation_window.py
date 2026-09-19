@@ -63,7 +63,7 @@ def test_insert_command_inserts_then_closes_and_clears(app):
     win, inserted, _ = make(app)
     win.show()
     feed(app, win, "Guten Tag")
-    feed(app, win, "einfügen")
+    feed(app, win, "übernehmen")
     assert inserted == ["Guten Tag"]
     assert win.text() == ""              # buffer cleared
     assert not win.isVisible()           # window closed
@@ -351,7 +351,7 @@ def test_insert_fallback_keeps_window_open(app):
     win = dw.DictationWindow(on_insert=lambda _t: False)   # paste failed
     win.show()
     win.handle_transcript("Hallo", "text")
-    win.handle_transcript("einfügen", "command")
+    win.handle_transcript("übernehmen", "command")
     app.processEvents()
     assert win.isVisible()                    # stayed open
     assert win.text() == "Hallo"              # text kept
@@ -362,7 +362,7 @@ def test_insert_success_closes(app):
     win = dw.DictationWindow(on_insert=lambda _t: True)
     win.show()
     win.handle_transcript("Hallo", "text")
-    win.handle_transcript("einfügen", "command")
+    win.handle_transcript("übernehmen", "command")
     app.processEvents()
     assert not win.isVisible()
     assert win.text() == ""
@@ -609,7 +609,7 @@ def test_accepted_low_words_are_confirmed(app):
         on_confirm_words=lambda words: confirmed.extend(words))
     win.show()
     win.handle_transcript("Ich sehe ein Haus", "text", ["Haus"])
-    win.handle_transcript("einfügen", "command")
+    win.handle_transcript("übernehmen", "command")
     app.processEvents()
     assert "Haus" in confirmed        # flagged but accepted unchanged → learned
 
@@ -623,7 +623,7 @@ def test_corrected_low_word_is_not_confirmed(app):
     win.handle_transcript("Ich sehe ein Haus", "text", ["Haus"])
     # replace the flagged word before inserting
     win.handle_transcript("ersetze Haus durch Auto", "command")
-    win.handle_transcript("einfügen", "command")
+    win.handle_transcript("übernehmen", "command")
     app.processEvents()
     assert "Haus" not in confirmed    # it was changed, so not confirmed
 
