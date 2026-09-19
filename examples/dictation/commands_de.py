@@ -563,6 +563,9 @@ def _m_help_history(t: str) -> Command | None:
     if t in ("verlauf", "verlauf zeigen", "zeig den verlauf",
              "zeige den verlauf"):
         return Command("history_show")
+    if t in ("fehler merken", "fehler merke", "merk dir den fehler",
+             "merke dir den fehler", "fehler speichern", "fehler notieren"):
+        return Command("report_error")
     if t in ("kompakte ansicht", "kompakt", "kompaktansicht",
              "kleine ansicht", "fenster kompakt", "fenster verkleinern"):
         return Command("view_compact")
@@ -667,6 +670,8 @@ CHEAT_SHEET: list[tuple[str, list[tuple[str, str]]]] = [
         ("Fenster schließen", "Diktierfenster schließen"),
         ("kompakte Ansicht · volle Ansicht",
          "nur das Nötigste zeigen oder alle Knöpfe"),
+        ("Fehler merken", "die letzten Abschnitte samt Aufnahme für die "
+                          "Fehlersuche speichern"),
     ]),
 ]
 

@@ -835,6 +835,7 @@ class DictationWindow(QWidget):
     _ai_problem_sig = Signal(str, str)         # AI failed: kind, detail
     _take_sel_sig = Signal(str)                # selection taken from the target
     _pause_sig = Signal(float, float)          # pause: seconds left, whole pause
+    _report_sig = Signal(str, bool)            # "Fehler merken": message, saved
 
     def __init__(self, on_insert: Callable[[str], None] | None = None,
                  on_copy: Callable[[str], None] | None = None,
@@ -857,6 +858,7 @@ class DictationWindow(QWidget):
                  compact_geometry: list | None = None,
                  on_compact_changed: Callable[[bool], None] | None = None,
                  on_finish_listening: Callable[[bool], None] | None = None,
+                 on_report_error: Callable[[str], None] | None = None,
                  on_compact_geometry_changed: Callable[[list], None]
                  | None = None,
                  ai_visible: bool = True,
@@ -895,6 +897,8 @@ class DictationWindow(QWidget):
         # Insert / copy / close while the microphone still runs: finish (or
         # drop) what is being said first, then do it.
         self._on_finish_listening = on_finish_listening
+        # "Fehler merken": the module saves the last parts with their audio
+        self._on_report_error = on_report_error
         self._after_listening: Callable[[], None] | None = None
         self._drop_listening = False
         self._cur_state = "idle"
@@ -950,6 +954,11 @@ class DictationWindow(QWidget):
         self._status.setStyleSheet("font-weight: bold; font-size: larger;")
         top.addWidget(self._status, 0, Qt.AlignmentFlag.AlignCenter)
         top.addStretch(1)
+        self._report_btn = QPushButton(_t("btn.report"))
+        self._report_btn.setToolTip(_wrap_tip(_t("tip.report")))
+        self._report_btn.clicked.connect(self._do_report_error)
+        self._report_btn.setVisible(on_report_error is not None)
+        top.addWidget(self._report_btn, 0, Qt.AlignmentFlag.AlignRight)
         self._history_btn = QPushButton()
         self._history_btn.setToolTip(_wrap_tip(_t("tip.history")))
         self._history_btn.clicked.connect(self._toggle_history)
@@ -1167,6 +1176,7 @@ class DictationWindow(QWidget):
         self._edit.textChanged.connect(self._hide_problem_chip)
         self._take_sel_sig.connect(self._apply_take_selected)
         self._pause_sig.connect(self._apply_pause)
+        self._report_sig.connect(self._apply_report_done)
         self._partial_sig.connect(self._apply_partial)
         self._final_sig.connect(self._apply_final)
         self._polish_sig.connect(self._apply_polish)
@@ -1764,6 +1774,9 @@ class DictationWindow(QWidget):
             self._show_cheatsheet()
             self._report(text, _t("msg.cheatsheet"))
             return
+        if cmd.kind == "report_error":
+            self._do_report_error()
+            return
         if cmd.kind == "history_show":
             if self._compact:
                 # the history only exists in the full view
@@ -2060,6 +2073,15 @@ class DictationWindow(QWidget):
                                   else _t("win.compact"))
         self._compact_btn.setToolTip(_wrap_tip(
             _t("tip.full") if self._compact else _t("tip.compact")))
+        self._report_btn.setText(self._report_label())
+        # just the flag, as narrow as it is - the status line needs the room
+        self._report_btn.setStyleSheet("" if full else "min-width: 0px;")
+        if full:
+            self._report_btn.setMinimumWidth(0)
+            self._report_btn.setMaximumWidth(16777215)
+        else:
+            self._report_btn.setFixedWidth(
+                self._report_btn.fontMetrics().horizontalAdvance("⚑✓") + 20)
         self._history_btn.setVisible(full)
         self._history_panel.setVisible(full and self._history_shown)
         if full:
@@ -2385,6 +2407,30 @@ class DictationWindow(QWidget):
         # Fired on any dialog close (incl. window X / Escape) so routing resumes.
         if self._correction_dialog is dlg:
             self._correction_dialog = None
+
+    def _do_report_error(self) -> None:
+        if self._on_report_error is not None:
+            self._on_report_error(self.text())
+
+    def report_done(self, message: str, saved: bool) -> None:
+        """What became of "Fehler merken" (thread-safe)."""
+        self._report_sig.emit(message or "", bool(saved))
+
+    def _apply_report_done(self, message: str, saved: bool) -> None:
+        self._set_hint(message)
+        if saved:
+            # the button itself answers - the hint line is hidden in the
+            # compact view
+            self._report_btn.setText(self._report_label(done=True))
+            # tied to the button: gone with the window, the timer is too
+            QTimer.singleShot(
+                2500, self._report_btn,
+                lambda: self._report_btn.setText(self._report_label()))
+
+    def _report_label(self, done: bool = False) -> str:
+        """The compact view has room for the flag only."""
+        text = _t("btn.report.done" if done else "btn.report")
+        return text.split(" ", 1)[0] if self._compact else text
 
     def _set_hint(self, msg: str) -> None:
         self._hint.setText(msg or "")

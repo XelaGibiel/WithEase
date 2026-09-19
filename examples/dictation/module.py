@@ -216,6 +216,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "segment": "Bei einer Sprechpause schon umwandeln",
         "segment.hint": "Das Mikrofon bleibt an: Machst du eine Pause, wird das bisher Gesagte schon umgewandelt und erscheint im Fenster, während du weitersprichst. Du musst nicht nach jedem Satz „Beenden“ drücken. Gilt nur für das Diktierfenster.",
         "segment.pause": "Pause bis zum Umwandeln",
+        "report.dir": "Gemerkte Fehler",
+        "report.dir.none": "noch kein Ordner gewählt",
+        "report.dir.pick": "Ordner wählen …",
+        "report.dir.open": "Öffnen",
+        "report.dir.hint": "Sagst du „Fehler merken“ oder klickst auf „⚑ Fehler merken“, werden die letzten Abschnitte mit ihrer Aufnahme, dem erkannten und dem eingefügten Text hier gespeichert – nur dann, nie von selbst. Bis dahin hält WithEase nur die letzten fünf Abschnitte im Arbeitsspeicher.",
+        "report.pick.title": "Wo sollen gemerkte Fehler gespeichert werden?",
+        "report.saved": "Fehler gemerkt: {n} Abschnitt(e) in {folder}",
+        "report.nothing": "Noch nichts zum Merken – diktiere zuerst etwas.",
+        "report.cancelled": "Kein Ordner gewählt – nichts gespeichert.",
+        "report.failed": "Konnte nicht gespeichert werden: {err}",
         "segment.pause.hint": "So lange musst du schweigen, damit das Gesagte umgewandelt wird. Kürzere Pausen sind Denkpausen und bleiben im selben Abschnitt.",
         "pause_dot": "Pause am Textende anzeigen",
         "pause_dot.hint": "Sobald du still bist, erscheint im Diktierfenster direkt hinter dem Textcursor – dort, wo der neue Text hinkommt – ein pulsierender grüner Punkt, der wie eine Uhr abläuft: Ist er leer, wird das Gesagte umgewandelt. Sprichst du weiter, verschwindet er.",
@@ -530,6 +540,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "segment": "Convert as soon as you pause",
         "segment.hint": "The microphone stays on: when you pause, what you said so far is converted and appears in the window while you keep talking. No need to press stop after every sentence. Dictation window only.",
         "segment.pause": "Pause before converting",
+        "report.dir": "Kept errors",
+        "report.dir.none": "no folder chosen yet",
+        "report.dir.pick": "Choose folder …",
+        "report.dir.open": "Open",
+        "report.dir.hint": "When you say 'Fehler merken' or click '⚑ Keep this error', the last parts are saved here with their recording, the recognised and the inserted text - only then, never by themselves. Until then WithEase keeps just the last five parts in memory.",
+        "report.pick.title": "Where should kept errors be saved?",
+        "report.saved": "Error kept: {n} part(s) in {folder}",
+        "report.nothing": "Nothing to keep yet - dictate something first.",
+        "report.cancelled": "No folder chosen - nothing saved.",
+        "report.failed": "Could not be saved: {err}",
         "segment.pause.hint": "How long you have to be silent for what you said to be converted. Shorter pauses are thinking pauses and stay in the same part.",
         "pause_dot": "Show the pause at the end of the text",
         "pause_dot.hint": "As soon as you are quiet, a pulsing green dot appears in the dictation window right after the text cursor - where the new text will go - and runs out like a clock: when it is empty, what you said is converted. Speak again and it disappears.",
@@ -2019,6 +2039,43 @@ class WhisperProc:
             pass
 
 
+def _write_error_report(folder: str, parts: list[dict], window_text: str,
+                        settings: dict) -> str:
+    """One folder per report: every part as a WAV, and what was recognised
+    and inserted - as text to read and as JSON to process.  Returns the
+    report's folder."""
+    import datetime
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    target = os.path.join(folder, stamp)
+    os.makedirs(target, exist_ok=True)
+    lines = [f"Gemerkter Fehler vom {stamp}", "",
+             "Die Abschnitte vor „Fehler merken“, der letzte zuletzt.", ""]
+    listed = []
+    for i, part in enumerate(parts, 1):
+        name = f"teil-{i}.wav"
+        with open(os.path.join(target, name), "wb") as f:
+            f.write(part["wav"])
+        lines += [f"Teil {i} ({part['time']}, Taste: {part['mode']}) - {name}",
+                  f"  erkannt:    {part['raw']}",
+                  f"  eingefügt:  {part['text']}"]
+        if part.get("low"):
+            lines.append(f"  unsicher:   {', '.join(part['low'])}")
+        lines.append("")
+        listed.append({k: v for k, v in part.items() if k != "wav"}
+                      | {"file": name})
+    lines += ["Text im Diktierfenster:", window_text or "(leer)", "",
+              "Einstellungen:"]
+    lines += [f"  {k}: {v}" for k, v in settings.items()]
+    with open(os.path.join(target, "bericht.txt"), "w",
+              encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    with open(os.path.join(target, "bericht.json"), "w",
+              encoding="utf-8") as f:
+        json.dump({"parts": listed, "window_text": window_text,
+                   "settings": settings}, f, ensure_ascii=False, indent=2)
+    return target
+
+
 # ---------------------------------------------------------------------------
 # Status chip (recording / transcribing / error)
 # ---------------------------------------------------------------------------
@@ -3100,6 +3157,22 @@ class DictationSettingsWidget(QWidget):
         rec.addRow("", self._pause_dot_cb)
         self._pause_dot_note = _setting_note(_t("pause_dot.hint"))
         rec.addRow("", self._pause_dot_note)
+        # where "Fehler merken" saves - never C: by accident: chosen once
+        report_row = QHBoxLayout()
+        report_row.setContentsMargins(0, 0, 0, 0)
+        self._report_dir = QLabel()
+        self._report_dir.setWordWrap(True)
+        report_row.addWidget(self._report_dir, 1)
+        pick = QPushButton(_t("report.dir.pick"))
+        pick.clicked.connect(self._on_pick_report_dir)
+        report_row.addWidget(pick)
+        self._report_open = QPushButton(_t("report.dir.open"))
+        self._report_open.clicked.connect(
+            lambda: self._module.open_report_dir())
+        report_row.addWidget(self._report_open)
+        rec.addRow(_t("report.dir"), report_row)
+        rec.addRow("", _setting_note(_t("report.dir.hint")))
+        self._show_report_dir()
 
         # Changing the model means the next dictation would silently download
         # it – say so, right where the choice was made.
@@ -4186,6 +4259,15 @@ class DictationSettingsWidget(QWidget):
         self._update_cloud_rows()
         self._update_segment_rows()
 
+    def _show_report_dir(self) -> None:
+        folder = self._settings.get("report_dir") or ""
+        self._report_dir.setText(folder or _t("report.dir.none"))
+        self._report_open.setEnabled(bool(folder))
+
+    def _on_pick_report_dir(self) -> None:
+        if self._module.choose_report_dir(self):
+            self._show_report_dir()
+
     def _update_segment_rows(self) -> None:
         segment = getattr(self, "_segment_cb", None)
         if segment is None:
@@ -4535,6 +4617,10 @@ class DictationModule(BaseModule):
         self._media_pause_thread: threading.Thread | None = None
         self._audio_chunks: list[bytes] = []
         self._segmenter: Any = None         # cuts a recording at pauses
+        # The last parts, kept in memory only, for "Fehler merken":
+        # {"time", "wav", "raw", "text", "mode"}.
+        import collections
+        self._recent_parts: collections.deque = collections.deque(maxlen=5)
         self._stream: Any = None
         self._record_started = 0.0
         self._max_timer: threading.Timer | None = None
@@ -4824,6 +4910,7 @@ class DictationModule(BaseModule):
                     compact_geometry=self._settings.get("win_geo_compact"),
                     on_compact_changed=self._save_compact,
                     on_finish_listening=self.finish_listening,
+                    on_report_error=self.report_error,
                     on_compact_geometry_changed=self._save_compact_geometry,
                     ai_visible=bool(
                         self._settings.get("ai_panel_visible", True)),
@@ -5568,7 +5655,9 @@ class DictationModule(BaseModule):
             return
         text = (text or "").strip()
         _log.info("dictation: %d characters recognised", len(text))
+        self._remember_part(wav, text)
         text = self._refine_transcript(text)
+        self._finish_part(text)
         self._set_state("idle")
         if self._capture_token:
             # One-shot capture (settings search): answer the requester and
@@ -5654,6 +5743,7 @@ class DictationModule(BaseModule):
         text = self.transcribe(buf.getvalue())
         _log.info("dictation part: %.2f s -> %d characters",
                   len(pcm) / (2.0 * _SAMPLE_RATE), len(text or ""))
+        self._remember_part(buf.getvalue(), text)
         return text
 
     def _on_segment_error(self, exc: Exception) -> None:
@@ -5666,6 +5756,7 @@ class DictationModule(BaseModule):
         if session.dropped:
             return
         text = self._refine_transcript((text or "").strip())
+        self._finish_part(text)
         if not text or self._window is None:
             return
         session.texts += 1
@@ -5690,6 +5781,82 @@ class DictationModule(BaseModule):
         self._set_state("idle")
         if not segmenter.texts and not segmenter.dropped:
             self._say_nothing_heard("empty")
+
+    # -- "Fehler merken" ------------------------------------------------------
+
+    def _remember_part(self, wav: bytes, raw: str) -> None:
+        """Keep a part in memory (only the last five) - nothing on disk."""
+        import datetime
+        self._recent_parts.append({
+            "time": datetime.datetime.now().isoformat(timespec="seconds"),
+            "wav": wav, "raw": raw or "", "text": None,
+            "mode": self._active_mode,
+            "low": list(self._last_low_words)})
+
+    def _finish_part(self, text: str) -> None:
+        """What the part became after the post-processing."""
+        if self._recent_parts and self._recent_parts[-1]["text"] is None:
+            self._recent_parts[-1]["text"] = text or ""
+
+    def choose_report_dir(self, parent: Any = None) -> str:
+        """Ask once where kept errors go.  Returns the folder, "" if none."""
+        from PySide6.QtWidgets import QFileDialog
+        start = self._settings.get("report_dir") or os.path.expanduser("~")
+        folder = QFileDialog.getExistingDirectory(
+            parent, _t("report.pick.title"), start)
+        if folder:
+            self._settings["report_dir"] = os.path.normpath(folder)
+            self.on_settings_changed()
+        return folder or ""
+
+    def open_report_dir(self) -> None:
+        folder = self._settings.get("report_dir")
+        if folder and os.path.isdir(folder):
+            os.startfile(folder)                    # noqa: S606 (Windows)
+
+    def report_error(self, window_text: str = "") -> None:
+        """"Fehler merken" (GUI thread): save the last parts with their
+        audio, the recognised and the inserted text, and the settings that
+        shaped them.  The folder is asked for once, the writing happens on
+        a worker thread."""
+        window = self._window
+        import commands_de as cde
+
+        def answer(message: str, saved: bool = False) -> None:
+            if window is not None:
+                window.report_done(message, saved)
+
+        # the utterance "Fehler merken" itself is no error
+        parts = [dict(p) for p in self._recent_parts
+                 if p["text"] is not None
+                 and cde.parse(p["text"] or p["raw"]) is None]
+        if not parts:
+            answer(_t("report.nothing"))
+            return
+        folder = self._settings.get("report_dir") or ""
+        if not folder:
+            folder = self.choose_report_dir(window)
+            if not folder:
+                answer(_t("report.cancelled"))
+                return
+        settings = {key: self._settings.get(key) for key in (
+            "backend", "local_model", "language", "segment_on_pause",
+            "segment_pause", "raw_recognition", "ai_cleanup",
+            "punctuation_ai", "numeric_dates", "hall_filter", "provider")}
+        settings["loaded_model"] = self.loaded_model()
+
+        def write() -> None:
+            try:
+                where = _write_error_report(folder, parts, window_text,
+                                            settings)
+                _log.info("error report kept: %d parts", len(parts))
+                answer(_t("report.saved", n=str(len(parts)), folder=where),
+                       True)
+            except Exception as exc:
+                _log.exception("could not keep the error report")
+                answer(_t("report.failed", err=str(exc)[:80]))
+        threading.Thread(target=write, daemon=True,
+                         name="error-report").start()
 
     def _say_nothing_heard(self, why: str) -> None:
         """Tell the user that nothing came of that recording, and why."""
