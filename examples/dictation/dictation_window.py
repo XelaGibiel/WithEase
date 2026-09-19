@@ -833,8 +833,6 @@ class DictationWindow(QWidget):
     _ai_result_sig = Signal(str)               # replace buffer with AI result
     _ai_msg_sig = Signal(str)                  # short status/error message
     _ai_problem_sig = Signal(str, str)         # AI failed: kind, detail
-    _stream_sig = Signal(str, str)             # live test: settled, tail
-    _stream_final_sig = Signal(str, str, str)  # sentence, mode, marks
     _take_sel_sig = Signal(str)                # selection taken from the target
     _pause_sig = Signal(float, float)          # pause: seconds left, whole pause
 
@@ -916,15 +914,6 @@ class DictationWindow(QWidget):
         self._correction_dialog: CorrectionDialog | None = None
         # Live-dictation state: a provisional (grey) region that firms up.
         self._prov_start: int | None = None
-        # Live dictation test: where the sentence being spoken stands in the
-        # document, and what was written there - (start, end, text).
-        self._stream_run: tuple[int, int, str] | None = None
-        # Where the last live sentence put its automatic full stop, so the
-        # next one can take it back when it turns out to continue it.
-        self._stream_stop: int | None = None
-        # The text a live sentence replaces ("markiere X" or a mouse
-        # selection), so the finished sentence can replace it properly.
-        self._stream_replacing: str | None = None
         self._prov_end: int | None = None
         self._last_final_end: int | None = None
         self._run_start: int | None = None     # start of the un-polished run
@@ -1175,8 +1164,6 @@ class DictationWindow(QWidget):
         self._ai_result_sig.connect(self._apply_ai_result)
         self._ai_msg_sig.connect(self._apply_ai_message)
         self._ai_problem_sig.connect(self._apply_ai_problem)
-        self._stream_sig.connect(self._apply_stream)
-        self._stream_final_sig.connect(self._apply_stream_final)
         self._edit.textChanged.connect(self._hide_problem_chip)
         self._take_sel_sig.connect(self._apply_take_selected)
         self._pause_sig.connect(self._apply_pause)
@@ -1418,176 +1405,6 @@ class DictationWindow(QWidget):
         if self._cur_state != "recording":
             left = -1.0
         self._pause_dot.set_pause(left, total)
-
-    def stream_update(self, settled: str, tail: str) -> None:
-        """Show the sentence being spoken: ``settled`` black, ``tail`` grey."""
-        self._stream_sig.emit(settled or "", tail or "")
-
-    def stream_final(self, text: str, mode: str = "auto",
-                     marks: str = "auto") -> None:
-        """The sentence is over: replace the live text with the finished one,
-        which goes the normal way (voice commands, joining, marks).
-        ``marks`` "auto" allows taking back the previous automatic stop."""
-        self._stream_final_sig.emit(text or "", mode or "auto",
-                                    marks or "auto")
-
-    def _stream_run_intact(self) -> tuple[int, int, str] | None:
-        run = self._stream_run
-        if run is None:
-            return None
-        start, end, written = run
-        if self.text()[start:end] != written:
-            # Edited in between (typed, clicked, undone): leave that alone and
-            # start the live text afresh at the cursor.
-            self._stream_run = None
-            return None
-        return run
-
-    def _apply_stream(self, settled: str, tail: str) -> None:
-        from postprocess import join_dictation
-        settled = " ".join(settled.split())
-        tail = " ".join(tail.split())
-        combined = f"{settled} {tail}".strip()
-        if not combined or self._stream_goes_elsewhere() or self._drop_listening:
-            return
-        plain = QTextCharFormat()
-        run = self._stream_run_intact()
-        if run is None:
-            cur = self._edit.textCursor()
-            if cur.hasSelection():
-                # A marked word is replaced, as in the normal dictation -
-                # the live text used to land behind it instead.
-                self._stream_replacing = cur.selectedText()
-                cur.removeSelectedText()
-                self._edit.setTextCursor(cur)
-            start, end = self._begin_run_at_cursor(combined, plain)
-        else:
-            start, end, _written = run
-            doc = self.text()
-            joined = join_dictation(doc[:start], combined, doc[end:]).lstrip(" ")
-            cur = self._edit.textCursor()
-            cur.setPosition(start)
-            cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
-            cur.insertText(joined, plain)
-            end = cur.position()
-            self._edit.setTextCursor(cur)
-        if tail:
-            grey_from = max(start, end - len(tail))
-            cur = QTextCursor(self._edit.document())
-            cur.setPosition(grey_from)
-            cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
-            cur.setCharFormat(self._prov_format())
-        self._stream_run = (start, end, self.text()[start:end])
-
-    def _stream_goes_elsewhere(self) -> bool:
-        """While the correction window waits for the replacement, or the
-        next word is being spelled, speech is not text for the document."""
-        return self._spell_mode or (
-            self._correction_dialog is not None
-            and self._correction_dialog.isVisible())
-
-    def _apply_stream_final(self, text: str, mode: str,
-                            marks: str = "auto") -> None:
-        if self._drop_listening:
-            return
-        run = self._stream_run_intact()
-        self._stream_run = None
-        replacing, self._stream_replacing = self._stream_replacing, None
-        if run is not None:
-            start, end, _written = run
-            cur = self._edit.textCursor()
-            cur.setPosition(start)
-            cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
-            cur.removeSelectedText()
-            doc = self.text()
-            if replacing is not None:
-                # Put the marked text back and mark it again: the normal
-                # path then replaces it - or it simply stays when nothing
-                # was recognised.
-                cur.insertText(replacing)
-                if text.strip():
-                    cur.setPosition(start)
-                    cur.setPosition(start + len(replacing),
-                                    QTextCursor.MoveMode.KeepAnchor)
-            # the separating space the live text brought along
-            elif start > 0 and doc[start - 1:start] == " " and (
-                    not text.strip() or start == len(doc)
-                    or not doc[start:start + 1].strip()):
-                cur.deletePreviousChar()
-            self._edit.setTextCursor(cur)
-        # The live text was on screen: what was seen must not vanish because
-        # the utterance was started with the command key and is no command.
-        if mode == "command":
-            mode = "auto"
-        if text.strip():
-            if marks == "auto":
-                text = self._continue_after_stop(text)
-            else:
-                self._stream_stop = None
-                text = self._attach_leading_mark(text)
-            if text.strip():
-                # A full stop you said yourself ("Punkt") is never taken back.
-                self._editor.join_after_pause = marks == "auto"
-                try:
-                    self._on_transcript(text, mode, [])
-                finally:
-                    self._editor.join_after_pause = True
-            self._remember_stop(text, marks)
-
-    def _continue_after_stop(self, text: str) -> str:
-        """Take back the automatic full stop of the previous live sentence
-        when this one continues it ("… Pausen." + "Und dann …")."""
-        import re as _re
-
-        import streaming
-        pos, self._stream_stop = self._stream_stop, None
-        if pos is None:
-            return text
-        doc = self.text()
-        cursor = self._edit.textCursor().position()
-        if not (0 <= pos < len(doc) and doc[pos] == "."
-                and pos < cursor and not doc[pos + 1:cursor].strip()):
-            return text                  # moved or edited meanwhile
-        m = _re.match(r"(\W*)(\w+)(.*)", text, _re.S)
-        if not m or not streaming.continues(m.group(2), m.group(3)):
-            return text
-        word = m.group(2).lower()
-        cur = QTextCursor(self._edit.document())
-        cur.setPosition(pos)
-        cur.setPosition(pos + 1, QTextCursor.MoveMode.KeepAnchor)
-        cur.insertText("" if word in streaming.NO_COMMA else ",")
-        return m.group(1) + word + m.group(3)
-
-    def _attach_leading_mark(self, text: str) -> str:
-        """A sentence that starts with a spoken mark ("Punkt, neuer Gedanke"
-        after a pause) puts the mark straight after the text before it - not
-        after a space."""
-        stripped = text.lstrip()
-        if not stripped[:1] or stripped[0] not in ".,!?":
-            return text
-        cur = self._edit.textCursor()
-        end = cur.position()
-        doc = self.text()
-        start = end
-        while start > 0 and doc[start - 1] == " ":
-            start -= 1
-        cur.setPosition(start)
-        cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
-        cur.insertText(stripped[0])
-        self._edit.setTextCursor(cur)
-        return stripped[1:].lstrip()
-
-    def _remember_stop(self, text: str, marks: str) -> None:
-        self._stream_stop = None
-        if marks != "auto" or not text.rstrip().endswith(".") \
-                or cde.parse(text) is not None:
-            return
-        doc = self.text()
-        pos = self._edit.textCursor().position()
-        while pos > 0 and doc[pos - 1] in " \n":
-            pos -= 1
-        if pos > 0 and doc[pos - 1] == ".":
-            self._stream_stop = pos - 1
 
     def live_partial(self, text: str) -> None:
         self._partial_sig.emit(text or "")
@@ -2181,7 +1998,6 @@ class DictationWindow(QWidget):
             # whatever it still delivers is not written anywhere.
             self._drop_listening = True
             self._after_listening = None
-            self._stream_run = None
             self._on_finish_listening(False)
         self._save_geometry()
         self._archive()

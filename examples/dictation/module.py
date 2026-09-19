@@ -213,33 +213,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "backend": "Erkennung",
         "backend.hint": "Lokal: Die Aufnahme verlässt diesen PC nie. Braucht einmalig einen Download und mehr Rechenleistung.\nCloud-Dienst: Schneller und genauer, dafür wird die Aufnahme an den Anbieter gesendet.",
         "backend.cloud": "Cloud-Dienst",
-        "stream": "Live-Diktat (Test)",
-        "stream.hint": "Der Text erscheint schon beim Sprechen: graue Wörter können sich noch ändern, schwarze stehen fest. Nach einer Sprechpause wird der Satz wie ein normales Diktat fertig gemacht (Wörterbuch, Kommas, Befehle). Die Diktiertaste startet und beendet das Live-Diktat. Nur im Diktierfenster.",
-        "stream.engine": "Erkenner (Live)",
-        "stream.engine.whisper": "Whisper (gewähltes Modell)",
-        "stream.engine.parakeet": "Parakeet (NVIDIA, Test)",
-        "stream.engine.parakeet.missing": "Parakeet (Testumgebung fehlt)",
-        "stream.pause": "Satzende nach Pause (Live)",
         "segment": "Bei einer Sprechpause schon umwandeln",
         "segment.hint": "Das Mikrofon bleibt an: Machst du eine Pause, wird das bisher Gesagte schon umgewandelt und erscheint im Fenster, während du weitersprichst. Du musst nicht nach jedem Satz „Beenden“ drücken. Gilt nur für das Diktierfenster.",
         "segment.pause": "Pause bis zum Umwandeln",
         "segment.pause.hint": "So lange musst du schweigen, damit das Gesagte umgewandelt wird. Kürzere Pausen sind Denkpausen und bleiben im selben Abschnitt.",
         "pause_dot": "Pause am Textende anzeigen",
         "pause_dot.hint": "Sobald du still bist, erscheint im Diktierfenster direkt hinter dem Textcursor – dort, wo der neue Text hinkommt – ein pulsierender grüner Punkt, der wie eine Uhr abläuft: Ist er leer, wird das Gesagte umgewandelt. Sprichst du weiter, verschwindet er.",
-        "stream.canary": "Satzende mit Canary prüfen (Sprache fest)",
-        "stream.canary.hint": "Parakeet wählt die Sprache selbst und liest ein einzelnes deutsches Wort manchmal als englisches. Canary bekommt die Sprache fest vorgegeben und schreibt den fertigen Satz; die grauen Wörter beim Sprechen bleiben beim schnellen Parakeet. Braucht etwa 4 GB mehr Grafikspeicher.",
-        "stream.canary.missing": "Canary ist in der Testumgebung nicht vorhanden – ohne Canary schreibt Parakeet auch den fertigen Satz.",
-        "stream.pause.hint": "Kürzere Pausen sind Denkpausen: Der Satz bleibt offen und bekommt keinen Punkt. Erst nach so langer Stille ist der Satz fertig.",
-        "stream.punct": "Satzzeichen (Live)",
-        "stream.punct.auto": "Automatisch",
-        "stream.punct.spoken": "Nur gesprochen („Punkt“, „Fragezeichen“, „neuer Satz“)",
-        "stream.punct.hint": "Automatisch: Punkte setzt der Erkenner; ein Punkt vor „und“, „dass“, „weil“ … nach einer Denkpause wird zurückgenommen. Nur gesprochen: Punkt, Frage- und Ausrufezeichen kommen nur, wenn du sie sagst – Kommas setzen weiter die Regeln.",
-        "stream.noise": "Nebengeräusche (Live)",
-        "stream.noise.normal": "Normal",
-        "stream.noise.strict": "Laute Umgebung – nur deutliche Sprache",
-        "stream.noise.hint": "Eine Spracherkennung entscheidet, ob gerade jemand spricht – Tastatur, Türen, Husten oder Musik starten keinen Satz. „Laute Umgebung“ verlangt deutlichere Sprache, bevor ein Satz beginnt.",
-        "stream.loading": "{engine} wird geladen …",
-        "stream.chip": "Live",
         "backend.cloud.hint": "Die Aufnahme wird an einen Anbieter geschickt (OpenRouter, OpenAI, Groq …) – den wählst du unten unter „Anbieter“.",
         "backend.local": "Lokal auf diesem PC",
         "backend.local.missing": "nicht installiert",
@@ -548,33 +527,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "backend": "Recognition",
         "backend.hint": "Local: the recording never leaves this PC. Needs a one-off download and more computing power.\nCloud service: faster and more accurate, but the recording is sent to the provider.",
         "backend.cloud": "Cloud service",
-        "stream": "Live dictation (test)",
-        "stream.hint": "Text appears while you speak: grey words may still change, black ones are settled. After a pause the sentence is finished like a normal dictation (dictionary, commas, commands). The dictation key starts and ends live dictation. Dictation window only.",
-        "stream.engine": "Recogniser (live)",
-        "stream.engine.whisper": "Whisper (chosen model)",
-        "stream.engine.parakeet": "Parakeet (NVIDIA, test)",
-        "stream.engine.parakeet.missing": "Parakeet (test environment missing)",
-        "stream.pause": "Sentence ends after pause (live)",
         "segment": "Convert as soon as you pause",
         "segment.hint": "The microphone stays on: when you pause, what you said so far is converted and appears in the window while you keep talking. No need to press stop after every sentence. Dictation window only.",
         "segment.pause": "Pause before converting",
         "segment.pause.hint": "How long you have to be silent for what you said to be converted. Shorter pauses are thinking pauses and stay in the same part.",
         "pause_dot": "Show the pause at the end of the text",
         "pause_dot.hint": "As soon as you are quiet, a pulsing green dot appears in the dictation window right after the text cursor - where the new text will go - and runs out like a clock: when it is empty, what you said is converted. Speak again and it disappears.",
-        "stream.canary": "Check the finished sentence with Canary (fixed language)",
-        "stream.canary.hint": "Parakeet picks the language itself and sometimes reads a single German word as English. Canary is given the language and writes the finished sentence; the grey words while speaking stay with the fast Parakeet. Needs about 4 GB more graphics memory.",
-        "stream.canary.missing": "Canary is not in the test environment - without it Parakeet writes the finished sentence too.",
-        "stream.pause.hint": "Shorter pauses are thinking pauses: the sentence stays open and gets no full stop. Only after this much silence is the sentence finished.",
-        "stream.punct": "Punctuation (live)",
-        "stream.punct.auto": "Automatic",
-        "stream.punct.spoken": "Spoken only ('Punkt', 'Fragezeichen', 'neuer Satz')",
-        "stream.punct.hint": "Automatic: the recogniser sets full stops; one before 'und', 'dass', 'weil' … after a thinking pause is taken back. Spoken only: full stops, question and exclamation marks only when you say them - commas still come from the rules.",
-        "stream.noise": "Background noise (live)",
-        "stream.noise.normal": "Normal",
-        "stream.noise.strict": "Noisy room – clear speech only",
-        "stream.noise.hint": "A speech detector decides whether someone is talking – keyboard, doors, coughing or music do not start a sentence. 'Noisy room' needs clearer speech before a sentence begins.",
-        "stream.loading": "Loading {engine} …",
-        "stream.chip": "Live",
         "backend.cloud.hint": "The recording is sent to a provider (OpenRouter, OpenAI, Groq …) – pick it below under “Provider”.",
         "backend.local": "Locally on this PC",
         "backend.local.missing": "not installed",
@@ -3117,7 +3075,7 @@ class DictationSettingsWidget(QWidget):
             bool(self._settings.get("segment_on_pause", True)))
         self._segment_cb.toggled.connect(
             lambda on: (self._save("segment_on_pause", bool(on)),
-                        self._update_stream_rows()))
+                        self._update_segment_rows()))
         _whole_row_toggle(self._segment_cb)
         rec.addRow("", self._segment_cb)
         self._segment_note = _setting_note(_t("segment.hint"))
@@ -3143,76 +3101,6 @@ class DictationSettingsWidget(QWidget):
         self._pause_dot_note = _setting_note(_t("pause_dot.hint"))
         rec.addRow("", self._pause_dot_note)
 
-        # Live dictation test - only for the local backend.
-        self._stream_cb = QCheckBox(_t("stream"))
-        self._stream_cb.setChecked(bool(self._settings.get("stream_enabled")))
-        self._stream_cb.toggled.connect(self._on_stream_toggled)
-        _whole_row_toggle(self._stream_cb)
-        rec.addRow("", self._stream_cb)
-        self._stream_note = _setting_note(_t("stream.hint"))
-        rec.addRow("", self._stream_note)
-        self._stream_engine = QComboBox()
-        import parakeet as _parakeet
-        self._stream_engine.addItem(_t("stream.engine.whisper"), "whisper")
-        self._stream_engine.addItem(
-            _t("stream.engine.parakeet") if _parakeet.available()
-            else _t("stream.engine.parakeet.missing"), "parakeet")
-        found = self._stream_engine.findData(
-            self._settings.get("stream_engine", "whisper"))
-        self._stream_engine.setCurrentIndex(max(0, found))
-        self._stream_engine.currentIndexChanged.connect(
-            lambda i: self._save("stream_engine",
-                                 self._stream_engine.itemData(i)))
-        self._stream_engine.currentIndexChanged.connect(
-            lambda _i: (self._module.release_unused_models(),
-                        self._module.preload_stream_engine()))
-        self._stream_engine.currentIndexChanged.connect(
-            lambda _i: self._update_stream_rows())
-        rec.addRow(_t("stream.engine"), self._stream_engine)
-        self._stream_canary = QCheckBox(_t("stream.canary"))
-        self._stream_canary.setChecked(
-            bool(self._settings.get("stream_canary", False)))
-        self._stream_canary.toggled.connect(self._on_canary_toggled)
-        _whole_row_toggle(self._stream_canary)
-        rec.addRow("", self._stream_canary)
-        self._stream_canary_note = _setting_note(
-            _t("stream.canary.hint") if _parakeet.canary_available()
-            else _t("stream.canary.missing"))
-        rec.addRow("", self._stream_canary_note)
-        self._stream_pause = QDoubleSpinBox()
-        self._stream_pause.setRange(1.0, 8.0)
-        self._stream_pause.setSingleStep(0.1)
-        self._stream_pause.setDecimals(1)
-        self._stream_pause.setSuffix(" s")
-        self._stream_pause.setValue(
-            float(self._settings.get("stream_end_pause", 2.5)))
-        self._stream_pause.valueChanged.connect(
-            lambda v: self._save("stream_end_pause", round(float(v), 1)))
-        rec.addRow(_t("stream.pause"), self._stream_pause)
-        self._stream_pause_note = _setting_note(_t("stream.pause.hint"))
-        rec.addRow("", self._stream_pause_note)
-        self._stream_punct = QComboBox()
-        self._stream_punct.addItem(_t("stream.punct.auto"), "auto")
-        self._stream_punct.addItem(_t("stream.punct.spoken"), "spoken")
-        self._stream_punct.setCurrentIndex(max(0, self._stream_punct.findData(
-            self._settings.get("stream_punct", "auto"))))
-        self._stream_punct.currentIndexChanged.connect(
-            lambda i: self._save("stream_punct",
-                                 self._stream_punct.itemData(i)))
-        rec.addRow(_t("stream.punct"), self._stream_punct)
-        self._stream_punct_note = _setting_note(_t("stream.punct.hint"))
-        rec.addRow("", self._stream_punct_note)
-        self._stream_noise = QComboBox()
-        self._stream_noise.addItem(_t("stream.noise.normal"), "normal")
-        self._stream_noise.addItem(_t("stream.noise.strict"), "strict")
-        self._stream_noise.setCurrentIndex(max(0, self._stream_noise.findData(
-            self._settings.get("stream_noise", "normal"))))
-        self._stream_noise.currentIndexChanged.connect(
-            lambda i: self._save("stream_noise",
-                                 self._stream_noise.itemData(i)))
-        rec.addRow(_t("stream.noise"), self._stream_noise)
-        self._stream_noise_note = _setting_note(_t("stream.noise.hint"))
-        rec.addRow("", self._stream_noise_note)
         # Changing the model means the next dictation would silently download
         # it – say so, right where the choice was made.
         self._local_model.currentIndexChanged.connect(
@@ -4296,49 +4184,17 @@ class DictationSettingsWidget(QWidget):
         if not cloud:
             self._update_install_note()
         self._update_cloud_rows()
-        self._update_stream_rows()
+        self._update_segment_rows()
 
-    def _on_stream_toggled(self, on: bool) -> None:
-        self._save("stream_enabled", bool(on))
-        self._update_stream_rows()
-        self._module.release_unused_models()
-        self._module.preload_stream_engine()
-
-    def _on_canary_toggled(self, on: bool) -> None:
-        self._save("stream_canary", bool(on))
-        self._module.release_unused_models()
-        self._module.preload_stream_engine()
-
-    def _update_stream_rows(self) -> None:
-        box = getattr(self, "_stream_cb", None)
-        if box is None:
-            return
-        local = self._backend.currentData() != "cloud"
-        self._form_rec.setRowVisible(box, local)
-        self._form_rec.setRowVisible(self._stream_note, local)
-        details = local and box.isChecked()
-        # the live test does its own sentence cutting
+    def _update_segment_rows(self) -> None:
         segment = getattr(self, "_segment_cb", None)
-        if segment is not None:
-            self._form_rec.setRowVisible(segment, not details)
-            self._form_rec.setRowVisible(self._segment_note, not details)
-            pause = not details and segment.isChecked()
-            self._form_rec.setRowVisible(self._segment_pause, pause)
-            self._form_rec.setRowVisible(self._segment_pause_note, pause)
-            # the live test counts down its sentence end the same way
-            dot = pause or details
-            self._form_rec.setRowVisible(self._pause_dot_cb, dot)
-            self._form_rec.setRowVisible(self._pause_dot_note, dot)
-        self._form_rec.setRowVisible(self._stream_engine, details)
-        self._form_rec.setRowVisible(self._stream_pause, details)
-        parakeet_on = details and self._stream_engine.currentData() == "parakeet"
-        self._form_rec.setRowVisible(self._stream_canary, parakeet_on)
-        self._form_rec.setRowVisible(self._stream_canary_note, parakeet_on)
-        self._form_rec.setRowVisible(self._stream_pause_note, details)
-        self._form_rec.setRowVisible(self._stream_punct, details)
-        self._form_rec.setRowVisible(self._stream_punct_note, details)
-        self._form_rec.setRowVisible(self._stream_noise, details)
-        self._form_rec.setRowVisible(self._stream_noise_note, details)
+        if segment is None:
+            return
+        pause = segment.isChecked()
+        self._form_rec.setRowVisible(self._segment_pause, pause)
+        self._form_rec.setRowVisible(self._segment_pause_note, pause)
+        self._form_rec.setRowVisible(self._pause_dot_cb, pause)
+        self._form_rec.setRowVisible(self._pause_dot_note, pause)
 
     def _update_cloud_rows(self) -> None:
         cloud = self._backend.currentData() == "cloud"
@@ -4691,13 +4547,6 @@ class DictationModule(BaseModule):
         self._asr_lock = threading.Lock()
         self._last_low_words: list[str] = []   # low-confidence words (heatmap)
         self._live_active = False              # Vosk live streaming active
-        # Live dictation test (streaming.py): the session, its microphone
-        # and the Parakeet worker, kept warm between sessions.
-        self._live_session: Any = None
-        self._live_mic: Any = None
-        self._live_starting = False
-        self._parakeet: Any = None
-        self._canary: Any = None               # Canary: language set, final pass
         self._vosk: Any = None
         self._live_stream: Any = None
         self._live_queue: Any = None
@@ -4769,10 +4618,8 @@ class DictationModule(BaseModule):
         backend = self._settings.get("backend", "local")
         if backend == "live":                       # safety net if not migrated
             backend = "local"
-        if (self._settings.get("preload_model") and backend == "local"
-                and not self._whisper_idle()):
+        if self._settings.get("preload_model") and backend == "local":
             threading.Thread(target=self._preload_model, daemon=True).start()
-        self.preload_stream_engine()
         bus.publish("module.started", module_id=self.MODULE_ID)
 
     def stop(self) -> None:
@@ -4782,14 +4629,6 @@ class DictationModule(BaseModule):
         self._abort_recording()
         if self._live_active:
             self.stop_live()
-        if self._live_session is not None:
-            self.stop_stream()
-        if self._parakeet is not None:
-            self._parakeet.stop()
-            self._parakeet = None
-        if self._canary is not None:
-            self._canary.stop()
-            self._canary = None
         self._whisper_proc.stop()       # shut down the out-of-process worker
         if self._whispercpp is not None:
             self._whispercpp.stop()
@@ -4832,9 +4671,7 @@ class DictationModule(BaseModule):
 
         Dropping the take stops the audio stream, so it happens on a thread of
         its own - exactly like the Escape key does."""
-        if self._live_session is not None:
-            threading.Thread(target=self.stop_stream, daemon=True).start()
-        elif self._state == "recording":
+        if self._state == "recording":
             threading.Thread(target=self._abort_recording, daemon=True).start()
 
     def _on_tray_tooltip(self, lines: list | None = None, **_: object) -> None:
@@ -5242,9 +5079,6 @@ class DictationModule(BaseModule):
             if vk == 0x1B and self._live_active:
                 threading.Thread(target=self.stop_live, daemon=True).start()
                 return True
-            if vk == 0x1B and self._live_session is not None:
-                threading.Thread(target=self.stop_stream, daemon=True).start()
-                return True
             if vk == 0x1B and self._state == "recording":
                 threading.Thread(target=self._abort_recording,
                                  daemon=True).start()
@@ -5258,17 +5092,6 @@ class DictationModule(BaseModule):
                 mode = "command"
             else:
                 return False
-            # Live dictation test: the key starts and ends the session.
-            if self._stream_wanted():
-                if self._live_session is not None:
-                    threading.Thread(target=self.stop_stream,
-                                     daemon=True).start()
-                elif self._state == "idle" and not self._live_starting:
-                    self._active_mode = mode
-                    self._live_starting = True
-                    threading.Thread(target=self.start_stream,
-                                     daemon=True).start()
-                return True
             # Live backend: the key toggles continuous streaming.
             if self._settings.get("backend") == "live":
                 if self._live_active:
@@ -6213,14 +6036,6 @@ class DictationModule(BaseModule):
 
     # -- live dictation (test) --------------------------------------------
 
-    def _stream_wanted(self) -> bool:
-        return (bool(self._settings.get("stream_enabled"))
-                and self._settings.get("backend", "local") == "local"
-                and self._window_mode())
-
-    def _stream_engine_name(self) -> str:
-        return self._settings.get("stream_engine", "whisper")
-
     def finish_listening(self, keep: bool = True) -> None:
         """The window wants to insert, copy or close while the microphone
         still runs.  ``keep``: finish what is being said and deliver it;
@@ -6229,11 +6044,7 @@ class DictationModule(BaseModule):
         def run() -> None:
             try:
                 deadline = time.monotonic() + 60
-                while self._live_starting and time.monotonic() < deadline:
-                    time.sleep(0.05)
-                if self._live_session is not None:
-                    self.stop_stream()
-                elif self._state == "recording":
+                if self._state == "recording":
                     if keep:
                         self._stop_and_transcribe()
                     else:
@@ -6249,122 +6060,6 @@ class DictationModule(BaseModule):
                     self._window.listening_done()
         threading.Thread(target=run, daemon=True,
                          name="finish-listening").start()
-
-    def _whisper_idle(self) -> bool:
-        """With the live test on Parakeet the dictation key never reaches
-        Whisper - keeping it in the graphics card is 3-4 GB for nothing.
-        ("Aussprache anlernen" loads it by itself when it is needed.)"""
-        return (self._stream_wanted()
-                and self._stream_engine_name() == "parakeet")
-
-    def release_unused_models(self) -> None:
-        """Let go of what the current settings no longer use: Whisper while
-        the live test runs on Parakeet, Canary while it is switched off."""
-        if self._whisper_idle() and self._local_model is not None:
-            _log.info("whisper released - the live test uses Parakeet")
-            self.unload_model()
-        if self._canary is not None and not self._canary_wanted():
-            _log.info("canary released - switched off")
-            self._canary.stop()
-            self._canary = None
-
-    def preload_stream_engine(self) -> None:
-        """Get the live recogniser ready in the background, so the first
-        live dictation starts at once instead of waiting for the model.
-        Silent: nothing is shown unless someone is actually waiting."""
-        if not self._stream_wanted():
-            return
-
-        def run() -> None:
-            try:
-                if self._stream_engine_name() == "parakeet":
-                    import parakeet
-                    if not parakeet.available():
-                        return
-                    if self._parakeet is None:
-                        self._parakeet = parakeet.ParakeetEngine()
-                    self._parakeet.start()
-                    if self._canary_wanted():
-                        self._ensure_canary()
-                elif self._local_in_process():
-                    self._ensure_model_loaded()
-                _log.info("live recogniser preloaded (%s)",
-                          self._stream_engine_name())
-            except Exception:
-                _log.warning("live recogniser preload failed", exc_info=True)
-        threading.Thread(target=run, daemon=True, name="live-preload").start()
-
-    def start_stream(self) -> None:
-        """Open the window, get the recogniser ready, open the microphone."""
-        try:
-            self._start_stream()
-        except Exception as exc:
-            _log.exception("live dictation could not start")
-            self._close_live_mic()
-            self._live_session = None
-            self._error(str(exc)[:120], fixable=isinstance(exc, ConfigError))
-        finally:
-            self._live_starting = False
-
-    def _start_stream(self) -> None:
-        import streaming
-        if self._state != "idle":
-            return
-        try:
-            import sounddevice as sd
-        except Exception:
-            raise ConfigError(_t("err.no_audio_lib"))
-        self._capture_target()
-        if self._window is not None:
-            self._window.request_open()
-
-        engine = self._stream_engine_name()
-        if engine == "parakeet":
-            import parakeet
-            if self._parakeet is None:
-                if not parakeet.available():
-                    raise ConfigError(_t("stream.engine.parakeet.missing"))
-                self._parakeet = parakeet.ParakeetEngine()
-            if not self._parakeet.ready():
-                self._set_state("loading",
-                                _t("stream.loading", engine="Parakeet"))
-                self._parakeet.start()
-            transcribe = self._stream_parakeet
-        else:
-            if not self._local_in_process():
-                raise ConfigError(_t("err.no_local"))
-            self._ensure_model_loaded(announce=True)
-            transcribe = self._stream_whisper
-
-        pause = max(1.0, float(self._settings.get("stream_end_pause", 2.5)))
-        session = streaming.StreamSession(
-            transcribe, self._on_stream_update, self._on_stream_final,
-            step_s=0.5 if engine == "whisper" else 0.3, pause_s=pause,
-            first_pass_s=0.0 if engine == "whisper" else 1.4,
-            detector=streaming.make_gate(
-                self._settings.get("stream_noise", "normal")),
-            # a voice this much quieter than yours is someone else
-            background_ratio=(0.45 if self._settings.get("stream_noise")
-                              == "strict" else 0.25),
-            voice_level=getattr(self, "_stream_voice_level", None),
-            # single words get the previous sentence as context - not with
-            # Canary, which invents words at the seam
-            short_s=0.0 if self._canary_wanted() else 1.5,
-            on_error=lambda exc: _log.warning("live pass failed: %s", exc),
-            on_silence=lambda left: self._publish_pause(left, pause))
-
-        def feed(block: bytes) -> None:
-            session.put(block)
-            self._publish_live_level(block)
-
-        self._live_mic, rate, channels = self._open_mic_16k(sd, feed)
-        self._live_session = session
-        self._stream_session_info = session
-        session.start()
-        self._stream_started = time.monotonic()
-        self._set_state("recording", _t("stream.chip"))
-        _log.info("live dictation started (%s, %d Hz, %d ch)",
-                  engine, rate, channels)
 
     def _open_mic_16k(self, sd: Any, feed: Callable[[bytes], None]):
         """Open the chosen microphone and hand 16 kHz mono int16 to ``feed``.
@@ -6395,30 +6090,11 @@ class DictationModule(BaseModule):
     # -- Aussprache anlernen ------------------------------------------------
 
     def pronunciation_engines(self) -> list[tuple[str, Callable[[bytes], str]]]:
-        """The local recognisers a word can be tried on, made ready.
+        """The local recogniser a word can be tried on, made ready.
 
-        Both, when both are there: the same word can go wrong differently in
-        the live test (Parakeet) and in normal dictation (Whisper).  Runs on
-        a worker thread - starting either can take a few seconds.  Never
-        downloads a model just for this."""
+        Runs on a worker thread - loading Whisper can take a few seconds.
+        Never downloads a model just for this."""
         engines: list[tuple[str, Callable[[bytes], str]]] = []
-        try:
-            import parakeet
-            if parakeet.available():
-                if self._parakeet is None:
-                    self._parakeet = parakeet.ParakeetEngine()
-                if not self._parakeet.ready():
-                    self._parakeet.start()
-                engines.append(("Parakeet", lambda pcm: (
-                    __import__("streaming").fix_short_english(
-                        self._parakeet.transcribe(pcm, True),
-                        self._local_language()))))
-                if self._canary_wanted():
-                    canary = self._ensure_canary()
-                    engines.append(("Canary", lambda pcm: canary.transcribe(
-                        pcm, True, language=self._local_language())))
-        except Exception:
-            _log.warning("parakeet not ready for pronunciation", exc_info=True)
         try:
             model = self._settings.get("local_model", "base")
             if (self._local_in_process() and not self._use_whispercpp()
@@ -6426,7 +6102,7 @@ class DictationModule(BaseModule):
                          or model_is_downloaded(model))):
                 self._ensure_model_loaded()
                 engines.append(
-                    ("Whisper", lambda pcm: self._stream_whisper(pcm, True)))
+                    ("Whisper", lambda pcm: self._whisper_pcm(pcm)))
         except Exception:
             _log.warning("whisper not ready for pronunciation", exc_info=True)
         return engines
@@ -6512,53 +6188,10 @@ class DictationModule(BaseModule):
                 have.add(variant.casefold())
         self._save_dictionary(entries)
 
-    def _publish_live_level(self, block: bytes) -> None:
-        """The level bar on the chip, the same way a normal recording feeds
-        it - seeing that the microphone hears you matters just as much here."""
-        if audioop is None:
-            return
-        try:
-            peak = audioop.max(block, 2) / 32768.0
-        except Exception:
-            return
-        self._live_level = max(getattr(self, "_live_level", 0.0) * 0.6, peak)
-        now = time.monotonic()
-        if now - getattr(self, "_level_sent", 0.0) >= 0.1:
-            self._level_sent = now
-            bus.publish("dictation.level", level=self._live_level)
-
-    def stop_stream(self) -> None:
-        """End the session; the sentence still being spoken is finished."""
-        session, self._live_session = self._live_session, None
-        if session is None:
-            return
-        self._close_live_mic()
-        self._set_state("transcribing")
-        session.stop()
-        # remembered for the next session, so it knows your voice at once
-        self._stream_voice_level = session.voice_level
-        if session.pass_ms:
-            ordered = sorted(session.pass_ms)
-            _log.info("live dictation ended: %d passes, median %.0f ms, "
-                      "max %.0f ms", len(ordered),
-                      ordered[len(ordered) // 2], ordered[-1])
-        self._set_state("idle")
-
-    def _close_live_mic(self) -> None:
-        mic, self._live_mic = self._live_mic, None
-        if mic is not None:
-            try:
-                mic.stop()
-                mic.close()
-            except Exception:
-                pass
-
-    def _stream_whisper(self, pcm: bytes, final: bool) -> str:
-        """One pass of Whisper over the sentence so far.
-
-        Quick and greedy while speaking; at the end of the sentence the same
-        careful settings as a normal dictation (beam search, silence filter).
-        No prompt: on short clips Whisper tends to repeat a prompt back."""
+    def _whisper_pcm(self, pcm: bytes, final: bool = True) -> str:
+        """Whisper over 16 kHz mono audio, for "Aussprache anlernen": the
+        same careful settings as a normal dictation (beam search, silence
+        filter).  No prompt: on short clips Whisper tends to repeat it back."""
         import numpy as np
         model = self._ensure_model_loaded()
         audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
@@ -6574,108 +6207,6 @@ class DictationModule(BaseModule):
                      if not (getattr(seg, "no_speech_prob", 0.0) > 0.6
                              and getattr(seg, "avg_logprob", 0.0) < -1.0)]
         return " ".join(part for part in parts if part)
-
-    def _stream_spoken_marks(self) -> bool:
-        return self._settings.get("stream_punct", "auto") == "spoken"
-
-    def _canary_wanted(self) -> bool:
-        if not self._settings.get("stream_canary", False):
-            return False
-        try:
-            import parakeet
-            return parakeet.canary_available()
-        except Exception:
-            return False
-
-    def _ensure_canary(self) -> Any:
-        import parakeet
-        if self._canary is None:
-            self._canary = parakeet.canary_engine()
-        if not self._canary.ready():
-            self._canary.start()
-        return self._canary
-
-    def _stream_parakeet(self, pcm: bytes, final: bool) -> str:
-        """Parakeet while speaking; the finished sentence from Canary.
-
-        Parakeet picks the language itself and reads a single short German
-        word as English now and then ("Had" for "hat").  Canary is told the
-        language, so it has the last word; it is slower, which only matters
-        for the grey words, and those stay with Parakeet.  Measured: handing
-        short words to Whisper instead made them worse ("hat" -> "Hut")."""
-        import streaming
-        language = self._local_language()
-        if final and self._canary_wanted():
-            try:
-                return self._ensure_canary().transcribe(pcm, True,
-                                                        language=language)
-            except Exception:
-                _log.warning("canary failed, Parakeet instead", exc_info=True)
-        return streaming.fix_short_english(
-            self._parakeet.transcribe(pcm, final), language)
-
-    def _on_stream_update(self, settled: str, tail: str) -> None:
-        if self._window is None:
-            return
-        import streaming
-        words = self.glossary_words()
-        settled = streaming.match_dictionary(
-            streaming.spoken_numbers(streaming.clean_fillers(settled)), words)
-        tail = streaming.match_dictionary(
-            streaming.spoken_numbers(streaming.clean_fillers(tail)), words)
-        if self._stream_spoken_marks():
-            settled = streaming.apply_spoken_marks(
-                streaming.strip_sentence_marks(settled))
-            tail = streaming.apply_spoken_marks(
-                streaming.strip_sentence_marks(tail))
-            if settled and tail[:1].isupper() and not settled.endswith(
-                    (".", "!", "?")):
-                from postprocess import fix_casing
-                tail = fix_casing("x " + tail)[2:]
-        if streaming.looks_foreign(f"{settled} {tail}",
-                                   self._local_language()):
-            settled = tail = ""
-        # Whisper marks a word it has only half heard with "..." - that is
-        # already what the grey colour says.
-        tail = re.sub(r"\s*(\.\.\.|…)$", "", tail)
-        if not tail:
-            settled = re.sub(r"\s*(\.\.\.|…)$", "", settled)
-        self._window.stream_update(self._apply_live_partial(settled),
-                                   self._apply_live_partial(tail))
-
-    def _on_stream_final(self, text: str) -> None:
-        import streaming
-        session = getattr(self, "_stream_session_info", None)
-        info = dict(getattr(session, "last_finish", {}) or {})
-        raw_chars = len(text or "")
-        text = streaming.spoken_numbers(
-            streaming.clean_fillers(self._postprocess_asr(text)))
-        if text and streaming.looks_foreign(text, self._local_language()):
-            info["result"] = "another language"
-            text = ""
-        spoken = self._stream_spoken_marks()
-        if text and spoken:
-            text = streaming.apply_spoken_marks(
-                streaming.strip_sentence_marks(text))
-        elif text:
-            text = streaming.merge_continuations(text)
-            if info.get("end") == "long" and text.endswith("."):
-                text = text[:-1]          # cut for length, not a sentence end
-        if text:
-            self._last_low_words = []
-            text = streaming.match_dictionary(text, self.glossary_words())
-            text = self._refine_transcript(text, spoken_marks=spoken,
-                                           all_corrections=True)
-            if not text:
-                info["result"] = "removed by post-processing"
-        # One line per sentence, never the words: enough to tell afterwards
-        # WHY a sentence vanished.
-        _log.info("live sentence: %s", {**info, "chars": raw_chars,
-                                         "kept": len(text or "")})
-        if self._window is not None:
-            self._window.stream_final(
-                text, self._active_mode,
-                "spoken" if self._stream_spoken_marks() else "auto")
 
     def start_live(self) -> None:
         if self._live_active or self._state != "idle":

@@ -1,25 +1,18 @@
-"""Live dictation (test variant): text appears while you speak.
+"""Cutting a running recording into parts at the pauses.
 
-The normal dictation records first and recognises afterwards - clean, but
-nothing is visible until the key is released.  This variant recognises the
-sentence that is being spoken over and over again, every half second, and
-shows the result straight away:
+The microphone stays on; every longer pause hands what was said so far to
+the recogniser, and the next part begins.  A speech detector (Silero, or a
+plain level gate as a fallback) decides what is speech, so keyboard clicks
+and room noise do not start a part, and long thinking pauses are left out
+of what the recogniser hears.
 
-  * words the recogniser produced **twice in a row** are taken as settled and
-    turn black ("local agreement" - the method from *Turning Whisper into a
-    Real-Time Transcription System*, Macháček et al. 2023);
-  * the rest stays grey and may still change with the next pass;
-  * a real pause ends the sentence: it is recognised one last time as a whole
-    and finished with the same rules as a normal dictation (dictionary,
-    learned corrections, commas, optional AI punctuation, voice commands).
+``StreamSession`` can also run interim passes over the part being spoken
+(``step_s``) and settle words that two passes agree on - the method from
+*Turning Whisper into a Real-Time Transcription System* (Macháček et al.
+2023).  Normal dictation switches that off and recognises each part once.
 
-Settled words keep their place but take the spelling of the newest pass, so a
-comma or a capital letter that only becomes clear later still arrives while
-speaking - the word itself never jumps.
-
-Nothing here knows about Whisper or Parakeet: a recogniser is any function
-``transcribe(pcm, final) -> str`` for 16 kHz mono int16.  That keeps the two
-engines comparable, and keeps this file testable without a model.
+A recogniser is any function ``transcribe(pcm, final) -> str`` for 16 kHz
+mono int16, which keeps this file testable without a model.
 """
 from __future__ import annotations
 
@@ -163,51 +156,12 @@ def make_gate(sensitivity: str = "normal"):
         return EnergyGate()
 
 
-# Sounds a recogniser writes down when there were no words: a car passing
-# became "Mm-hmm".  Only as whole words - "Hmmel" or "Umzug" stay.
-_FILLERS = re.compile(
-    r"(?<![\w-])(?:m+-?h+m+|m+h+m+|h+m+|u+h+-?h+u+h+|u+h+|u+m+|ä+h+m*|ö+h*m+)"
-    r"(?![\w-])[.,!?…]*", re.IGNORECASE)
-
-_EN = frozenset("""the a an and or but is are was were be been it this that you
-i we they he she my your our to of in on for with not do does did have has
-had what how why where when can could would should will just so if there
-here all no yes okay hello hi thanks thank please""".split())
+# Frequent German words: "Aussprache anlernen" never keeps one of these as
+# a heard variant - it would replace the real word everywhere.
 _DE = frozenset("""der die das und oder aber ist sind war waren ein eine einen
 es ich wir sie er du mein dein nicht mit auf für von zu im in den dem des
 auch noch schon wie was warum wo wann kann könnte würde soll wird nur so
 wenn hier alle nein ja bitte danke hallo""".split())
-
-
-def clean_fillers(text: str) -> str:
-    """Remove "Mm-hmm", "Hmm", "Uh", "Äh" … and tidy what is left."""
-    cleaned = _FILLERS.sub(" ", text or "")
-    cleaned = re.sub(r"\s+([.,!?…])", r"\1", cleaned)
-    cleaned = re.sub(r"^[\s.,!?…]+", "", cleaned)
-    cleaned = " ".join(cleaned.split())
-    original = (text or "").lstrip()
-    if (cleaned and original[:1].isupper() and cleaned[:1].islower()
-            and not original.lower().startswith(cleaned[:3].lower())):
-        # the filler opened the sentence; the sentence still starts capital
-        cleaned = cleaned[0].upper() + cleaned[1:]
-    return cleaned
-
-
-def looks_foreign(text: str, language: str = "de") -> bool:
-    """True for a sentence that is clearly English while dictating German.
-
-    Parakeet chooses the language by itself, so a voice from the TV or the
-    next room comes out as an English sentence.  Needs several English
-    function words and more of them than German ones - a single "okay" or
-    an English product name never counts."""
-    if language != "de":
-        return False
-    words = re.findall(r"[a-zA-ZäöüÄÖÜß']+", (text or "").lower())
-    if len(words) < 3:
-        return False
-    english = sum(1 for w in words if w in _EN)
-    german = sum(1 for w in words if w in _DE)
-    return english >= 2 and english > 2 * german
 
 
 # -- sentence marks ----------------------------------------------------------
@@ -245,20 +199,6 @@ def continues(word: str, rest_of_sentence: str) -> bool:
     return False
 
 
-def merge_continuations(text: str) -> str:
-    """"… besser Pausen. Und dann" -> "… besser Pausen und dann"."""
-    text = text or ""
-
-    def join(match: re.Match) -> str:
-        word = match.group(1)
-        if not continues(word, text[match.end():]):
-            return match.group(0)
-        lower = word.lower()
-        return (" " if lower in NO_COMMA else ", ") + lower
-
-    return re.sub(r"\.\s+([A-ZÄÖÜ][a-zäöüß]+)\b", join, text)
-
-
 def continue_after_pause(previous: str, text: str) -> tuple[int, str] | None:
     """A new part that continues the sentence before it.
 
@@ -276,7 +216,8 @@ def continue_after_pause(previous: str, text: str) -> tuple[int, str] | None:
         return None
     last = before.group(1).lower()
     # "z.B." or a date ("16.") end in a dot that is not a sentence end
-    if last in _ABBREVIATIONS or last.rstrip(".") in _ABBREVIATIONS or             last[-1:].isdigit():
+    if (last in _ABBREVIATIONS or last.rstrip(".") in _ABBREVIATIONS
+            or last[-1:].isdigit()):
         return None
     match = re.match(r"([A-ZÄÖÜ][a-zäöüß]+)\b(.*)", (text or "").strip(), re.S)
     if match is None or not continues(match.group(1), match.group(2)):
@@ -286,446 +227,10 @@ def continue_after_pause(previous: str, text: str) -> tuple[int, str] | None:
     return cut, (" " if word in NO_COMMA else ", ") + word + match.group(2)
 
 
-# -- short words ---------------------------------------------------------------
-
-# Parakeet picks the language by itself, and a single short German word is
-# too little to go on: "ja" came out as "Yeah", "hat" as "Had".  Only when
-# the whole utterance is that one word.
-_SHORT_ENGLISH = {"yeah": "Ja", "yes": "Ja", "yep": "Ja", "nine": "Nein",
-                  "nay": "Nein", "had": "Hat", "is": "Ist", "east": "Ist",
-                  "hut": "Hat", "dust": "Du", "ish": "Ich"}
-
-
-def fix_short_english(text: str, language: str = "de") -> str:
-    if language != "de":
-        return text
-    words = re.findall(r"[A-Za-z]+", text or "")
-    if len(words) != 1:
-        return text
-    german = _SHORT_ENGLISH.get(words[0].lower())
-    return text.replace(words[0], german, 1) if german else text
-
-
-# -- numbers and signs ------------------------------------------------------------
-
-_UNITS = {"null": 0, "eins": 1, "ein": 1, "eine": 1, "zwei": 2, "zwo": 2,
-          "drei": 3, "vier": 4, "fünf": 5, "fuenf": 5, "sechs": 6,
-          "sieben": 7, "acht": 8, "neun": 9}
-_TEENS = {"zehn": 10, "elf": 11, "zwölf": 12, "zwoelf": 12, "dreizehn": 13,
-          "vierzehn": 14, "fünfzehn": 15, "fuenfzehn": 15, "sechzehn": 16,
-          "siebzehn": 17, "achtzehn": 18, "neunzehn": 19}
-_TENS = {"zwanzig": 20, "dreißig": 30, "dreissig": 30, "vierzig": 40,
-         "fünfzig": 50, "fuenfzig": 50, "sechzig": 60, "siebzig": 70,
-         "achtzig": 80, "neunzig": 90}
-
-
-def _below_100(word: str) -> int | None:
-    if word in _TEENS:
-        return _TEENS[word]
-    if word in _UNITS and word not in ("ein", "eine"):
-        return _UNITS[word]
-    if word in _TENS:
-        return _TENS[word]
-    for tens, value in _TENS.items():
-        if word.endswith(tens):
-            head = word[:-len(tens)]
-            # "siebenundvierzig" - and "siebenvierzig", as it is misheard
-            head = head[:-3] if head.endswith("und") else head
-            if head in _UNITS and _UNITS[head] > 0:
-                return value + _UNITS[head]
-    return None
-
-
-def _below_1000(word: str) -> int | None:
-    if "hundert" in word:
-        head, _, tail = word.partition("hundert")
-        count = 1 if head in ("", "ein", "eins") else _below_100(head)
-        rest = _below_100(tail) if tail else 0
-        if count is None or rest is None or not head:
-            return None               # a bare "hundert" stays a word
-        return count * 100 + rest
-    return _below_100(word)
-
-
-def number_value(word: str) -> int | None:
-    """The value of one German number word, or None."""
-    word = (word or "").lower()
-    if "tausend" in word:
-        head, _, tail = word.partition("tausend")
-        count = 1 if head in ("ein", "eins") else _below_1000(head)
-        rest = _below_1000(tail) if tail else 0
-        if not head or count is None or rest is None:
-            return None
-        return count * 1000 + rest
-    return _below_1000(word)
-
-
-# After these a small number is a quantity to read, so it becomes a digit too.
-_UNIT_WORDS = frozenset(
-    "prozent euro cent uhr grad kilo kilogramm gramm meter kilometer "
-    "zentimeter millimeter liter stück minuten sekunden stunden "
-    "paragraph paragraf paragraphen paragrafen".split())
-
-
-# -- your own words ------------------------------------------------------------
+# -- the dictionary ------------------------------------------------------------
 
 def _key(text: str) -> str:
     return re.sub(r"[\W_]+", "", text or "").casefold()
-
-
-# German endings: a dictionary word plus one of these is the same word
-# inflected ("Rechnung" -> "Rechnungen"), not a misspelling of it.
-_ENDINGS = ("e", "en", "n", "s", "es", "er", "ern", "em")
-
-
-def _special_spelling(word: str) -> bool:
-    """A name written its own way: several words, a capital inside
-    ("MediaMarkt"), all capitals ("ADAC") or digits."""
-    letters = re.sub(r"[^\w]", "", word)
-    return (" " in word.strip() or "-" in word
-            or any(c.isupper() for c in letters[1:])
-            or any(c.isdigit() for c in letters))
-
-
-def _inflected(a: str, b: str) -> bool:
-    short, long = sorted((a, b), key=len)
-    return long.startswith(short) and long[len(short):] in _ENDINGS
-
-
-def cologne_code(word: str) -> str:
-    """Kölner Phonetik: German words that sound alike get the same code
-    ("Parakit" and "Parakeet", "Meier" and "Mayer")."""
-    w = (_key(word).replace("ä", "a").replace("ö", "o").replace("ü", "u")
-         .replace("ß", "s"))
-    codes = []
-    for i, ch in enumerate(w):
-        prev = w[i - 1] if i else ""
-        nxt = w[i + 1] if i + 1 < len(w) else ""
-        if ch in "aeijouy":
-            code = "0"
-        elif ch == "h":
-            code = ""
-        elif ch == "b" or (ch == "p" and nxt != "h"):
-            code = "1"
-        elif ch in "dt":
-            code = "8" if nxt in ("c", "s", "z") else "2"
-        elif ch in "fvw" or (ch == "p" and nxt == "h"):
-            code = "3"
-        elif ch in "gkq":
-            code = "4"
-        elif ch == "c":
-            if i == 0:
-                code = "4" if nxt in "ahkloqrux" else "8"
-            else:
-                code = ("8" if prev in "sz" or nxt not in "ahkoqux" else "4")
-        elif ch == "x":
-            code = "8" if prev in "ckq" else "48"
-        elif ch == "l":
-            code = "5"
-        elif ch in "mn":
-            code = "6"
-        elif ch == "r":
-            code = "7"
-        elif ch in "sz":
-            code = "8"
-        else:
-            code = ""
-        codes.append(code)
-    out = ""
-    for code in "".join(codes):
-        if not out or out[-1] != code:
-            out += code
-    return out[:1] + out[1:].replace("0", "") if out else ""
-
-
-def match_dictionary(text: str, words: list[str],
-                     similarity: float = 0.86) -> str:
-    """Put your dictionary words back where the recogniser wrote them
-    differently.
-
-    Whisper is TOLD these words before it listens; Parakeet cannot be, so
-    they are matched afterwards instead:
-
-    * the same letters, spaced or cased differently ("Media Markt" ->
-      "MediaMarkt", "withease" -> "WithEase") - always;
-    * a close misspelling ("Mediamark" -> "MediaMarkt") - only for words of
-      six letters or more, starting with the same letter, and never when the
-      difference is just an ending, so "Rechnungen" stays "Rechnungen" even
-      if "Rechnung" is in the dictionary.
-    """
-    import difflib
-    entries = []
-    for word in words or []:
-        key = _key(word)
-        if len(key) >= 4:
-            entries.append((word, key, max(1, len(word.split()))))
-    if not entries or not text:
-        return text
-    spans = [(m.start(), m.end()) for m in re.finditer(r"[\w'’-]+", text)]
-    replacements: list[tuple[int, int, str]] = []
-    taken: set[int] = set()
-    for size in (3, 2, 1):
-        for i in range(len(spans) - size + 1):
-            if any(j in taken for j in range(i, i + size)):
-                continue
-            start, end = spans[i][0], spans[i + size - 1][1]
-            surface = text[start:end]
-            key = _key(surface)
-            tokens = surface.split()
-            capitalised = all(t[:1].isupper() or t[:1].isdigit()
-                              for t in re.findall(r"[\w'’-]+", surface))
-            best, best_score = None, 0.0
-            for word, wkey, parts in entries:
-                if size > parts + 1:
-                    continue
-                special = _special_spelling(word)
-                # Joining several words into one ("Nach Namen" ->
-                # "Nachnamen") only for names that are written that way.
-                if size > parts and not special:
-                    continue
-                if key == wkey:
-                    # Only the case differs: "schreiben"/"Schreiben" is
-                    # grammar, "withease"/"WithEase" is a name.
-                    if size == 1 and len(tokens) == 1 and not special:
-                        continue
-                    score = 1.0
-                elif (len(wkey) >= 6 and key[:1] == wkey[:1] and capitalised
-                      and abs(len(key) - len(wkey)) <= max(2, len(wkey) // 4)
-                      and not _inflected(key, wkey)):
-                    # A misheard name comes out capitalised; a lower-case
-                    # word ("beginnt", "wie das") is an ordinary word.
-                    score = difflib.SequenceMatcher(None, key, wkey).ratio()
-                    if score < similarity:
-                        # written differently, but does it SOUND the same?
-                        if score < 0.7 or cologne_code(key) != cologne_code(wkey):
-                            continue
-                        score = similarity
-                else:
-                    continue
-                if score > best_score:
-                    best, best_score = word, score
-            if best is not None and surface != best:
-                replacements.append((start, end, best))
-                taken.update(range(i, i + size))
-            elif best is not None:
-                taken.update(range(i, i + size))
-    for start, end, word in sorted(replacements, reverse=True):
-        text = text[:start] + word + text[end:]
-    return text
-
-
-def spoken_numbers(text: str) -> str:
-    """Number words to digits, "plus" and "Prozent" to signs.
-
-    German style: from 13 on numbers are written as digits; 0-12 stay words
-    ("zwei Wochen") unless a sign, a unit or another digit stands next to
-    them ("plus sieben", "sieben Prozent")."""
-    if not text:
-        return text
-    # "sieben und vierzig" written apart (Canary does) is one number
-    text = re.sub(
-        r"\b(ein|zwei|drei|vier|fünf|fuenf|sechs|sieben|acht|neun)\s+und\s+"
-        r"(zwanzig|dreißig|dreissig|vierzig|fünfzig|fuenfzig|sechzig|siebzig|"
-        r"achtzig|neunzig)\b",
-        lambda m: m.group(1) + "und" + m.group(2), text, flags=re.IGNORECASE)
-    tokens = re.findall(r"\S+", text)
-
-    def core(token: str) -> tuple[str, str, str]:
-        m = re.match(r"^([„(\[]*)(.*?)([.,;:!?)\]“]*)$", token)
-        return m.group(1), m.group(2), m.group(3)
-
-    # 1) join "zweitausend sechsundzwanzig" said as two words
-    values: list[int | None] = []
-    for token in tokens:
-        _lead, word, _trail = core(token)
-        values.append(number_value(word))
-    out: list[str] = []
-    i = 0
-    while i < len(tokens):
-        lead, word, trail = core(tokens[i])
-        value = values[i]
-        if (value is not None and not trail and i + 1 < len(tokens)
-                and values[i + 1] is not None
-                and word.lower().endswith(("tausend", "hundert"))
-                and values[i + 1] < (1000 if word.lower().endswith("tausend")
-                                     else 100)):
-            _l2, _w2, trail = core(tokens[i + 1])
-            value += values[i + 1]
-            i += 1
-        out.append((lead, word, trail, value))
-        i += 1
-
-    def is_sign(word: str) -> bool:
-        return word.lower() in ("plus", "minus")
-
-    def next_to_quantity(k: int) -> bool:
-        for j in (k - 1, k + 1):
-            if 0 <= j < len(out):
-                _l, w, _t, v = out[j]
-                if (is_sign(w) or w.lower() in _UNIT_WORDS
-                        or (w and w[0].isdigit())
-                        or (v is not None and v >= 13)):
-                    return True
-        return False
-
-    # 2) numbers to digits
-    words = []
-    for k, (lead, word, trail, value) in enumerate(out):
-        if value is not None and (value >= 13 or next_to_quantity(k)):
-            word = str(value)
-        words.append([lead, word, trail])
-
-    # 3) signs: only next to numbers or another sign ("C plus plus")
-    def numeric(k: int) -> bool:
-        return 0 <= k < len(words) and bool(
-            re.fullmatch(r"[+-]?\d+([.,]\d+)?", words[k][1]))
-
-    def signish(k: int) -> bool:
-        return 0 <= k < len(words) and words[k][1].lower() in (
-            "plus", "minus", "+", "-", "++")
-
-    def drop(k: int, into: int) -> None:
-        """Remove word ``k``; its trailing punctuation moves to ``into``."""
-        words[into][2] += words[k][2]
-        words[k] = ["", "", ""]
-
-    for k, entry in enumerate(words):
-        low = entry[1].lower()
-        if not low:
-            continue
-        if low == "plus" and (numeric(k + 1) or numeric(k - 1)
-                              or signish(k + 1) or signish(k - 1)):
-            entry[1] = "+"
-        elif low == "minus" and numeric(k + 1):
-            if numeric(k - 1) and not words[k - 1][2]:
-                entry[1] = "-"                        # 3 - 2
-            else:                                     # minus 5 Grad -> -5
-                words[k + 1][0] = entry[0] + words[k + 1][0]
-                words[k + 1][1] = "-" + words[k + 1][1]
-                words[k] = ["", "", ""]
-        elif low == "prozent" and numeric(k - 1):
-            entry[1] = "%"
-        elif low == "euro" and numeric(k - 1):
-            entry[1] = "€"
-        elif low == "grad" and numeric(k - 1):
-            if (k + 1 < len(words) and not entry[2]
-                    and words[k + 1][1].lower() == "celsius"):
-                entry[1] = "°C"                       # 5 °C
-                drop(k + 1, k)
-            else:
-                words[k - 1][1] += "°"                # a 90° angle
-                drop(k, k - 1)
-        elif low in ("paragraph", "paragraf") and numeric(k + 1):
-            entry[1] = "§"
-        elif low in ("paragraphen", "paragrafen") and numeric(k + 1):
-            entry[1] = "§§"
-    words = [w for w in words if any(w)]
-
-    # 4) glue: "+ + 47" -> "++47", "C + +" -> "C++"; "5 + 3" keeps spaces
-    text_out = ""
-    for k, (lead, word, trail) in enumerate(words):
-        piece = lead + word + trail
-        prev = words[k - 1][1] if k else ""
-        glue = (k and (
-            (word == "+" and prev in ("+",) and not words[k - 1][2])
-            or (prev == "+" and not words[k - 1][2] and word[:1].isdigit()
-                and not (k >= 2 and numeric(k - 2)))
-            or (word == "+" and k + 1 < len(words) and words[k + 1][1] == "+"
-                and not numeric(k - 1) and prev and not words[k - 1][2]
-                and len(prev) == 1)))
-        text_out += (piece if glue or not text_out else " " + piece)
-    # "fünf Euro fünfzig" -> "5,50 €"
-    return re.sub(r"\b(\d+) € (\d{1,2})\b(?![,.]\d)",
-                  lambda m: f"{m.group(1)},{int(m.group(2)):02d} €", text_out)
-
-
-
-def strip_sentence_marks(text: str) -> str:
-    """Remove the recogniser's own . ? ! - for "Satzzeichen nur gesprochen".
-
-    Numbers ("3.5"), dates and abbreviations ("z.B.", "usw.") keep theirs."""
-    def drop(match: re.Match) -> str:
-        word = match.group(1)
-        if word.lower().rstrip(".") in _ABBREVIATIONS or len(word) == 1:
-            return match.group(0)
-        return word
-
-    text = re.sub(r"([\wäöüÄÖÜß.]*[^\W\d_])[.!?]+(?=\s|$)", drop, text or "")
-    from postprocess import fix_casing
-    return fix_casing(text)
-
-
-# The spoken words for sentence marks.  "Punkt" and "Komma" are ordinary
-# nouns too ("der Punkt ist", "ein Komma fehlt"), so after an article or a
-# preposition they stay words.
-_NOT_AFTER = (r"(?<!\bder )(?<!\bden )(?<!\bdem )(?<!\bdes )(?<!\bein )"
-              r"(?<!\beinen )(?<!\beinem )(?<!\bkein )(?<!\bkeinen )"
-              r"(?<!\bam )(?<!\bzum )(?<!\bbeim )(?<!\bim )(?<!\bvom )"
-              r"(?<!\bdiesen )(?<!\bdiesem )(?<!\bjeden )")
-_SPOKEN_MARKS = [
-    (re.compile(r"[\s,]*\bneuer\s+satz\b[\s.]*", re.IGNORECASE), ". "),
-    (re.compile(r"[\s,.]*" + _NOT_AFTER + r"\bpunkt\b[\s.]*", re.IGNORECASE),
-     ". "),
-    (re.compile(r"[\s,]*\bfragezeichen\b[\s.]*", re.IGNORECASE), "? "),
-    (re.compile(r"[\s,]*\bausrufezeichen\b[\s.]*", re.IGNORECASE), "! "),
-    (re.compile(r"[\s,]*" + _NOT_AFTER + r"\bkomma\b[\s,.]*", re.IGNORECASE),
-     ", "),
-]
-
-
-def apply_spoken_marks(text: str) -> str:
-    """"hinbekommt Punkt neuer Gedanke" -> "hinbekommt. Neuer Gedanke"."""
-    words = re.findall(r"\w+", (text or "").lower())
-    if words and all(w in ("punkt", "komma", "fragezeichen",
-                           "ausrufezeichen", "neuer", "satz") for w in words):
-        return text        # only the mark: the voice command inserts it
-    for pattern, mark in _SPOKEN_MARKS:
-        text = pattern.sub(mark, text or "")
-    text = " ".join(text.split())
-    # a capital after a spoken full stop; the very first letter is left to
-    # the joining, which knows what stands before it
-    return re.sub(r"([.!?]\s+)([a-zäöü])",
-                  lambda m: m.group(1) + m.group(2).upper(), text)
-
-
-# -- context for single words ----------------------------------------------------
-
-# Short words a recogniser really writes on their own; any other token of one
-# or two letters left over at the cut is a crumb of the context sentence.
-_SHORT_WORDS = frozenset(
-    "ja so da du er es ob um zu in an im am wo ab oh ok ich wir sie der die "
-    "das den dem ein und oder aber nur mit von bei auf aus".split())
-
-
-def strip_context(full: str, context: str) -> str | None:
-    """What was said AFTER the context sentence, or None when the two cannot
-    be lined up safely.
-
-    ``full`` is the recognition of context + the new utterance, ``context``
-    the recognition of the context alone.  They are lined up word by word
-    (the context may come out slightly differently the second time), and
-    everything after the last shared word is the new utterance."""
-    import difflib
-    words = (full or "").split()
-    ctx = [_norm(w) for w in (context or "").split() if _norm(w)]
-    if not words or not ctx:
-        return None
-    normed = [_norm(w) for w in words]
-    matcher = difflib.SequenceMatcher(None, ctx, normed, autojunk=False)
-    blocks = [b for b in matcher.get_matching_blocks() if b.size]
-    if not blocks or sum(b.size for b in blocks) < max(1, len(ctx) // 2):
-        return None
-    rest = words[blocks[-1].b + blocks[-1].size:]
-    # the context's last words came out a little different the second time
-    # ("haben?" / "habens.") - a close look-alike still belongs to it
-    for tail_word in ctx[blocks[-1].a + blocks[-1].size:]:
-        if rest and difflib.SequenceMatcher(
-                None, tail_word, _norm(rest[0])).ratio() >= 0.6:
-            rest = rest[1:]
-    while rest and len(_norm(rest[0])) <= 2 and _norm(rest[0]) not in _SHORT_WORDS:
-        rest = rest[1:]                 # "S." - a crumb of the last word
-    text = " ".join(rest).lstrip(" .,;:!?…")
-    return text or None
 
 
 def rms16(chunk: bytes) -> float:
@@ -758,7 +263,6 @@ class StreamSession:
                  first_pass_s: float = 0.0, detector=None,
                  background_ratio: float = 0.0,
                  voice_level: float | None = None,
-                 short_s: float = 0.0, context_s: float = 5.0,
                  on_error: Callable[[Exception], None] | None = None,
                  on_silence: Callable[[float | None], None] | None = None,
                  ) -> None:
@@ -782,8 +286,7 @@ class StreamSession:
         self.preroll_s = preroll_s
         self.max_sentence_s = max_sentence_s
         self.min_speech_s = min_speech_s
-        # Parakeet picks the language by itself and guesses English on the
-        # first half second ("Constant." for "Kannst"); wait for more audio.
+        # no pass on less audio than this
         self.first_pass_s = first_pass_s
         self._detector = detector or EnergyGate(gate)
         # Your own voice, learned from the sentences that became text.  A
@@ -794,13 +297,6 @@ class StreamSession:
         self.voice_level = voice_level
         self._levels_now: list[float] = []
         self.last_finish: dict = {}
-        # A single word gives a recogniser nothing to go by - Parakeet then
-        # guesses the language.  Heard after the previous sentence it is read
-        # as German, like everything around it.  ``short_s``: utterances with
-        # less speech than this get the previous sentence as context (0 = off).
-        self.short_s = short_s
-        self.context_s = context_s
-        self._last_audio = b""
         self._agreement = Agreement()
         self._preroll: collections.deque[bytes] = collections.deque()
         self._preroll_bytes = 0
@@ -993,17 +489,7 @@ class StreamSession:
             self.last_finish = {**info, "result": "quieter than your voice"}
             self._on_final("")
             return
-        text = None
-        if (self.short_s and self._last_audio
-                and speech < self.short_s * _BYTES_PER_S):
-            text = self._with_context(audio)
-            if text is not None:
-                info["context"] = True
-        if text is None:
-            text = self._run_engine(audio, final=True)
-        if text and not info.get("context"):
-            self._last_audio = audio[-int(self.context_s * _BYTES_PER_S) // 2
-                                     * 2:]
+        text = self._run_engine(audio, final=True)
         if text is None:
             self.last_finish = {**info, "result": "recogniser failed"}
         else:
@@ -1012,17 +498,6 @@ class StreamSession:
                 self.voice_level = (level if not self.voice_level
                                     else 0.8 * self.voice_level + 0.2 * level)
         self._on_final(text or "")
-
-    def _with_context(self, audio: bytes) -> str | None:
-        """Recognise a short utterance behind the previous sentence and cut
-        that sentence off again.  None when it cannot be done cleanly."""
-        context = self._last_audio
-        alone = self._run_engine(context, final=True)
-        gap = b"\x00\x00" * int(0.3 * RATE)
-        full = self._run_engine(context + gap + audio, final=True)
-        if not alone or not full:
-            return None
-        return strip_context(full, alone)
 
     def _run_engine(self, audio: bytes, final: bool) -> str | None:
         started = time.perf_counter()
