@@ -289,6 +289,8 @@ class StreamSession:
                  voice_level: float | None = None,
                  on_error: Callable[[Exception], None] | None = None,
                  on_silence: Callable[[float | None], None] | None = None,
+                 preview_after_s: float = 0.0,
+                 on_preview: Callable[[str], None] | None = None,
                  ) -> None:
         self._transcribe = transcribe
         # ``on_silence(seconds left)`` while you are quiet in the middle of a
@@ -296,6 +298,15 @@ class StreamSession:
         # over (you speak again, or the sentence is finished).
         self._on_silence = on_silence
         self._silence_shown: float | None = None
+        # A look at the part as soon as you have been quiet this long -
+        # ``transcribe(pcm, final=False)``, answered with ``on_preview(text)``
+        # (e.g. to show whether a command or dictation is coming).  When you
+        # stay quiet the part ends with exactly this audio, and the preview
+        # IS the result: ``transcribe`` gets the same audio once more and
+        # can answer from what it remembered.
+        self.preview_after_s = preview_after_s
+        self._on_preview = on_preview
+        self._previewed = -1            # length of the part last previewed
         self._on_update = on_update
         self._on_final = on_final
         self._on_error = on_error
@@ -381,10 +392,24 @@ class StreamSession:
                         >= self.pause_s * _BYTES_PER_S):
                     self._finish("pause")
             self._decide(ending)
+            self._maybe_preview()
             self._report_silence()
         self._silence_shown = None
         if self._on_silence is not None:
             self._on_silence(None)
+
+    def _maybe_preview(self) -> None:
+        if (self._on_preview is None or not self.preview_after_s
+                or not self._sentence
+                or len(self._sentence) == self._previewed
+                or self._silence_bytes < self.preview_after_s * _BYTES_PER_S
+                or self._speech_bytes < self.min_speech_s * _BYTES_PER_S
+                or self._is_background()):
+            return
+        self._previewed = len(self._sentence)
+        text = self._run_engine(bytes(self._sentence), final=False)
+        if text is not None:
+            self._on_preview(text)
 
     # Quiet shorter than this is between two words, not a pause yet - a
     # countdown there would only flicker.
@@ -496,6 +521,7 @@ class StreamSession:
         level = self.sentence_level()
         background = self._is_background()
         self._sentence = bytearray()
+        self._previewed = -1
         self._agreement.reset()
         self._since_pass = 0
         self._silence_bytes = 0

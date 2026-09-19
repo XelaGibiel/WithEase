@@ -364,6 +364,7 @@ class _PauseDot(QWidget):
     full when the pause begins, empty when what you said is converted."""
 
     _GREEN = QColor("#43A047")
+    _BLUE = QColor("#1E88E5")        # a command is coming, not dictation
     _PULSE_MS = 40
     _PULSE_PERIOD_MS = 900
 
@@ -372,6 +373,7 @@ class _PauseDot(QWidget):
         self._edit = edit
         self._left = -1.0
         self._total = 0.0
+        self._command = False
         self._opacity = 1.0
         self._elapsed = 0
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -387,9 +389,18 @@ class _PauseDot(QWidget):
     def showing(self) -> bool:
         return self._left >= 0
 
+    def is_command(self) -> bool:
+        return self._command
+
+    def set_kind(self, kind: str) -> None:
+        """Blue once the part turned out to be a command, green for text."""
+        self._command = kind == "command"
+        self.update()
+
     def set_pause(self, left: float, total: float) -> None:
         if left < 0 or total <= 0:
             self._left = -1.0
+            self._command = False           # the next pause starts green
             self._timer.stop()
             self.hide()
             return
@@ -424,17 +435,20 @@ class _PauseDot(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         ring = QRectF(1.5, 1.5, self.width() - 3.0, self.height() - 3.0)
+        colour = self._BLUE if self._command else self._GREEN
         # a faint full circle: how long the whole pause is
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(67, 160, 71, 55))
+        faint = QColor(colour)
+        faint.setAlpha(55)
+        p.setBrush(faint)
         p.drawEllipse(ring)
         # the time left, as a slice that shrinks clockwise from the top
         p.setOpacity(self._opacity)
-        p.setBrush(self._GREEN)
+        p.setBrush(colour)
         share = max(0.0, min(1.0, self._left / self._total))
         p.drawPie(ring, 90 * 16, -round(share * 360 * 16))
         p.setOpacity(1.0)
-        p.setPen(QPen(self._GREEN, 1.2))
+        p.setPen(QPen(colour, 1.2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(ring)
         p.end()
@@ -835,6 +849,7 @@ class DictationWindow(QWidget):
     _ai_problem_sig = Signal(str, str)         # AI failed: kind, detail
     _take_sel_sig = Signal(str)                # selection taken from the target
     _pause_sig = Signal(float, float)          # pause: seconds left, whole pause
+    _kind_sig = Signal(str)                    # the paused part: text / command
     _report_sig = Signal(str, bool)            # "Fehler merken": message, saved
 
     def __init__(self, on_insert: Callable[[str], None] | None = None,
@@ -1176,6 +1191,7 @@ class DictationWindow(QWidget):
         self._edit.textChanged.connect(self._hide_problem_chip)
         self._take_sel_sig.connect(self._apply_take_selected)
         self._pause_sig.connect(self._apply_pause)
+        self._kind_sig.connect(self._pause_dot.set_kind)
         self._report_sig.connect(self._apply_report_done)
         self._partial_sig.connect(self._apply_partial)
         self._final_sig.connect(self._apply_final)
@@ -1410,6 +1426,11 @@ class DictationWindow(QWidget):
         """While you pause mid-recording: seconds until what you said is
         converted (``left`` < 0: no pause, the dot goes).  Thread-safe."""
         self._pause_sig.emit(float(left), float(total))
+
+    def pause_kind(self, kind: str) -> None:
+        """What the paused part will be: "command" (blue) or "text"
+        (green).  Thread-safe."""
+        self._kind_sig.emit(kind or "text")
 
     def _apply_pause(self, left: float, total: float) -> None:
         if self._cur_state != "recording":

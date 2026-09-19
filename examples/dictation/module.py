@@ -418,6 +418,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         # the same thing, and repeating it only made the chip wider.
         "chip.recording": "Aufnahme …",
         "chip.pause": "Pause – umgewandelt in {s} s",
+        "chip.pause.command": "Befehl – ausgeführt in {s} s",
         "num.decimal": ",",
         "nothing.heard": "Nichts erkannt – noch einmal versuchen",
         "nothing.quiet": "Nichts erkannt – Mikrofon zu leise",
@@ -742,6 +743,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "test.error": "Test failed:\n\n{err}",
         "chip.recording": "Recording …",
         "chip.pause": "Pause – converting in {s} s",
+        "chip.pause.command": "Command – runs in {s} s",
         "num.decimal": ".",
         "nothing.heard": "Nothing recognised – please try again",
         "nothing.quiet": "Nothing recognised – microphone too quiet",
@@ -2116,6 +2118,7 @@ class _ChipBridge(QObject):
     level = Signal(float)
     state = Signal(str, str)
     pause = Signal(float, float)     # (seconds left, whole pause); left < 0 = none
+    kind = Signal(str)               # the part being paused on: text / command
 
 
 class DictationIndicator(QWidget):
@@ -2162,6 +2165,9 @@ class DictationIndicator(QWidget):
         self._level = 0.0
         self._pause_left = -1.0
         self._pause_total = 0.0
+        self._pause_command = False
+        self._bridge.kind.connect(self._apply_kind)
+        bus.subscribe("dictation.pause_kind", self._on_kind)
         bus.subscribe("dictation.state", self._on_state)
         bus.subscribe("dictation.level", self._on_level)
         bus.subscribe("dictation.pause", self._on_pause)
@@ -2186,6 +2192,8 @@ class DictationIndicator(QWidget):
         if self._state != "recording":
             left = -1.0
         had = self._pause_left >= 0
+        if left < 0:
+            self._pause_command = False
         self._pause_left, self._pause_total = left, total
         if (left >= 0) != had:
             self._update_geometry()      # the countdown line comes or goes
@@ -2346,15 +2354,27 @@ class DictationIndicator(QWidget):
             return _t("chip.error.fix")
         if self._state == "recording" and self._pause_left >= 0:
             secs = f"{self._pause_left:.1f}".replace(".", _t("num.decimal"))
-            return _t("chip.pause", s=secs)
+            return _t("chip.pause.command" if self._pause_command
+                      else "chip.pause", s=secs)
         return ""
+
+    def _on_kind(self, kind: str = "text", **_: object) -> None:
+        self._bridge.kind.emit(kind)        # over to the GUI thread
+
+    def _apply_kind(self, kind: str) -> None:
+        self._pause_command = kind == "command"
+        if self._pause_left >= 0:
+            self._update_geometry()
+            self.update()
 
     def _subtitle_w(self) -> int:
         """Width of the hint line.  The countdown is measured with its
         longest text, so the line does not twitch while the digits change."""
         sub = self._subtitle()
         if self._state == "recording" and self._pause_left >= 0:
-            sub = _t("chip.pause", s="8" + _t("num.decimal") + "8")
+            sub = max((_t(key, s="8" + _t("num.decimal") + "8")
+                       for key in ("chip.pause", "chip.pause.command")),
+                      key=len)
         return self._text_w(sub, self._sub_px(), bold=False) + 24
 
     # Gap between the status chip and the cancel pill beside it.
@@ -5746,26 +5766,65 @@ class DictationModule(BaseModule):
             step_s=1e9, pause_s=pause, keep_silence_s=0.6,
             max_sentence_s=25.0, detector=streaming.make_gate("normal"),
             on_error=self._on_segment_error,
-            on_silence=lambda left: self._publish_pause(left, pause))
+            on_silence=lambda left: self._publish_pause(left, pause),
+            # after this much quiet a first look: command or dictation?
+            # (just past the silence the part keeps, so the audio no longer
+            # changes while you stay quiet)
+            preview_after_s=0.7,
+            on_preview=lambda text: self._on_part_preview(session, text))
         session.dropped = False     # set when the recording is thrown away
         session.texts = 0           # parts that became text
+        # the preview's result, reused when the part ends with the same audio:
+        # (audio length, text, wav, low-confidence words)
+        session.preview = None
         return session
 
     def _segment_transcribe(self, session: Any, pcm: bytes,
                             final: bool) -> str:
-        if not final or session.dropped:
+        if session.dropped:
             return ""
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(_SAMPLE_RATE)
-            w.writeframes(pcm)
-        text = self.transcribe(buf.getvalue())
-        _log.info("dictation part: %.2f s -> %d characters",
-                  len(pcm) / (2.0 * _SAMPLE_RATE), len(text or ""))
-        self._remember_part(buf.getvalue(), text)
+        cached = session.preview
+        session.preview = None
+        if final and cached is not None and cached[0] == len(pcm):
+            # you stayed quiet after the preview: it already is the result
+            _n, text, wav, low = cached
+            self._last_low_words = list(low)
+        else:
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(_SAMPLE_RATE)
+                w.writeframes(pcm)
+            wav = buf.getvalue()
+            text = self.transcribe(wav)
+        if not final:
+            session.preview = (len(pcm), text, wav,
+                               list(self._last_low_words))
+            return text
+        _log.info("dictation part: %.2f s -> %d characters%s",
+                  len(pcm) / (2.0 * _SAMPLE_RATE), len(text or ""),
+                  " (from the preview)" if cached is not None
+                  and cached[0] == len(pcm) else "")
+        self._remember_part(wav, text)
         return text
+
+    def _on_part_preview(self, session: Any, text: str) -> None:
+        """The first look at a part: will it be a command?  The dot at the
+        end of the text turns blue for a command, stays green for text."""
+        if session.dropped or self._window is None:
+            return
+        import commands_de as cde
+        text = (text or "").strip()
+        kind = "text"
+        if text and self._active_mode in ("auto", "mixed"):
+            cmd = (cde.command_in_dictation(text)
+                   if self._active_mode == "mixed" else cde.parse(text))
+            if cmd is not None:
+                kind = "command"
+        bus.publish("dictation.pause_kind", kind=kind)
+        if hasattr(self._window, "pause_kind"):
+            self._window.pause_kind(kind)
 
     def _on_segment_error(self, exc: Exception) -> None:
         _log.warning("dictation part failed: %s", exc)

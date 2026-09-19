@@ -535,3 +535,91 @@ def test_text_uebernehmen_hands_the_text_over(app):
     win._on_transcript("Text übernehmen.", "mixed", [])
     assert inserted == ["Ein Satz."]
     win.deleteLater()
+
+
+# -- the first look: command (blue) or dictation (green) ---------------------------
+
+def _live_feed(session, audio, step=0.1):
+    import time
+    for i in range(0, len(audio), int(step * st.RATE) * 2):
+        session.put(audio[i:i + int(step * st.RATE) * 2])
+        time.sleep(0.01)
+
+
+def test_a_preview_comes_after_a_short_quiet_and_is_reused(module):
+    import time
+    module._settings["segment_pause"] = 1.5
+    kinds = []
+    module._window.pause_kind = kinds.append
+    session = module._make_segmenter()
+    session.start()
+    _live_feed(session, _tone(0.8) + _silence(1.0))
+    deadline = time.monotonic() + 5
+    while not kinds and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert kinds == ["text"]                  # "Teil 1." is no command
+    _live_feed(session, _silence(0.8))        # stays quiet: the part ends
+    module._segmenter = session
+    module._state = "recording"
+    module._stop_segmented()
+    assert module._window.got == [("Teil 1.", "auto")]
+    assert len(module.heard) == 1, "the preview was the result"
+
+
+def test_speaking_on_after_the_preview_recognises_again(module):
+    import time
+    module._settings["segment_pause"] = 1.5
+    module._window.pause_kind = lambda kind: None
+    session = module._make_segmenter()
+    session.start()
+    _live_feed(session, _tone(0.8) + _silence(0.9))
+    time.sleep(0.3)
+    _live_feed(session, _tone(0.6) + _silence(0.2))
+    module._segmenter = session
+    module._state = "recording"
+    module._stop_segmented()
+    assert len(module.heard) == 2             # preview, then the whole part
+    assert module._window.got == [("Teil 2.", "auto")]
+
+
+def test_a_command_turns_the_preview_blue(module, monkeypatch):
+    kinds = []
+    module._window.pause_kind = kinds.append
+    session = module._make_segmenter()
+    module._active_mode = "mixed"
+    module._on_part_preview(session, "Streich das.")
+    module._on_part_preview(session, "Kopieren.")        # one word: text
+    module._on_part_preview(session, "Ein ganz normaler Satz.")
+    module._active_mode = "text"
+    module._on_part_preview(session, "Streich das.")     # text key: text
+    assert kinds == ["command", "text", "text", "text"]
+
+
+def test_the_dot_is_blue_for_a_command_and_green_again_after(app):
+    win = _window(app)
+    win._apply_state("recording")
+    win._apply_pause(1.5, 2.0)
+    dot = win._pause_dot
+    assert not dot.is_command()
+    dot.set_kind("command")
+    assert dot.is_command()
+    win._apply_pause(-1.0, 2.0)                # the part is done
+    win._apply_pause(1.9, 2.0)                 # the next pause
+    assert not dot.is_command()
+    win.deleteLater()
+
+
+def test_the_chip_says_command(app):
+    import module as dic
+    chip = dic.DictationIndicator()
+    chip._apply_state("recording", "")
+    chip._apply_pause(1.2, 2.0)
+    width = chip.width()
+    chip._apply_kind("command")
+    assert chip._subtitle().startswith("Befehl") or \
+        chip._subtitle().startswith("Command")
+    assert chip.width() == width
+    chip._apply_pause(-1.0, 2.0)
+    chip._apply_pause(1.0, 2.0)
+    assert not chip._pause_command
+    chip.deleteLater()
