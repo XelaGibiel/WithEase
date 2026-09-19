@@ -5645,7 +5645,10 @@ class DictationModule(BaseModule):
             # („Können Sie …") – only on real dictation, not commands.
             if self._active_mode != "command":
                 from postprocess import (fix_casing, fix_commas, fix_dates,
+                                         fix_digit_sequences,
                                          fix_question_marks)
+                # digits said one by one: "eins, acht, acht, sieben" -> 1887
+                text = fix_digit_sequences(text)
                 text = fix_casing(text)          # undo stray capitalisation
                 if not spoken_marks:      # the user sets them by voice
                     text = fix_question_marks(text)
@@ -5809,11 +5812,12 @@ class DictationModule(BaseModule):
         self._remember_part(wav, text)
         return text
 
-    def _on_part_preview(self, session: Any, text: str) -> None:
+    def _on_part_preview(self, session: Any, text: str) -> bool:
         """The first look at a part: will it be a command?  The dot at the
-        end of the text turns blue for a command, stays green for text."""
+        end of the text turns blue for a command, stays green for text.
+        True: a command - it runs now instead of after the whole pause."""
         if session.dropped or self._window is None:
-            return
+            return False
         import commands_de as cde
         text = (text or "").strip()
         kind = "text"
@@ -5825,6 +5829,7 @@ class DictationModule(BaseModule):
         bus.publish("dictation.pause_kind", kind=kind)
         if hasattr(self._window, "pause_kind"):
             self._window.pause_kind(kind)
+        return kind == "command"
 
     def _on_segment_error(self, exc: Exception) -> None:
         _log.warning("dictation part failed: %s", exc)

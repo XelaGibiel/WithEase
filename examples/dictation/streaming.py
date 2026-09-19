@@ -300,7 +300,8 @@ class StreamSession:
         self._silence_shown: float | None = None
         # A look at the part as soon as you have been quiet this long -
         # ``transcribe(pcm, final=False)``, answered with ``on_preview(text)``
-        # (e.g. to show whether a command or dictation is coming).  When you
+        # (e.g. to show whether a command or dictation is coming; answering
+        # True ends the part right there).  When you
         # stay quiet the part ends with exactly this audio, and the preview
         # IS the result: ``transcribe`` gets the same audio once more and
         # can answer from what it remembered.
@@ -408,8 +409,10 @@ class StreamSession:
             return
         self._previewed = len(self._sentence)
         text = self._run_engine(bytes(self._sentence), final=False)
-        if text is not None:
-            self._on_preview(text)
+        # ``on_preview`` answers True when the part need not wait for the
+        # rest of the pause (a command: it runs at once)
+        if text is not None and self._on_preview(text):
+            self._finish("early")
 
     # Quiet shorter than this is between two words, not a pause yet - a
     # countdown there would only flicker.

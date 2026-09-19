@@ -623,3 +623,56 @@ def test_the_chip_says_command(app):
     chip._apply_pause(1.0, 2.0)
     assert not chip._pause_command
     chip.deleteLater()
+
+
+# -- digits said one by one (from a kept error report) --------------------------------
+
+@pytest.mark.parametrize("said, written", [
+    ("Eins, acht, acht, sieben.", "1887."),
+    ("Die PIN ist vier acht eins null.", "Die PIN ist 4810."),
+    ("Meine Nummer ist null, sieben, eins, eins, vier, fünf.",
+     "Meine Nummer ist 071145."),
+    ("drei, vier, fünf Mal", "drei, vier, fünf Mal"),     # a guess, no number
+    ("Eins, zwei, drei", "Eins, zwei, drei"),
+    ("Es sind acht Stück.", "Es sind acht Stück."),
+    ("Eins zu null gewonnen.", "Eins zu null gewonnen."),
+])
+def test_digits_said_one_by_one_become_a_number(said, written):
+    from postprocess import fix_digit_sequences
+    assert fix_digit_sequences(said) == written
+
+
+# -- a command runs as soon as the first look has seen it --------------------------------
+
+def test_a_command_ends_the_part_without_the_whole_pause(module):
+    import time
+    module._settings["segment_pause"] = 3.0
+    module._active_mode = "mixed"
+    module._window.pause_kind = lambda kind: None
+    module.transcribe = lambda wav: (module.heard.append(len(wav))
+                                     or "Streich das.")
+    session = module._make_segmenter()
+    session.start()
+    started = time.monotonic()
+    _live_feed(session, _tone(0.8) + _silence(1.2))
+    deadline = time.monotonic() + 5
+    while not module._window.got and time.monotonic() < deadline:
+        time.sleep(0.02)
+    took = time.monotonic() - started
+    assert module._window.got == [("Streich das.", "mixed")]
+    assert took < 2.5, "a 3 s pause was not waited for"
+    assert len(module.heard) == 1                 # the first look was reused
+    session.stop(timeout=5)
+
+
+def test_dictation_still_waits_for_the_whole_pause(module):
+    import time
+    module._settings["segment_pause"] = 3.0
+    module._active_mode = "mixed"
+    module._window.pause_kind = lambda kind: None
+    session = module._make_segmenter()
+    session.start()
+    _live_feed(session, _tone(0.8) + _silence(1.5))
+    time.sleep(0.3)
+    assert module._window.got == []               # "Teil 1." is no command
+    session.stop(timeout=5)

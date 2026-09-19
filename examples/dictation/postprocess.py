@@ -584,6 +584,28 @@ _DATE_RE = re.compile(
     re.IGNORECASE)
 
 
+# Digits said one by one: "eins, acht, acht, sieben" is the number 1887 (a
+# year, a PIN, a phone number): said as single digits in a row, with only
+# commas or spaces between them.  Four or more: "drei, vier, fünf Mal" is
+# a guess at a number of times, not a number.
+_DIGIT_WORDS = {"null": "0", "eins": "1", "zwei": "2", "zwo": "2",
+                "drei": "3", "vier": "4", "fünf": "5", "fuenf": "5",
+                "sechs": "6", "sieben": "7", "acht": "8", "neun": "9"}
+_DIGIT_RUN = re.compile(
+    r"\b(?:" + "|".join(_DIGIT_WORDS) + r")\b"
+    r"(?:[ \t]*[,\-]?[ \t]+(?:" + "|".join(_DIGIT_WORDS) + r")\b"
+    r"|[ \t]*,(?:" + "|".join(_DIGIT_WORDS) + r")\b){3,}",
+    re.IGNORECASE)
+
+
+def fix_digit_sequences(text: str) -> str:
+    """"Eins, acht, acht, sieben." -> "1887." """
+    def join(m: re.Match) -> str:
+        words = re.findall(r"[a-zäöüß]+", m.group(0), re.IGNORECASE)
+        return "".join(_DIGIT_WORDS[w.lower()] for w in words)
+    return _DIGIT_RUN.sub(join, text or "")
+
+
 def fix_dates(text: str) -> str:
     """Write spoken dates as numbers: "20. August 2026" → "20.08.2026".
 
