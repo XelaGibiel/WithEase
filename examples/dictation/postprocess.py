@@ -267,7 +267,22 @@ _LOWER_WORDS = frozenset((
     # adverbs / particles that are never nouns
     "dann jetzt hier dort schon noch auch nur sehr immer wieder nicht "
     "eigentlich vielleicht wirklich gerne ziemlich sofort bald oft "
-    "manchmal nie niemals überhaupt eben"
+    "manchmal nie niemals überhaupt eben "
+    # possessives
+    "mein meine meinen meinem meiner meines dein deine deinen deinem "
+    "deiner deines unser unsere unseren unserem unserer euer eure "
+    # verb forms that are never nouns - a part that continues a sentence
+    # starts with one all the time ("Auch bei diesem Diktat" + "Habe ich
+    # ...").  No infinitives that double as nouns ("das Leben").
+    "habe hast hat habt hatte hatten hätte hätten bin bist ist sind seid "
+    "war warst waren wäre wären werde wirst wird würde würden kann kannst "
+    "können könnte könnten muss musst müssen müsste sollte sollten soll "
+    "sollst will willst wollte möchte möchtest möchten mag magst darf "
+    "darfst gibt gab geht ging gehe mache machst macht sage sagst sagt "
+    "schaue schaust schaut schau sieh siehe sehe siehst sieht lass lasse "
+    "lässt nimm nehme nimmt gib gebe denke denkst denkt glaube glaubst "
+    "glaubt weiß weißt finde findest findet brauche brauchst braucht hoffe "
+    "komme kommst kommt"
 ).split())
 
 # A single Capitalised word, optional leading/trailing quotes+punctuation.

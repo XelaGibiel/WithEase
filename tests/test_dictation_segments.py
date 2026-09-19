@@ -452,7 +452,7 @@ def test_the_dictation_key_takes_commands_only_when_wanted(module, monkeypatch):
 @pytest.mark.parametrize("parts, expected", [
     (["Bei so Befehlen wie Anführungsstriche unten kopieren Anführungsstriche "
       "oben.", "Macht zum Beispiel ein Dragon etwas anders."],
-     "Bei so Befehlen wie „kopieren“ Macht zum Beispiel ein Dragon etwas "
+     "Bei so Befehlen wie „kopieren“ macht zum Beispiel ein Dragon etwas "
      "anders."),
     (["so etwas wie Anführungsstriche unten, Text kopieren, Anführungsstriche "
       "oben.", "Oder so etwas wie"],
@@ -722,3 +722,21 @@ def test_the_learned_level_is_used_from_the_first_part(module):
     module._settings["voice_level"] = 7000
     session = module._make_segmenter()
     assert session.voice_level == 7000 and session.background_ratio == 0.25
+
+
+# -- a part that continues a sentence starts in lower case (from a kept report) -------
+
+def test_verbs_continue_a_sentence_in_lower_case(app):
+    win = _window(app)
+    for part in ("Auch bei diesem Diktat", "Habe ich wieder ein Fehler gemerkt?",
+                 "Komma", "Schaue ihn dir an.", "Das Leben ist schön."):
+        win._on_transcript(part, "mixed", [])
+    assert win.text() == ("Auch bei diesem Diktat habe ich wieder ein Fehler "
+                          "gemerkt, schaue ihn dir an. Das Leben ist schön.")
+    win.deleteLater()
+
+
+def test_a_dropped_part_has_no_uncertain_words_of_its_own(module):
+    module._last_low_words = ["Ihnen"]
+    module._remember_skipped(b"\x00\x00" * 1600, "quieter than your voice")
+    assert module._recent_parts[-1]["low"] == []

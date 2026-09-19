@@ -5895,19 +5895,21 @@ class DictationModule(BaseModule):
             w.setsampwidth(2)
             w.setframerate(_SAMPLE_RATE)
             w.writeframes(pcm)
-        self._remember_part(buf.getvalue(), "")
+        # never heard by Whisper: no uncertain words of its own
+        self._remember_part(buf.getvalue(), "", low=[])
         self._finish_part(_t("report.dropped_quiet"))
 
     # -- "Fehler merken" ------------------------------------------------------
 
-    def _remember_part(self, wav: bytes, raw: str) -> None:
+    def _remember_part(self, wav: bytes, raw: str,
+                       low: list[str] | None = None) -> None:
         """Keep a part in memory (only the last five) - nothing on disk."""
         import datetime
         self._recent_parts.append({
             "time": datetime.datetime.now().isoformat(timespec="seconds"),
             "wav": wav, "raw": raw or "", "text": None,
             "mode": self._active_mode,
-            "low": list(self._last_low_words)})
+            "low": list(self._last_low_words if low is None else low)})
 
     def _finish_part(self, text: str) -> None:
         """What the part became after the post-processing."""
