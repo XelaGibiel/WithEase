@@ -187,8 +187,15 @@ class Editor:
             joined = None
             if self.join_after_pause:
                 try:
-                    from streaming import continue_after_pause
-                    joined = continue_after_pause(doc[:pos], text)
+                    from streaming import (SENTENCE_MARKS,
+                                           continue_after_pause, mark_replaces)
+                    spoken = text.lstrip()
+                    if spoken[:1] in SENTENCE_MARKS and doc[:pos].strip():
+                        # a part that starts with a spoken mark ("?"): it
+                        # takes the place of the automatic one before it
+                        joined = (mark_replaces(doc[:pos]), spoken)
+                    else:
+                        joined = continue_after_pause(doc[:pos], text)
                 except ImportError:
                     pass
             if joined is not None:
@@ -487,10 +494,23 @@ class Editor:
         glue = d.get("glue")
         cur = self.te.textCursor()
         if glue != "left":
-            # closing punctuation: remove a space directly before the cursor
+            # closing punctuation: remove the space directly before the
+            # cursor - and a mark the recogniser put there on its own
+            # ("kann." + "Fragezeichen" -> "kann?")
             pos = cur.position()
             text = self._text()
-            if pos > 0 and text[pos - 1] == " ":
+            cut = 0
+            try:
+                from streaming import SENTENCE_MARKS, mark_replaces
+                if char and char in SENTENCE_MARKS and not cur.hasSelection():
+                    cut = mark_replaces(text[:pos])
+            except ImportError:
+                pass
+            if cut:
+                cur.setPosition(pos - cut)
+                cur.setPosition(pos, QTextCursor.MoveMode.KeepAnchor)
+                cur.removeSelectedText()
+            elif pos > 0 and text[pos - 1] == " ":
                 cur.deletePreviousChar()
         cur.insertText(char)
         self.te.setTextCursor(cur)

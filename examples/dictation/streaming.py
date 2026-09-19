@@ -199,6 +199,30 @@ def continues(word: str, rest_of_sentence: str) -> bool:
     return False
 
 
+SENTENCE_MARKS = ".,;:!?"
+
+
+def mark_replaces(previous: str) -> int:
+    """How many characters at the end of ``previous`` a spoken mark takes
+    the place of: the spaces, and the recogniser's own mark before them.
+
+    "... benutzen kann." + a spoken "?" is "... benutzen kann?" - the full
+    stop was only the recogniser's guess at the end of a part.  "z.B.", a
+    date ("16.") and "..." keep their dot."""
+    stripped = (previous or "").rstrip(" ")
+    spaces = len(previous or "") - len(stripped)
+    last = stripped[-1:]
+    if not last or last not in SENTENCE_MARKS or stripped.endswith(".."):
+        return spaces
+    if last == ".":
+        before = re.search(r"(\S+)\.$", stripped)
+        word = before.group(1).lower() if before else ""
+        if (word in _ABBREVIATIONS or word.rstrip(".") in _ABBREVIATIONS
+                or word[-1:].isdigit()):
+            return spaces
+    return spaces + 1
+
+
 def continue_after_pause(previous: str, text: str) -> tuple[int, str] | None:
     """A new part that continues the sentence before it.
 

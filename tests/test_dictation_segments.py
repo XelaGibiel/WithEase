@@ -397,3 +397,51 @@ def test_a_part_dictated_into_the_middle_leaves_one_space(app):
     editor.apply(cde.parse("streich das"))
     assert edit.toPlainText() == "Hallo Welt"
     edit.deleteLater()
+
+
+# -- a spoken mark after a part takes the place of the automatic one -------------
+
+@pytest.mark.parametrize("parts, expected", [
+    # from a kept error report: "Fragezeichen" said as a part of its own
+    (["Also, dass ich im Diktiermodus auch Befehle benutzen kann.", "?"],
+     "Also, dass ich im Diktiermodus auch Befehle benutzen kann?"),
+    (["Kommst du morgen.", "Fragezeichen."], "Kommst du morgen?"),
+    (["Das ist toll.", "Ausrufezeichen."], "Das ist toll!"),
+    (["Wir treffen uns am 16.", "?"], "Wir treffen uns am 16.?"),
+    (["Das war's...", "?"], "Das war's...?"),
+])
+def test_a_spoken_mark_replaces_the_automatic_one(app, parts, expected):
+    win = _window(app)
+    for part in parts:
+        win._on_transcript(part, "text", [])
+    assert win.text() == expected
+    win._on_transcript("Streich das.", "auto", [])     # and it comes back
+    assert win.text() == parts[0]
+    win.deleteLater()
+
+
+def test_the_command_form_replaces_it_too(app):
+    win = _window(app)
+    win._on_transcript("Kommst du morgen.", "auto", [])
+    win._on_transcript("Fragezeichen.", "auto", [])     # parsed as a command
+    assert win.text() == "Kommst du morgen?"
+    win.deleteLater()
+
+
+# -- commands with the dictation key --------------------------------------------
+
+def test_the_dictation_key_takes_commands_only_when_wanted(module, monkeypatch):
+    import threading
+
+    import module as dic
+    monkeypatch.setattr(threading, "Thread",
+                        lambda target, **_k: type(
+                            "T", (), {"start": lambda self: None})())
+    module._trigger, module._command_trigger = "Key.num_add", "ctrl+Key.num_0"
+    monkeypatch.setattr(dic, "current_combo_str", lambda vk: "Key.num_add")
+    module._state = "idle"
+    module._on_key_event(0x6B, 0, False, False, True)
+    assert module._active_mode == "text"          # as before: text only
+    module._settings["commands_in_dictation"] = True
+    module._on_key_event(0x6B, 0, False, False, True)
+    assert module._active_mode == "auto"          # a command alone counts

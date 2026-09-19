@@ -145,3 +145,15 @@ def test_the_model_row_goes_with_the_cloud(app, module):
     page._backend.setCurrentIndex(page._backend.findData("cloud"))
     assert not page._local_model.isVisibleTo(page)
     page.deleteLater()
+
+
+def test_a_spoken_mark_part_is_kept_too(module, tmp_path):
+    module._settings["report_dir"] = str(tmp_path)
+    _part(module, "Benutzen kann.", "Benutzen kann.")
+    _part(module, "Fragezeichen.", "?")
+    _part(module, "Fehler merken.", "Fehler merken.")
+    module.report_error("Benutzen kann. ?")
+    (report,) = list(tmp_path.iterdir())
+    data = json.loads((report / "bericht.json").read_text(encoding="utf-8"))
+    assert [p["raw"] for p in data["parts"]] == ["Benutzen kann.",
+                                                 "Fragezeichen."]

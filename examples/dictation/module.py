@@ -182,6 +182,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hotkey": "Diktier-Taste",
         "hotkey.command": "Befehls-Taste (optional)",
         "hotkey.command.hint": "Wenn gesetzt: Diese Taste ist nur für Befehle (Cursor, markiere …), die Diktier-Taste nur für Text. So werden Befehl und Diktat sauber getrennt.",
+        "commands_in_dictation": "Befehle auch beim Diktieren erkennen",
+        "commands_in_dictation.hint": "Wie bei Dragon: Ein Befehl wie „Streich das“, „neue Zeile“ oder „einfügen“ wirkt auch mit der Diktier-Taste – wenn du ihn allein sagst, mit einer Pause davor und danach (bis der grüne Punkt leer ist). Mitten im Satz bleibt er Text. Die Befehlstaste funktioniert weiter wie bisher.",
         "mode": "Aufnahmemodus",
         "mode.hint": "Halten: Aufnahme läuft, solange die Taste gedrückt wird – sie endet von selbst.\nUmschalten: Einmal drücken startet, noch einmal beendet – besser, wenn längeres Halten schwerfällt.",
         "mode.toggle": "Umschalten",
@@ -506,6 +508,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hotkey": "Dictation key",
         "hotkey.command": "Command key (optional)",
         "hotkey.command.hint": "When set: this key is for commands only (Cursor, select …) and the dictation key for text only – a clean split between command and dictation.",
+        "commands_in_dictation": "Recognise commands while dictating too",
+        "commands_in_dictation.hint": "Like Dragon: a command such as 'Streich das', 'neue Zeile' or 'einfügen' also works with the dictation key - when you say it on its own, with a pause before and after (until the green dot is empty). Inside a sentence it stays text. The command key keeps working as before.",
         "mode": "Recording mode",
         "mode.hint": "Hold: recording runs for as long as the key is held – it stops by itself.\nToggle: press once to start, again to stop – better if holding a key for longer is difficult.",
         "mode.toggle": "Toggle",
@@ -3440,6 +3444,14 @@ class DictationSettingsWidget(QWidget):
         adv.addRow(label_with_hint(_t("hotkey.command"),
                                    _t("hotkey.command.hint")),
                   self._command_hotkey)
+        self._cmds_in_dictation = QCheckBox(_t("commands_in_dictation"))
+        self._cmds_in_dictation.setChecked(
+            bool(self._settings.get("commands_in_dictation", False)))
+        self._cmds_in_dictation.toggled.connect(
+            lambda on: self._save("commands_in_dictation", bool(on)))
+        _whole_row_toggle(self._cmds_in_dictation)
+        adv.addRow("", self._cmds_in_dictation)
+        adv.addRow("", _setting_note(_t("commands_in_dictation.hint")))
 
         self._max_seconds = QSpinBox()
         self._max_seconds.setRange(0, 3600)     # 0 = endless (no auto-stop)
@@ -5175,7 +5187,11 @@ class DictationModule(BaseModule):
             # Dictation key: plain text (or auto-detect when no command key is
             # set).  Command key: always interpreted as a command.
             if combo == self._trigger:
-                mode = "text" if self._command_trigger else "auto"
+                # With a command key the dictation key is text only - unless
+                # commands are wanted in dictation too (said after a pause).
+                mode = ("text" if self._command_trigger
+                        and not self._settings.get("commands_in_dictation")
+                        else "auto")
             elif self._command_trigger and combo == self._command_trigger:
                 mode = "command"
             else:
@@ -5827,10 +5843,13 @@ class DictationModule(BaseModule):
             if window is not None:
                 window.report_done(message, saved)
 
-        # the utterance "Fehler merken" itself is no error
+        # the utterance "Fehler merken" itself is no error - every other
+        # part is, a spoken "Fragezeichen" included
+        def is_the_request(part: dict) -> bool:
+            cmd = cde.parse(part["text"] or part["raw"])
+            return cmd is not None and cmd.kind == "report_error"
         parts = [dict(p) for p in self._recent_parts
-                 if p["text"] is not None
-                 and cde.parse(p["text"] or p["raw"]) is None]
+                 if p["text"] is not None and not is_the_request(p)]
         if not parts:
             answer(_t("report.nothing"))
             return
