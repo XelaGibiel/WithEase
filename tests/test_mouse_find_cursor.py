@@ -174,3 +174,38 @@ def test_a_key_press_on_the_slider_hides_by_itself(app):
     page._drop_free_area()
     assert page._free_overlay is None
     page.deleteLater()
+
+
+# -- every change to the look shows itself ------------------------------------------
+
+def test_changing_the_look_shows_the_highlight(app, monkeypatch):
+    from withease.core.event_bus import bus
+    from withease.modules.mouse import MouseModule
+    shown = []
+    monkeypatch.setattr(bus, "publish",
+                        lambda topic, **kw: shown.append((topic, kw))
+                        if topic == "mouse.highlight" else None)
+    m = MouseModule()
+    m._settings.update({"highlight_enabled": True})
+    page = m.get_settings_widget()
+    assert not hasattr(page, "_highlight_preview_btn")    # no button any more
+    page._highlight_radius.setValue(130)
+    page._preview_timer.timeout.emit()                   # the short delay
+    (topic, kw), = shown
+    assert kw["radius"] == 130
+    page.deleteLater()
+
+
+def test_the_sliders_have_about_ten_positions_with_the_defaults(app):
+    from withease.modules.mouse import MouseModule
+    page = MouseModule().get_settings_widget()
+    for slider, default in ((page._highlight_auto_free, 25),
+                            (page._highlight_radius, 90),
+                            (page._highlight_arrow_thickness, 6),
+                            (page._arrow_size, 48),
+                            (page._circle_radius, 40),
+                            (page._circle_opacity, 25)):
+        assert 8 <= slider.slider.maximum() + 1 <= 12
+        slider.setValue(default)
+        assert slider.value() == default
+    page.deleteLater()

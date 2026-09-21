@@ -294,12 +294,12 @@ class MouseSettingsWidget(QWidget):
                             tr("module.mouse.highlight.auto_delay.hint")),
             self._highlight_auto_delay)
 
-        self._highlight_auto_free = ValueSlider(0, 50, suffix=" %")
+        self._highlight_auto_free = ValueSlider(0, 50, suffix=" %", step=5)
         self._highlight_auto_free.setValue(
             int(self._settings.get("highlight_auto_free", 25)))
         self._highlight_auto_free.setTickPosition(
             QSlider.TickPosition.TicksBelow)
-        self._highlight_auto_free.setTickInterval(10)
+        self._highlight_auto_free.setTickInterval(5)
         self._highlight_auto_free.valueChanged.connect(
             lambda v: self._save("highlight_auto_free", v))
         # While the slider moves, the free area is drawn on the screen; it
@@ -355,11 +355,11 @@ class MouseSettingsWidget(QWidget):
                                     self._highlight_color_btn)
 
         # Pulse radius
-        self._highlight_radius = ValueSlider(40, 200, suffix=" px")
+        self._highlight_radius = ValueSlider(30, 210, suffix=" px", step=20)
         self._highlight_radius.setValue(
             int(self._settings.get("highlight_radius", 90)))
         self._highlight_radius.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._highlight_radius.setTickInterval(20)
+        self._highlight_radius.setTickInterval(20)       # every position
         self._highlight_radius.valueChanged.connect(
             lambda v: self._save("highlight_radius", v))
         self._rings_sub.form.addRow(tr("module.mouse.highlight.radius"),
@@ -389,7 +389,8 @@ class MouseSettingsWidget(QWidget):
         highlight_form.addRow("", self._arrow_sub)
 
         # Arrow thickness
-        self._highlight_arrow_thickness = ValueSlider(3, 30, suffix=" px")
+        self._highlight_arrow_thickness = ValueSlider(3, 30, suffix=" px",
+                                                      step=3)
         self._highlight_arrow_thickness.setValue(
             int(self._settings.get("highlight_arrow_thickness", 6)))
         self._highlight_arrow_thickness.setTickPosition(
@@ -433,10 +434,10 @@ class MouseSettingsWidget(QWidget):
         self._persist_sub.form.addRow(self._arrow_corner_label,
                                       self._arrow_corner)
 
-        self._arrow_size = ValueSlider(20, 120, suffix=" px")
+        self._arrow_size = ValueSlider(24, 132, suffix=" px", step=12)
         self._arrow_size.setValue(int(self._settings.get("highlight_arrow_size", 48)))
         self._arrow_size.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._arrow_size.setTickInterval(20)
+        self._arrow_size.setTickInterval(12)
         self._arrow_size.valueChanged.connect(
             lambda v: self._save("highlight_arrow_size", v))
         self._arrow_size_label = QLabel(tr("module.mouse.highlight.arrow_size"))
@@ -453,11 +454,11 @@ class MouseSettingsWidget(QWidget):
         self._circle_sub = SubSettings()
         highlight_form.addRow("", self._circle_sub)
 
-        self._circle_radius = ValueSlider(20, 120, suffix=" px")
+        self._circle_radius = ValueSlider(20, 120, suffix=" px", step=10)
         self._circle_radius.setValue(
             int(self._settings.get("highlight_circle_radius", 40)))
         self._circle_radius.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._circle_radius.setTickInterval(20)
+        self._circle_radius.setTickInterval(10)
         self._circle_radius.valueChanged.connect(
             lambda v: self._save("highlight_circle_radius", v))
         self._circle_radius_label = QLabel(
@@ -465,7 +466,7 @@ class MouseSettingsWidget(QWidget):
         self._circle_sub.form.addRow(self._circle_radius_label,
                                      self._circle_radius)
 
-        self._circle_opacity = ValueSlider(5, 90, suffix=" %")
+        self._circle_opacity = ValueSlider(5, 95, suffix=" %", step=10)
         self._circle_opacity.setValue(
             int(self._settings.get("highlight_circle_opacity", 25)))
         self._circle_opacity.setTickPosition(QSlider.TickPosition.TicksBelow)
@@ -477,13 +478,9 @@ class MouseSettingsWidget(QWidget):
         self._circle_sub.form.addRow(self._circle_opacity_label,
                                      self._circle_opacity)
 
-        # Preview + reset buttons
+        # Reset button.  No preview button: every change to the look shows
+        # the highlight right away (see _connect_live_preview).
         btn_row = QVBoxLayout()
-        self._highlight_preview_btn = QPushButton(
-            tr("module.mouse.highlight.preview"))
-        self._highlight_preview_btn.clicked.connect(self._preview_highlight)
-        btn_row.addWidget(self._highlight_preview_btn)
-
         self._highlight_reset_btn = QPushButton(
             tr("module.mouse.highlight.reset"))
         self._highlight_reset_btn.clicked.connect(self._reset_highlight)
@@ -506,6 +503,7 @@ class MouseSettingsWidget(QWidget):
             self._arrow_persistent_cb.isChecked())
         self._on_circle_toggled(self._circle_cb.isChecked())
         self._on_auto_toggled(self._highlight_auto_cb.isChecked())
+        self._connect_live_preview()
 
         # ── Keyboard as mouse buttons ────────────────────────────────
         self._kbclick_sec = CollapsibleSection(
@@ -630,6 +628,7 @@ class MouseSettingsWidget(QWidget):
             self._highlight_color = [chosen.red(), chosen.green(), chosen.blue()]
             self._update_color_button()
             self._save("highlight_color", self._highlight_color)
+            self._preview_highlight()           # see the new colour at once
 
     def _on_rings_toggled(self, enabled: bool) -> None:
         self._save("highlight_rings", enabled)
@@ -681,6 +680,24 @@ class MouseSettingsWidget(QWidget):
         self._save("highlight_permanent_circle", enabled)
         # Radius + opacity only make sense when the permanent circle is on.
         self._highlight_form.setRowVisible(self._circle_sub, enabled)
+
+    def _connect_live_preview(self) -> None:
+        """Changing how the highlight looks shows it at once, with the new
+        values - no separate preview button.  A short delay bundles a slider
+        drag (or a reset changing several values) into one pulse."""
+        from PySide6.QtCore import QTimer
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(150)
+        self._preview_timer.timeout.connect(self._preview_highlight)
+        start = lambda *_: self._preview_timer.start()   # noqa: E731
+        for slider in (self._highlight_radius, self._highlight_arrow_thickness):
+            slider.valueChanged.connect(start)
+            slider.slider.sliderPressed.connect(start)
+        self._highlight_duration.valueChanged.connect(start)
+        self._highlight_ring_style.currentIndexChanged.connect(start)
+        self._highlight_rings_cb.toggled.connect(start)
+        self._highlight_arrow_cb.toggled.connect(start)
 
     def _preview_highlight(self) -> None:
         from withease.core.event_bus import bus

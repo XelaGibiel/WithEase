@@ -222,7 +222,6 @@
   "module.mouse.highlight.circle.hint": "A circle that is ALWAYS around the cursor – not only while searching. It comes in addition to the pulsing rings, it does not replace them.",
   "module.mouse.highlight.circle_radius": "Circle size",
   "module.mouse.highlight.circle_opacity": "Opacity",
-  "module.mouse.highlight.preview": "Show preview",
   "module.mouse.highlight.reset": "Reset to defaults",
   "module.mouse.keyboard_clicks": "Keyboard as mouse buttons",
   "module.mouse.keyboard_clicks.description": "Replaces left-, right-, and double-click with freely assignable keyboard keys — for users who cannot easily reach the mouse buttons.",

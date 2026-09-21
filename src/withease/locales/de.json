@@ -222,7 +222,6 @@
   "module.mouse.highlight.circle.hint": "Ein Kreis, der IMMER um den Cursor liegt – nicht nur beim Suchen. Kommt zu den pulsierenden Ringen dazu, ersetzt sie nicht.",
   "module.mouse.highlight.circle_radius": "Kreis-Größe",
   "module.mouse.highlight.circle_opacity": "Deckkraft",
-  "module.mouse.highlight.preview": "Vorschau anzeigen",
   "module.mouse.highlight.reset": "Auf Standard zurücksetzen",
   "module.mouse.keyboard_clicks": "Tastatur als Maustasten",
   "module.mouse.keyboard_clicks.description": "Ersetzt Links-, Rechts- und Doppelklick durch frei wählbare Tastaturtasten – für Nutzer, die die Maustasten nicht gut erreichen.",

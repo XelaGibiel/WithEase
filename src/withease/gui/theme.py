@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QScrollArea,
+    QSlider,
 )
 
 
@@ -29,20 +30,44 @@ class _WheelGuard(QObject):
     the page scrolls instead).  When the popup list is open the wheel targets
     that list, not the combo, so scrolling the open list still works.  A spin
     box is guarded the same way while it is not focused; once clicked into it,
-    the wheel may adjust it."""
+    the wheel may adjust it.
+
+    A slider never takes the wheel, and never Page Up / Page Down either:
+    scrolling or paging down a settings page must not move a slider the
+    pointer or the focus happens to pass.  It is changed by dragging or with
+    the arrow keys; the page scrolls instead."""
+
+    _PAGE_KEYS = (Qt.Key.Key_PageUp, Qt.Key.Key_PageDown)
+
+    @staticmethod
+    def _scroll_area(obj: QObject) -> QScrollArea | None:
+        p = obj.parentWidget()
+        while p is not None and not isinstance(p, QScrollArea):
+            p = p.parentWidget()
+        return p
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # noqa: N802
         if event.type() == QEvent.Type.Wheel:
-            block = (isinstance(obj, QComboBox)
+            # QSlider, not QAbstractSlider: a scroll bar is one too, and it
+            # must keep scrolling the page
+            block = (isinstance(obj, (QComboBox, QSlider))
                      or (isinstance(obj, QAbstractSpinBox)
                          and not obj.hasFocus()))
             if block:
-                p = obj.parentWidget()
-                while p is not None and not isinstance(p, QScrollArea):
-                    p = p.parentWidget()
+                p = self._scroll_area(obj)
                 if p is not None:
                     QApplication.sendEvent(p.viewport(), event)
                 return True      # never let the control consume it
+        elif (event.type() == QEvent.Type.KeyPress
+              and isinstance(obj, QSlider)
+              and event.key() in self._PAGE_KEYS):
+            p = self._scroll_area(obj)
+            if p is not None:
+                bar = p.verticalScrollBar()
+                step = bar.pageStep()
+                bar.setValue(bar.value() + (step if event.key()
+                                            == Qt.Key.Key_PageDown else -step))
+            return True          # the page moves, the slider stays
         return False
 
 
