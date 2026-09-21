@@ -2739,6 +2739,13 @@ class DictationSettingsWidget(QWidget):
         self._ai_models_bridge = _AiModelsBridge()
         self._ai_models_bridge.loaded.connect(self._on_ai_models_loaded)
         self._build_ui()
+        # A row that does not fit puts its field under the label instead of
+        # making the page wider than the window (older cores lack this).
+        try:
+            from withease.gui.ui_utils import wrap_long_rows
+            wrap_long_rows(self)
+        except ImportError:
+            pass
         _sync_module_checkbox(self, module, self._enabled_cb,
                               self._update_enabled_state)
         # The microphone can be switched from the tray as well; keep the

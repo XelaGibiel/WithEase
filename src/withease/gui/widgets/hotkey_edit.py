@@ -26,8 +26,12 @@ class HotkeyEdit(QWidget):
     _bus_hooked = False
 
     def __init__(self, current_key: str = "", action_id: str = "",
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, compact: bool = False) -> None:
         super().__init__(parent)
+        # compact: for grids of several fields side by side (screen zones) -
+        # a narrow button, "—" instead of "— nicht belegt —" (said in the
+        # tool-tip), so the grid fits the page instead of widening it.
+        self._compact = compact
         self._key = current_key
         self._action_id = action_id  # the ActionManager action this hotkey feeds
         self._recording = False
@@ -53,7 +57,7 @@ class HotkeyEdit(QWidget):
         layout.setSpacing(4)
 
         self._btn = QPushButton()
-        self._btn.setMinimumWidth(140)
+        self._btn.setMinimumWidth(60 if compact else 140)
         self._btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._btn.clicked.connect(self._start_recording)
         layout.addWidget(self._btn)
@@ -269,6 +273,10 @@ class HotkeyEdit(QWidget):
     def _update_display(self) -> None:
         if self._key:
             self._btn.setText(self._format_key(self._key))
+            self._btn.setToolTip("")
+        elif self._compact:
+            self._btn.setText("—")
+            self._btn.setToolTip(tr("hotkey.not_assigned"))
         else:
             self._btn.setText(tr("hotkey.not_assigned"))
 

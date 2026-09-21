@@ -818,3 +818,17 @@ def compact_fields(root: QWidget) -> None:
         for it in items:
             if it.widget() is not None:
                 it.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+
+def wrap_long_rows(page: QWidget) -> None:
+    """Let every form on ``page`` put a field UNDER its label when the row
+    does not fit side by side.
+
+    Without this a long German label plus a wide field sets the page's
+    minimum width, and on a smaller window or a larger font the whole page
+    becomes wider than the window: the cards run off the right edge and
+    their descriptions are cut off.  Rows that fit stay exactly as they
+    are."""
+    from PySide6.QtWidgets import QFormLayout
+    for form in page.findChildren(QFormLayout):
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)

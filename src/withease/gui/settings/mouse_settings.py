@@ -46,6 +46,8 @@ class MouseSettingsWidget(QWidget):
         self._settings = module._settings
         self._zone_overlay: ScreenZoneOverlay | None = None
         self._build_ui()
+        from withease.gui.ui_utils import wrap_long_rows
+        wrap_long_rows(self)
         from withease.gui.settings.module_sync import sync_module_checkbox
         sync_module_checkbox(self, module, self._enabled_cb,
                              self._update_enabled_state)
@@ -551,8 +553,9 @@ class MouseSettingsWidget(QWidget):
         self._zones_sec.toggled.connect(
             lambda v: self._save("screen_zones_enabled", v))
 
-        self._zones_sec.content_layout.addWidget(
-            QLabel(tr("module.mouse.screen_zones.hint")))
+        zones_hint = QLabel(tr("module.mouse.screen_zones.hint"))
+        zones_hint.setWordWrap(True)        # never wider than the page
+        self._zones_sec.content_layout.addWidget(zones_hint)
 
         # Grid size selector
         grid_form = QFormLayout()
@@ -788,7 +791,7 @@ class MouseSettingsWidget(QWidget):
                 cell_layout.addWidget(QLabel(str(zone_num)))
                 he = HotkeyEdit(
                     self._settings.get(f"screen_zone_{zone_num}_hotkey", ""),
-                    action_id=f"mouse.zone_{zone_num}")
+                    action_id=f"mouse.zone_{zone_num}", compact=True)
                 he.key_changed.connect(
                     lambda k, n=zone_num: self._save(f"screen_zone_{n}_hotkey", k))
                 cell_layout.addWidget(he)
