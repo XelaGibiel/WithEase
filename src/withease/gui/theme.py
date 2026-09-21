@@ -525,6 +525,17 @@ def app_stylesheet() -> str:
             border: 1px solid transparent; border-radius: 4px; padding: 0px 2px;
         }}
         QLabel#hintIcon:focus {{ border-color: {acc}; color: {acc}; }}
+        /* A pinned hint: the ⓘ stays lit, and its tip looks like a tool-tip
+           with a stronger edge, so it reads as "kept open on purpose". */
+        QLabel#hintIcon[pinned="true"] {{ border-color: {acc}; color: {acc};
+            background: {s['navbg']}; }}
+        QFrame#pinnedTip {{ background: {s['card']}; color: {s['text']};
+            border: 2px solid {acc}; border-radius: {r}px;
+            padding: {tip_pad_v}px {tip_pad_h}px; }}
+        QLabel#pinnedTipText {{ color: {s['text']};
+            font-size: {_font_px()}pt; }}
+        QLabel#pinnedTipFoot {{ color: {hint_color()};
+            font-size: {_font_px(-1)}pt; }}
 
         /* Tool-tips are where every explanation in this app ends up, so they
            are a reading surface, not a one-word label: real padding, the card

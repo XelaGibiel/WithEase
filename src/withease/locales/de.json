@@ -18,6 +18,7 @@
   "tray.tooltip.profile": "Profil: {name}",
   "settings.title": "WithEase – Einstellungen",
   "settings.reset_one": "Auf Standard zurücksetzen ({value})",
+  "hint.pinned_close": "Angeheftet – zum Schließen erneut auf ⓘ oder hier klicken.",
   "settings.profile_saved": "✓ Gespeichert in Profil „{name}“",
   "settings.profile_activated": "✓ Profil „{name}“ ist jetzt aktiv",
   "settings.nav.general": "Allgemein",
