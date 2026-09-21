@@ -102,10 +102,31 @@ def test_the_settings_show_the_rows_with_the_switch(app):
     m._settings.update({"highlight_enabled": True})
     page = m.get_settings_widget()
     form = page._highlight_form
-    assert not form.isRowVisible(page._highlight_auto_delay)
-    assert not form.isRowVisible(page._highlight_auto_free)
+    # delay and free middle live in the box under their switch
+    assert page._highlight_auto_delay.parentWidget() is page._auto_sub
+    assert page._highlight_auto_free.parentWidget() is page._auto_sub
+    assert not form.isRowVisible(page._auto_sub)
     page._highlight_auto_cb.setChecked(True)
     assert m._settings["highlight_auto"] is True
-    assert form.isRowVisible(page._highlight_auto_delay)
-    assert form.isRowVisible(page._highlight_auto_free)
+    assert form.isRowVisible(page._auto_sub)
+    page.deleteLater()
+
+
+def test_every_switch_carries_its_own_box(app):
+    from withease.modules.mouse import MouseModule
+    m = MouseModule()
+    page = m.get_settings_widget()
+    form = page._highlight_form
+    pairs = [(page._highlight_rings_cb, page._rings_sub),
+             (page._highlight_arrow_cb, page._arrow_sub),
+             (page._arrow_persistent_cb, page._persist_sub),
+             (page._circle_cb, page._circle_sub)]
+    for switch, box in pairs:
+        for on in (True, False, True):
+            switch.setChecked(on)
+            if box is page._rings_sub and not on:
+                continue        # rings off turns the arrow on - checked below
+            assert form.isRowVisible(box) is on, (box.objectName(), on)
+    assert page._circle_radius.parentWidget() is page._circle_sub
+    assert page._arrow_corner.parentWidget() is page._persist_sub
     page.deleteLater()

@@ -441,6 +441,15 @@ def app_stylesheet() -> str:
             border-left: 4px solid {acc}; font-weight: bold;
         }}
 
+        /* Settings that belong to the switch above them: indented behind
+           a line in the accent colour (widgets/sub_settings.py). */
+        QFrame#subSettings {{ background: transparent; border: none;
+            border-left: 2px solid {acc}; border-radius: 0;
+            margin-left: 6px; padding-left: 12px; }}
+        /* A quiet heading that splits a long section into topics. */
+        QLabel#settingsGroup {{ color: {hint_color()}; font-weight: bold;
+            padding-top: 10px; }}
+
         /* Cards – anything marked with objectName "card". */
         QFrame#card, QWidget#card {{
             background: {s['card']};
