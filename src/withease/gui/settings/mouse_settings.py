@@ -58,6 +58,7 @@ class MouseSettingsWidget(QWidget):
 
     def _on_settings_closed(self, **_: object) -> None:
         self._hide_zone_overlay()
+        self._drop_free_area()
         try:
             if self._zones_preview_cb.isChecked():
                 self._zones_preview_cb.setChecked(False)
@@ -301,6 +302,14 @@ class MouseSettingsWidget(QWidget):
         self._highlight_auto_free.setTickInterval(10)
         self._highlight_auto_free.valueChanged.connect(
             lambda v: self._save("highlight_auto_free", v))
+        # While the slider moves, the free area is drawn on the screen; it
+        # goes again shortly after the slider is let go.
+        self._free_overlay = None
+        self._highlight_auto_free.slider.sliderPressed.connect(
+            self._show_free_area)
+        self._highlight_auto_free.valueChanged.connect(self._show_free_area)
+        self._highlight_auto_free.slider.sliderReleased.connect(
+            self._hide_free_area_soon)
         self._auto_sub.form.addRow(
             label_with_hint(tr("module.mouse.highlight.auto_free"),
                             tr("module.mouse.highlight.auto_free.hint")),
@@ -643,6 +652,26 @@ class MouseSettingsWidget(QWidget):
         # Corner + size only make sense when the permanent arrow is on.
         self._highlight_form.setRowVisible(self._persist_sub, enabled)
 
+    def _show_free_area(self, *_: object) -> None:
+        from withease.gui.widgets.free_area_overlay import FreeAreaOverlay
+        if self._free_overlay is None:
+            self._free_overlay = FreeAreaOverlay()
+        self._free_overlay.show_percent(self._highlight_auto_free.value(),
+                                        near=self)
+        # a key press or the wheel has no "let go" - it hides by itself
+        if not self._highlight_auto_free.slider.isSliderDown():
+            self._free_overlay.hide_soon()
+
+    def _hide_free_area_soon(self) -> None:
+        if self._free_overlay is not None:
+            self._free_overlay.hide_soon()
+
+    def _drop_free_area(self) -> None:
+        overlay, self._free_overlay = getattr(self, "_free_overlay", None), None
+        if overlay is not None:
+            overlay.hide()
+            overlay.deleteLater()
+
     def _on_auto_toggled(self, enabled: bool) -> None:
         self._save("highlight_auto", enabled)
         # how long still, and the free middle: only for the automatic mode
@@ -752,6 +781,7 @@ class MouseSettingsWidget(QWidget):
 
     def hideEvent(self, event: object) -> None:  # type: ignore[override]
         self._hide_zone_overlay()
+        self._drop_free_area()
         if self._zones_preview_cb.isChecked():
             self._zones_preview_cb.setChecked(False)
         super().hideEvent(event)  # type: ignore[arg-type]

@@ -130,3 +130,47 @@ def test_every_switch_carries_its_own_box(app):
     assert page._circle_radius.parentWidget() is page._circle_sub
     assert page._arrow_corner.parentWidget() is page._persist_sub
     page.deleteLater()
+
+
+# -- the free middle is drawn while its slider moves --------------------------------
+
+def test_the_free_area_shows_while_sliding_and_goes_after(app, monkeypatch):
+    import withease.gui.widgets.free_area_overlay as fao
+    monkeypatch.setattr(fao, "HIDE_AFTER_MS", 50)
+    from withease.modules.mouse import MouseModule
+    m = MouseModule()
+    m._settings.update({"highlight_enabled": True, "highlight_auto": True})
+    page = m.get_settings_widget()
+    slider = page._highlight_auto_free
+    assert page._free_overlay is None                 # nothing at start
+    slider.slider.setSliderDown(True)                 # grabbed
+    slider.setValue(40)
+    overlay = page._free_overlay
+    assert overlay is not None and overlay.isVisible()
+    assert abs(overlay.radius() - overlay.height() * 0.40) < 1
+    assert not overlay._hide_timer.isActive()         # held: stays
+    slider.slider.setSliderDown(False)                # let go
+    page._hide_free_area_soon()
+    assert overlay._hide_timer.isActive()
+    overlay._hide_timer.setInterval(10)
+    overlay._hide_timer.start()
+    import time
+    deadline = time.monotonic() + 2
+    while overlay.isVisible() and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert not overlay.isVisible()
+    page._drop_free_area()
+    page.deleteLater()
+
+
+def test_a_key_press_on_the_slider_hides_by_itself(app):
+    from withease.modules.mouse import MouseModule
+    m = MouseModule()
+    m._settings.update({"highlight_enabled": True, "highlight_auto": True})
+    page = m.get_settings_widget()
+    page._highlight_auto_free.setValue(30)            # like an arrow key
+    assert page._free_overlay._hide_timer.isActive()
+    page._drop_free_area()
+    assert page._free_overlay is None
+    page.deleteLater()
