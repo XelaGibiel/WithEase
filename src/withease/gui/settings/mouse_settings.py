@@ -26,6 +26,7 @@ from withease.core.i18n import tr
 from withease.gui import theme
 from withease.gui.widgets.collapsible_section import CollapsibleSection
 from withease.gui.widgets.hotkey_edit import HotkeyEdit
+from withease.gui.widgets.reset_field import ResetField
 from withease.gui.widgets.sub_settings import SubSettings, group_heading
 from withease.gui.widgets.value_slider import ValueSlider
 from withease.gui.ui_utils import (checkbox_with_hint, label_with_hint,
@@ -292,7 +293,7 @@ class MouseSettingsWidget(QWidget):
         self._auto_sub.form.addRow(
             label_with_hint(tr("module.mouse.highlight.auto_delay"),
                             tr("module.mouse.highlight.auto_delay.hint")),
-            self._highlight_auto_delay)
+            self._reset_spin(self._highlight_auto_delay, 3.0, " s"))
 
         self._highlight_auto_free = ValueSlider(0, 50, suffix=" %", step=5)
         self._highlight_auto_free.setValue(
@@ -313,7 +314,7 @@ class MouseSettingsWidget(QWidget):
         self._auto_sub.form.addRow(
             label_with_hint(tr("module.mouse.highlight.auto_free"),
                             tr("module.mouse.highlight.auto_free.hint")),
-            self._highlight_auto_free)
+            self._reset_slider(self._highlight_auto_free, 25))
 
         # Pulsing rings toggle
         highlight_form.addRow(group_heading(tr("module.mouse.highlight.group.look")))
@@ -340,8 +341,9 @@ class MouseSettingsWidget(QWidget):
         self._highlight_ring_style.currentIndexChanged.connect(
             lambda i: self._save("highlight_ring_style",
                                  self._highlight_ring_style.itemData(i)))
-        self._rings_sub.form.addRow(tr("module.mouse.highlight.ring_style"),
-                                    self._highlight_ring_style)
+        self._rings_sub.form.addRow(
+            tr("module.mouse.highlight.ring_style"),
+            self._reset_combo(self._highlight_ring_style, "open"))
 
         # Colour picker (applies to rings)
         self._highlight_color = list(
@@ -351,8 +353,12 @@ class MouseSettingsWidget(QWidget):
         self._highlight_color_btn.setFixedWidth(max(80, em(5)))
         self._update_color_button()
         self._highlight_color_btn.clicked.connect(self._pick_highlight_color)
+        self._color_reset = ResetField(
+            self._highlight_color_btn, [255, 140, 0],
+            lambda: list(self._highlight_color), self._set_highlight_color,
+            describe=lambda c: "#%02X%02X%02X" % tuple(c))
         self._rings_sub.form.addRow(tr("module.mouse.highlight.color"),
-                                    self._highlight_color_btn)
+                                    self._color_reset)
 
         # Pulse radius
         self._highlight_radius = ValueSlider(30, 210, suffix=" px", step=20)
@@ -363,7 +369,7 @@ class MouseSettingsWidget(QWidget):
         self._highlight_radius.valueChanged.connect(
             lambda v: self._save("highlight_radius", v))
         self._rings_sub.form.addRow(tr("module.mouse.highlight.radius"),
-                                    self._highlight_radius)
+                                    self._reset_slider(self._highlight_radius, 90))
 
         # Pulse duration
         self._highlight_duration = QDoubleSpinBox()
@@ -375,8 +381,9 @@ class MouseSettingsWidget(QWidget):
             float(self._settings.get("highlight_duration", 1.6)))
         self._highlight_duration.valueChanged.connect(
             lambda v: self._save("highlight_duration", round(v, 1)))
-        self._rings_sub.form.addRow(tr("module.mouse.highlight.duration"),
-                                    self._highlight_duration)
+        self._rings_sub.form.addRow(
+            tr("module.mouse.highlight.duration"),
+            self._reset_spin(self._highlight_duration, 1.6, " s"))
 
         # Direction arrow toggle
         self._highlight_arrow_cb = QCheckBox(
@@ -400,8 +407,9 @@ class MouseSettingsWidget(QWidget):
             lambda v: self._save("highlight_arrow_thickness", v))
         self._arrow_thickness_row_label = QLabel(
             tr("module.mouse.highlight.arrow_thickness"))
-        self._arrow_sub.form.addRow(self._arrow_thickness_row_label,
-                                    self._highlight_arrow_thickness)
+        self._arrow_sub.form.addRow(
+            self._arrow_thickness_row_label,
+            self._reset_slider(self._highlight_arrow_thickness, 6))
 
         # Permanent direction arrow (corner overlay pointing at the cursor)
         highlight_form.addRow(
@@ -431,8 +439,9 @@ class MouseSettingsWidget(QWidget):
             lambda i: self._save("highlight_arrow_corner",
                                  self._arrow_corner.itemData(i)))
         self._arrow_corner_label = QLabel(tr("module.mouse.highlight.corner"))
-        self._persist_sub.form.addRow(self._arrow_corner_label,
-                                      self._arrow_corner)
+        self._persist_sub.form.addRow(
+            self._arrow_corner_label,
+            self._reset_combo(self._arrow_corner, "bottom-right"))
 
         self._arrow_size = ValueSlider(24, 132, suffix=" px", step=12)
         self._arrow_size.setValue(int(self._settings.get("highlight_arrow_size", 48)))
@@ -441,7 +450,8 @@ class MouseSettingsWidget(QWidget):
         self._arrow_size.valueChanged.connect(
             lambda v: self._save("highlight_arrow_size", v))
         self._arrow_size_label = QLabel(tr("module.mouse.highlight.arrow_size"))
-        self._persist_sub.form.addRow(self._arrow_size_label, self._arrow_size)
+        self._persist_sub.form.addRow(self._arrow_size_label,
+                                      self._reset_slider(self._arrow_size, 48))
 
         # Permanent, lightly translucent circle around the cursor (always on)
         self._circle_cb = QCheckBox(tr("module.mouse.highlight.circle"))
@@ -464,7 +474,7 @@ class MouseSettingsWidget(QWidget):
         self._circle_radius_label = QLabel(
             tr("module.mouse.highlight.circle_radius"))
         self._circle_sub.form.addRow(self._circle_radius_label,
-                                     self._circle_radius)
+                                     self._reset_slider(self._circle_radius, 40))
 
         self._circle_opacity = ValueSlider(5, 95, suffix=" %", step=10)
         self._circle_opacity.setValue(
@@ -475,20 +485,13 @@ class MouseSettingsWidget(QWidget):
             lambda v: self._save("highlight_circle_opacity", v))
         self._circle_opacity_label = QLabel(
             tr("module.mouse.highlight.circle_opacity"))
-        self._circle_sub.form.addRow(self._circle_opacity_label,
-                                     self._circle_opacity)
+        self._circle_sub.form.addRow(
+            self._circle_opacity_label,
+            self._reset_slider(self._circle_opacity, 25))
 
-        # Reset button.  No preview button: every change to the look shows
-        # the highlight right away (see _connect_live_preview).
-        btn_row = QVBoxLayout()
-        self._highlight_reset_btn = QPushButton(
-            tr("module.mouse.highlight.reset"))
-        self._highlight_reset_btn.clicked.connect(self._reset_highlight)
-        btn_row.addWidget(self._highlight_reset_btn)
-
-        btn_row_widget = QWidget()
-        btn_row_widget.setLayout(btn_row)
-        highlight_form.addRow("", btn_row_widget)
+        # No preview button - every change to the look shows the highlight
+        # right away (see _connect_live_preview) - and no reset-everything
+        # button: every setting has its own ↺ behind it.
 
         highlight_form_widget = QWidget()
         highlight_form_widget.setLayout(highlight_form)
@@ -620,15 +623,47 @@ class MouseSettingsWidget(QWidget):
         self._highlight_color_btn.setStyleSheet(
             f"background-color: rgb({r},{g},{b}); color: {text};")
 
+    # -- one ↺ per setting ----------------------------------------------
+
+    @staticmethod
+    def _reset_slider(slider: ValueSlider, default: int) -> ResetField:
+        suffix = slider._suffix
+        return ResetField(slider, default, slider.value, slider.setValue,
+                          slider.valueChanged,
+                          describe=lambda v: f"{v}{suffix}")
+
+    @staticmethod
+    def _reset_spin(spin: Any, default: float, suffix: str) -> ResetField:
+        from PySide6.QtCore import QLocale
+        return ResetField(
+            spin, default, lambda: round(spin.value(), 1), spin.setValue,
+            spin.valueChanged,
+            describe=lambda v: QLocale().toString(float(v), "f", 1) + suffix)
+
+    @staticmethod
+    def _reset_combo(combo: QComboBox, default: str) -> ResetField:
+        return ResetField(
+            combo, default, combo.currentData,
+            lambda v: combo.setCurrentIndex(max(0, combo.findData(v))),
+            combo.currentIndexChanged,
+            describe=lambda v: combo.itemText(max(0, combo.findData(v))))
+
+    def _set_highlight_color(self, color: list[int]) -> None:
+        self._highlight_color = list(color)
+        self._update_color_button()
+        self._save("highlight_color", self._highlight_color)
+        if hasattr(self, "_color_reset"):
+            self._color_reset.refresh()
+        if hasattr(self, "_preview_timer"):
+            self._preview_highlight()           # see the colour at once
+
     def _pick_highlight_color(self) -> None:
         r, g, b = self._highlight_color
         chosen = QColorDialog.getColor(
             QColor(r, g, b), self, tr("module.mouse.highlight.color"))
         if chosen.isValid():
-            self._highlight_color = [chosen.red(), chosen.green(), chosen.blue()]
-            self._update_color_button()
-            self._save("highlight_color", self._highlight_color)
-            self._preview_highlight()           # see the new colour at once
+            self._set_highlight_color(
+                [chosen.red(), chosen.green(), chosen.blue()])
 
     def _on_rings_toggled(self, enabled: bool) -> None:
         self._save("highlight_rings", enabled)
@@ -709,24 +744,6 @@ class MouseSettingsWidget(QWidget):
                     arrow=self._highlight_arrow_cb.isChecked(),
                     arrow_thickness=self._highlight_arrow_thickness.value(),
                     duration_ms=int(self._highlight_duration.value() * 1000))
-
-    def _reset_highlight(self) -> None:
-        """Reset highlight appearance to defaults (activation key untouched)."""
-        self._highlight_color = [255, 140, 0]
-        self._update_color_button()
-        self._save("highlight_color", self._highlight_color)
-
-        self._highlight_rings_cb.setChecked(True)         # fires toggled → saves
-        self._highlight_ring_style.setCurrentIndex(0)     # "open" (default)
-        self._highlight_radius.setValue(90)               # fires valueChanged → saves
-        self._highlight_duration.setValue(1.6)            # fires valueChanged → saves
-        self._highlight_arrow_thickness.setValue(6)       # fires valueChanged → saves
-        self._highlight_arrow_cb.setChecked(False)        # fires toggled → saves
-        self._arrow_corner.setCurrentIndex(3)             # bottom-right (default)
-        self._arrow_size.setValue(48)                     # default size
-        self._circle_cb.setChecked(False)                 # fires toggled → saves
-        self._circle_radius.setValue(40)                  # default radius
-        self._circle_opacity.setValue(25)                 # default opacity
 
     def _on_module_toggled(self, enabled: bool) -> None:
         if enabled:

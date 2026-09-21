@@ -103,8 +103,8 @@ def test_the_settings_show_the_rows_with_the_switch(app):
     page = m.get_settings_widget()
     form = page._highlight_form
     # delay and free middle live in the box under their switch
-    assert page._highlight_auto_delay.parentWidget() is page._auto_sub
-    assert page._highlight_auto_free.parentWidget() is page._auto_sub
+    assert page._auto_sub.isAncestorOf(page._highlight_auto_delay)
+    assert page._auto_sub.isAncestorOf(page._highlight_auto_free)
     assert not form.isRowVisible(page._auto_sub)
     page._highlight_auto_cb.setChecked(True)
     assert m._settings["highlight_auto"] is True
@@ -127,8 +127,8 @@ def test_every_switch_carries_its_own_box(app):
             if box is page._rings_sub and not on:
                 continue        # rings off turns the arrow on - checked below
             assert form.isRowVisible(box) is on, (box.objectName(), on)
-    assert page._circle_radius.parentWidget() is page._circle_sub
-    assert page._arrow_corner.parentWidget() is page._persist_sub
+    assert page._circle_sub.isAncestorOf(page._circle_radius)
+    assert page._persist_sub.isAncestorOf(page._arrow_corner)
     page.deleteLater()
 
 
@@ -208,4 +208,47 @@ def test_the_sliders_have_about_ten_positions_with_the_defaults(app):
         assert 8 <= slider.slider.maximum() + 1 <= 12
         slider.setValue(default)
         assert slider.value() == default
+    page.deleteLater()
+
+
+# -- one reset button per setting ------------------------------------------------------
+
+def test_each_setting_resets_on_its_own(app):
+    from withease.gui.widgets.reset_field import ResetField
+    from withease.modules.mouse import MouseModule
+    m = MouseModule()
+    m._settings.update({"highlight_enabled": True, "highlight_radius": 130,
+                        "highlight_duration": 2.4})
+    page = m.get_settings_widget()
+    page._update_enabled_state(True)      # the module is on: clickable
+    assert not hasattr(page, "_highlight_reset_btn")      # no reset-all
+    resets = page.findChildren(ResetField)
+    assert len(resets) == 11
+    radius = next(r for r in resets if r.field is page._highlight_radius)
+    duration = next(r for r in resets if r.field is page._highlight_duration)
+    assert not radius.is_default() and not radius.button.isHidden()
+    radius.button.click()
+    assert page._highlight_radius.value() == 90
+    assert m._settings["highlight_radius"] == 90          # saved as usual
+    assert radius.button.isHidden()
+    assert m._settings["highlight_duration"] == 2.4       # the others stay
+    assert "90 px" in radius.button.toolTip()
+    page._highlight_radius.setValue(150)                  # changed again
+    assert not radius.button.isHidden()
+    duration.button.click()
+    assert m._settings["highlight_duration"] == 1.6
+    page.deleteLater()
+
+
+def test_the_colour_resets_too(app, monkeypatch):
+    from withease.modules.mouse import MouseModule
+    m = MouseModule()
+    m._settings.update({"highlight_enabled": True,
+                        "highlight_color": [10, 20, 30]})
+    page = m.get_settings_widget()
+    page._update_enabled_state(True)
+    assert not page._color_reset.button.isHidden()
+    page._color_reset.button.click()
+    assert m._settings["highlight_color"] == [255, 140, 0]
+    assert page._color_reset.button.isHidden()
     page.deleteLater()

@@ -471,6 +471,13 @@ def app_stylesheet() -> str:
         QFrame#subSettings {{ background: transparent; border: none;
             border-left: 2px solid {acc}; border-radius: 0;
             margin-left: 6px; padding-left: 12px; }}
+        /* "Back to the default" behind a single setting (reset_field.py):
+           quiet until pointed at. */
+        QToolButton#resetButton {{ background: transparent;
+            border: 1px solid transparent; border-radius: 6px;
+            color: {hint_color()}; padding: 0; }}
+        QToolButton#resetButton:hover, QToolButton#resetButton:focus {{
+            color: {acc}; border-color: {acc}; }}
         /* A quiet heading that splits a long section into topics. */
         QLabel#settingsGroup {{ color: {hint_color()}; font-weight: bold;
             padding-top: 10px; }}

@@ -98,3 +98,15 @@ def test_the_scroll_bar_itself_still_scrolls(app):
     QApplication.sendEvent(bar, event)
     assert bar.value() > 0
     area.close()
+
+
+def test_the_steps_are_written_under_a_stepped_slider(app):
+    from withease.gui.widgets.value_slider import ValueSlider
+    stepped = ValueSlider(30, 210, suffix=" px", step=20)
+    plain = ValueSlider(1, 10)
+    assert stepped._steps is not None and plain._steps is None
+    assert stepped.step_values() == [30, 50, 70, 90, 110, 130, 150, 170,
+                                     190, 210]
+    stepped.resize(400, 80)
+    centres = stepped._handle_centres()
+    assert len(centres) == 10 and centres == sorted(centres)
