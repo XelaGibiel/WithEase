@@ -84,6 +84,36 @@ _QUOTES_OPEN = {f"{word} {side}": "„"
 _QUOTES_CLOSE = {f"{word} {side}": "“"
                  for word in _QUOTE_WORDS for side in ("zu", "oben")}
 
+_QUOTE_WORD_RE = re.compile(
+    r"\b(" + "|".join(sorted(_QUOTE_WORDS, key=len, reverse=True))
+    + r")\b(?:\s+(auf|unten|zu|oben)\b)?", re.IGNORECASE)
+
+
+def resolve_bare_quotes(text: str, before: str = "") -> str:
+    """One word for both German quotation marks.
+
+    "Anführungsstriche" alone opens a quote („) - or closes it (“) when one
+    is already open in the text before the cursor or earlier in the same
+    utterance.  The spoken side ("… unten" / "… oben") still decides when
+    it is said.  Returns the text with every bare word given its side, so
+    the inline rules set the mark and its spacing as before."""
+    open_ = before.count("„") > before.count("“")
+
+    def side(m: re.Match) -> str:
+        nonlocal open_
+        said = (m.group(2) or "").lower()
+        if said in ("auf", "unten"):
+            open_ = True
+            return m.group(0)
+        if said in ("zu", "oben"):
+            open_ = False
+            return m.group(0)
+        word = m.group(1)
+        out = f"{word} {'oben' if open_ else 'unten'}"
+        open_ = not open_
+        return out
+    return _QUOTE_WORD_RE.sub(side, text or "")
+
 _INLINE_OPEN = {
     "runde klammer auf": "(", "eckige klammer auf": "[", "klammer auf": "(",
     **_QUOTES_OPEN,
@@ -652,8 +682,10 @@ CHEAT_SHEET: list[tuple[str, list[tuple[str, str]]]] = [
         ("neue Zeile", "Zeilenumbruch"),
         ("neuer Absatz", "Leerzeile und neuer Absatz"),
         ("Punkt · Komma · Fragezeichen", "Satzzeichen einfügen"),
-        ("Anführungsstriche unten · oben",
-         "„ und “ setzen – geht auch als Anführungszeichen oder Gänsefüßchen"),
+        ("Anführungsstriche",
+         "setzt „ – oder “, wenn schon eins offen ist; geht auch als "
+         "Anführungszeichen oder Gänsefüßchen"),
+        ("Anführungsstriche unten · oben", "genau „ bzw. “ setzen"),
         ("Klammer auf · Klammer zu", "( und ) setzen"),
         ("Bindestrich · Unterstrich · Schrägstrich",
          "- _ / ohne Leerzeichen setzen: „2026 Bindestrich 09“ → 2026-09"),

@@ -1755,7 +1755,8 @@ class DictationWindow(QWidget):
 
         # Dictation key (or explicit text mode): never interpret as a command.
         if mode == "text":
-            self._editor.insert_dictation(cde.apply_inline_punctuation(text))
+            self._editor.insert_dictation(
+                cde.apply_inline_punctuation(self._with_quote_sides(text)))
             self._forward_correction()
             self._highlight_low_words(low_words)
             self._report(text, _t("msg.as_text"))
@@ -1770,7 +1771,8 @@ class DictationWindow(QWidget):
                 # Command key but nothing matched: do not dump text into buffer.
                 self._report(text, _t("msg.no_command"))
                 return
-            self._editor.insert_dictation(cde.apply_inline_punctuation(text))
+            self._editor.insert_dictation(
+                cde.apply_inline_punctuation(self._with_quote_sides(text)))
             self._forward_correction()
             self._highlight_low_words(low_words)
             self._report(text, _t("msg.as_text"))
@@ -2465,6 +2467,13 @@ class DictationWindow(QWidget):
         """The compact view has room for the flag only."""
         text = _t("btn.report.done" if done else "btn.report")
         return text.split(" ", 1)[0] if self._compact else text
+
+    def _with_quote_sides(self, text: str) -> str:
+        """A bare "Anführungsstriche" opens or closes, depending on whether
+        a quote is open in the text before the cursor."""
+        cur = self._edit.textCursor()
+        before = self.text()[:cur.selectionStart()]
+        return cde.resolve_bare_quotes(text, before)
 
     def _set_hint(self, msg: str) -> None:
         self._hint.setText(msg or "")

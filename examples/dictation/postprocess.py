@@ -460,6 +460,13 @@ _SENTENCE_END = ".!?…"
 _NO_SPACE_AFTER = "([{„«\u201c'\"\u2013\u2014-/"
 
 
+def _closes_a_sentence(stripped: str) -> bool:
+    """A quote or bracket closed right after a sentence end ("„Hallo.“")
+    ends that sentence too - the next word starts a new one."""
+    inner = stripped.rstrip("\u201c\u201d\"»)]'")
+    return inner != stripped and inner[-1:] in _SENTENCE_END
+
+
 def match_case(previous: str, text: str) -> str:
     """``text`` with its first letter fitted to what stands before it.
 
@@ -481,7 +488,8 @@ def match_case(previous: str, text: str) -> str:
     # A line break starts a new sentence just as a full stop does - and it is
     # removed by rstrip(), so it has to be read off the UNstripped tail.
     starts_sentence = (tail.endswith(("\n", "\r"))
-                       or stripped[-1] in _SENTENCE_END)
+                       or stripped[-1] in _SENTENCE_END
+                       or _closes_a_sentence(stripped))
     head, rest = text[:1], text[1:]
     if starts_sentence:
         return head.upper() + rest
@@ -529,6 +537,8 @@ def join_dictation(previous: str, new_text: str,
     # A line break starts a new sentence just as a full stop does – but it is
     # removed by rstrip(), so it has to be read off the UNstripped tail.
     starts_sentence = tail.endswith(("\n", "\r")) or last in _SENTENCE_END
+    if _closes_a_sentence(stripped):
+        starts_sentence = True
     # A line break already separates; anything else may need a space.
     if tail.endswith(("\n", " ", "\t")) or last in _NO_SPACE_AFTER:
         sep = ""

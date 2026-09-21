@@ -190,7 +190,14 @@ class Editor:
                     from streaming import (SENTENCE_MARKS,
                                            continue_after_pause, mark_replaces)
                     spoken = text.lstrip()
-                    if spoken[:1] in SENTENCE_MARKS and doc[:pos].strip():
+                    if spoken[:1] in "“)]»" and doc[:pos].strip():
+                        # a closing quote or bracket as a part of its own:
+                        # right after the word, a full stop before it stays
+                        # ("… Hallo." + "“" -> "… Hallo.“")
+                        before = doc[:pos]
+                        joined = (len(before) - len(before.rstrip(" ")),
+                                  spoken)
+                    elif spoken[:1] in SENTENCE_MARKS and doc[:pos].strip():
                         # a part that starts with a spoken mark ("?"): it
                         # takes the place of the automatic one before it
                         joined = (mark_replaces(doc[:pos]), spoken)

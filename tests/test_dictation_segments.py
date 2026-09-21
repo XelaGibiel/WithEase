@@ -740,3 +740,36 @@ def test_a_dropped_part_has_no_uncertain_words_of_its_own(module):
     module._last_low_words = ["Ihnen"]
     module._remember_skipped(b"\x00\x00" * 1600, "quieter than your voice")
     assert module._recent_parts[-1]["low"] == []
+
+
+# -- one word for both quotation marks ------------------------------------------------
+
+@pytest.mark.parametrize("parts, expected", [
+    (["Er sagte Anführungsstriche Hallo Anführungsstriche und ging."],
+     "Er sagte „Hallo“ und ging."),
+    (["Er sagte", "Anführungsstriche.", "Hallo.", "Anführungsstriche.",
+      "Dann ging er."],
+     "Er sagte „Hallo.“ Dann ging er."),
+    (["Das Wort Anführungsstriche kopieren Anführungsstriche ist ein Befehl."],
+     "Das Wort „kopieren“ ist ein Befehl."),
+    # the spoken side still decides
+    (["Anführungsstriche unten Test Anführungsstriche oben."], "„Test“"),
+    (["Er rief Anführungsstriche unten Hilfe", "Anführungsstriche."],
+     "Er rief „Hilfe“"),
+])
+def test_one_word_for_both_quotation_marks(app, parts, expected):
+    win = _window(app)
+    for part in parts:
+        win._on_transcript(part, "text", [])
+    assert win.text() == expected
+    win.deleteLater()
+
+
+def test_the_open_quote_is_read_from_the_text_before_the_cursor():
+    import commands_de as cde
+    assert cde.resolve_bare_quotes("Anführungsstriche", "Er sagte „Hallo") \
+        == "Anführungsstriche oben"
+    assert cde.resolve_bare_quotes("Anführungsstriche", "Er sagte „Hallo“") \
+        == "Anführungsstriche unten"
+    assert cde.resolve_bare_quotes("Anführerstriche", "") \
+        == "Anführerstriche unten"
