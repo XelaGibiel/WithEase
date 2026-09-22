@@ -616,19 +616,38 @@ _DATE_RE = re.compile(
 _DIGIT_WORDS = {"null": "0", "eins": "1", "zwei": "2", "zwo": "2",
                 "drei": "3", "vier": "4", "fünf": "5", "fuenf": "5",
                 "sechs": "6", "sieben": "7", "acht": "8", "neun": "9"}
+_DIGIT_WORD_RE = "(?:" + "|".join(_DIGIT_WORDS) + r")\b"
+# a digit Whisper already wrote as a figure - on its own, not part of a
+# number or a decimal ("3,5")
+_ONE_DIGIT_RE = r"(?<![\d,.])\d(?![\d])"
 _DIGIT_RUN = re.compile(
-    r"\b(?:" + "|".join(_DIGIT_WORDS) + r")\b"
-    r"(?:[ \t]*[,\-]?[ \t]+(?:" + "|".join(_DIGIT_WORDS) + r")\b"
-    r"|[ \t]*,(?:" + "|".join(_DIGIT_WORDS) + r")\b){3,}",
+    r"\b" + _DIGIT_WORD_RE
+    + r"(?:[ \t]*[,\-]?[ \t]+" + _DIGIT_WORD_RE
+    + r"|[ \t]*," + _DIGIT_WORD_RE + r"){3,}"
+    # the same said as figures: "6, 8, 1, 9, 9" is the postcode 68199
+    + r"|" + _ONE_DIGIT_RE + r"(?:[ \t]*[,\-]?[ \t]+" + _ONE_DIGIT_RE
+    + r"){3,}",
     re.IGNORECASE)
+
+# a postcode and a town as a line of their own: "68199 Mannheim",
+# "67433 Neustadt an der Weinstraße" - an address line, not a sentence
+_POSTCODE_LINE = re.compile(
+    r"^(\d{5}),?[ \t]+([A-ZÄÖÜ][\w\-]*"
+    r"(?:[ \t]+(?:am|an|der|den|im|in|bei|ob|vor|auf)"
+    r"|[ \t]+\(?[A-ZÄÖÜ][\w\-]*\)?){0,4})[.,]?[ \t]*$")
 
 
 def fix_digit_sequences(text: str) -> str:
-    """"Eins, acht, acht, sieben." -> "1887." """
+    """"Eins, acht, acht, sieben." -> "1887."; "6, 8, 1, 9, 9, Mannheim."
+    -> "68199 Mannheim" (a postcode and town said on their own)."""
     def join(m: re.Match) -> str:
-        words = re.findall(r"[a-zäöüß]+", m.group(0), re.IGNORECASE)
-        return "".join(_DIGIT_WORDS[w.lower()] for w in words)
-    return _DIGIT_RUN.sub(join, text or "")
+        tokens = re.findall(r"[a-zäöüß]+|\d", m.group(0), re.IGNORECASE)
+        return "".join(_DIGIT_WORDS.get(w.lower(), w) for w in tokens)
+    text = _DIGIT_RUN.sub(join, text or "")
+    line = _POSTCODE_LINE.match(text.strip())
+    if line:
+        return f"{line.group(1)} {line.group(2)}"
+    return text
 
 
 def fix_dates(text: str) -> str:

@@ -636,6 +636,14 @@ def test_the_chip_says_command(app):
     ("Eins, zwei, drei", "Eins, zwei, drei"),
     ("Es sind acht Stück.", "Es sind acht Stück."),
     ("Eins zu null gewonnen.", "Eins zu null gewonnen."),
+    # a postcode Whisper wrote as single figures, with the town after it
+    ("6, 8, 1, 9, 9, Mannheim.", "68199 Mannheim"),
+    ("Sechs acht eins neun neun Mannheim", "68199 Mannheim"),
+    ("67433 Neustadt an der Weinstraße.", "67433 Neustadt an der Weinstraße"),
+    ("Ich wohne in 68199 Mannheim.", "Ich wohne in 68199 Mannheim."),
+    ("Meine PIN ist 1 2 3 4.", "Meine PIN ist 1234."),
+    ("Das kostet 3,5 Euro.", "Das kostet 3,5 Euro."),
+    ("Punkte 1, 2 und 3.", "Punkte 1, 2 und 3."),
 ])
 def test_digits_said_one_by_one_become_a_number(said, written):
     from postprocess import fix_digit_sequences
