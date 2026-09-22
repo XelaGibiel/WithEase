@@ -492,9 +492,13 @@ class _OpenMarks(QLabel):
         if not marks:
             self.hide()
             return
-        close, words = cde.closing_for(marks[-1])
-        key = "open.one" if len(marks) == 1 else "open.many"
-        self.setText(_t(key, marks=" ".join(marks), words=words, close=close))
+        # one line per open mark, each staying until ITS mark is closed;
+        # the one to close next (the innermost) on top
+        lines = []
+        for mark in reversed(marks):
+            close, words = cde.closing_for(mark)
+            lines.append(_t("open.one", marks=mark, words=words, close=close))
+        self.setText("<br>".join(lines))
         self.adjustSize()
         caret = self._edit.cursorRect()
         view = self._edit.viewport().rect()

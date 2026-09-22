@@ -60,6 +60,14 @@ def test_the_innermost_bracket_is_named(win):
     note = win._open_marks
     assert note.isVisible()
     assert "Klammer zu" in note.text() and ")" in note.text()
+    # the quote opened before is still named, each on its own line,
+    # the one to close next first
+    lines = note.text().split("<br>")
+    assert len(lines) == 2
+    assert "Klammer zu" in lines[0] and "Anführungsstriche" in lines[1]
+    win._edit.insertPlainText(")")          # the bracket closed: quote stays
+    assert note.isVisible() and "<br>" not in note.text()
+    assert "Anführungsstriche" in note.text()
     # the cursor back in front of the quote: nothing is open there
     cur = win._edit.textCursor()
     cur.setPosition(3)
