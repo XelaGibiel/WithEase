@@ -62,6 +62,8 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Regen bzw. ein steigender Flüssigkeitsstand, der die Arbeit "
             "spürbar unterbricht – so, wie du es brauchst."),
         "group.settings": "Einstellungen",
+        "group.when": "Wann erinnert wird",
+        "group.how": "Wie erinnert wird",
         "interval": "Erinnern alle",
         "style": "Darstellung",
         "style.hint": "Bestimmt, wie die Trinkpausen-Erinnerung angezeigt wird.",
@@ -101,6 +103,8 @@ _STRINGS: dict[str, dict[str, str]] = {
             "the screen or a full-screen rain / rising liquid level noticeably "
             "interrupts your work – whatever you need."),
         "group.settings": "Settings",
+        "group.when": "When it reminds you",
+        "group.how": "How it reminds you",
         "interval": "Remind every",
         "style": "Presentation",
         "style.hint": "Determines how the drink reminder is displayed.",
@@ -483,6 +487,28 @@ class HydrationReminder(QWidget):
 # Settings page
 # ---------------------------------------------------------------------------
 
+def _settings_parts():
+    """Headings, boxes for dependent settings and the ↺ behind a setting -
+    from the core, or plain stand-ins on an OLDER core (see
+    _label_with_hint for why an add-on must never need a newer core)."""
+    try:
+        from withease.gui.widgets.reset_field import reset_combo, reset_spin
+        from withease.gui.widgets.sub_settings import SubSettings, group_heading
+        return reset_combo, reset_spin, SubSettings, group_heading
+    except ImportError:
+        class SubSettings(QFrame):
+            def __init__(self) -> None:
+                super().__init__()
+                self.form = QFormLayout(self)
+                self.form.setContentsMargins(0, 0, 0, 0)
+
+        def group_heading(text: str) -> QLabel:
+            label = QLabel(text)
+            label.setStyleSheet("font-weight: bold;")
+            return label
+        return (lambda field, _d: field), (lambda field, _d: field),             SubSettings, group_heading
+
+
 def _label_with_hint(text: str, tooltip: str):
     """``ui_utils.label_with_hint`` with a fallback for an OLDER core.
 
@@ -508,6 +534,11 @@ class HydrationSettings(QWidget):
         self._module = module
         self._settings = module._settings
         self._build_ui()
+        try:                    # fields under their label when too narrow
+            from withease.gui.ui_utils import wrap_long_rows
+            wrap_long_rows(self)
+        except ImportError:
+            pass
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -554,14 +585,18 @@ class HydrationSettings(QWidget):
         form.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._form = form
+        reset_combo, reset_spin, SubSettings, group_heading = _settings_parts()
 
+        form.addRow(group_heading(_t("group.when")))
         self._interval = QSpinBox()
         self._interval.setRange(1, 480)
         self._interval.setSuffix(_t("suffix.min"))
         self._interval.setValue(int(self._settings.get("interval_minutes", 60)))
         self._interval.valueChanged.connect(
             lambda v: self._save("interval_minutes", v))
-        form.addRow(_t("interval"), self._interval)
+        form.addRow(_t("interval"), reset_spin(self._interval, 60))
+
+        form.addRow(group_heading(_t("group.how")))
 
         label_with_hint = _label_with_hint
         self._style = QComboBox()
@@ -580,7 +615,7 @@ class HydrationSettings(QWidget):
         self._style.currentIndexChanged.connect(
             lambda i: self._save("style", self._style.itemData(i)))
         form.addRow(label_with_hint(_t("style"), _t("style.hint")),
-                   self._style)
+                   reset_combo(self._style, "popup"))
 
         self._dismiss = QComboBox()
         self._dismiss.addItem(_t("dismiss.instant"), "instant")
@@ -591,7 +626,10 @@ class HydrationSettings(QWidget):
             DISMISS_MODES.index(cur) if cur in DISMISS_MODES else 1)
         self._dismiss.currentIndexChanged.connect(self._on_dismiss_changed)
         form.addRow(label_with_hint(_t("dismiss"), _t("dismiss.hint")),
-                   self._dismiss)
+                   reset_combo(self._dismiss, "delay"))
+        # the wait only exists for "close after a delay"
+        self._delay_sub = SubSettings()
+        form.addRow("", self._delay_sub)
 
         self._delay = QSpinBox()
         self._delay.setRange(1, 60)
@@ -599,7 +637,7 @@ class HydrationSettings(QWidget):
         self._delay.setValue(int(self._settings.get("delay_seconds", 5)))
         self._delay.valueChanged.connect(
             lambda v: self._save("delay_seconds", v))
-        form.addRow(_t("delay"), self._delay)
+        self._delay_sub.form.addRow(_t("delay"), reset_spin(self._delay, 5))
 
         body.addLayout(form)
 
@@ -621,7 +659,7 @@ class HydrationSettings(QWidget):
 
     def _update_delay_row(self) -> None:
         self._form.setRowVisible(
-            self._delay, self._dismiss.currentData() == "delay")
+            self._delay_sub, self._dismiss.currentData() == "delay")
 
     def _on_preview(self) -> None:
         self._module.show_reminder(

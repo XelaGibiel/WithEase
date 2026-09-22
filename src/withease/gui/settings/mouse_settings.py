@@ -26,7 +26,8 @@ from withease.core.i18n import tr
 from withease.gui import theme
 from withease.gui.widgets.collapsible_section import CollapsibleSection
 from withease.gui.widgets.hotkey_edit import HotkeyEdit
-from withease.gui.widgets.reset_field import ResetField
+from withease.gui.widgets.reset_field import (ResetField, reset_combo,
+                                               reset_slider, reset_spin)
 from withease.gui.widgets.sub_settings import SubSettings, group_heading
 from withease.gui.widgets.value_slider import ValueSlider
 from withease.gui.ui_utils import (checkbox_with_hint, label_with_hint,
@@ -117,7 +118,8 @@ class MouseSettingsWidget(QWidget):
         self._centering_delay.setSuffix(" s")
         self._centering_delay.setValue(int(self._settings.get("centering_delay", 5)))
         self._centering_delay.valueChanged.connect(self._on_centering_delay_changed)
-        centering_form.addRow(tr("module.mouse.centering.delay"), self._centering_delay)
+        centering_form.addRow(tr("module.mouse.centering.delay"),
+                              reset_spin(self._centering_delay, 5))
 
         self._centering_countdown = QSpinBox()
         # The countdown happens WITHIN the wait, so it can never exceed the
@@ -131,7 +133,7 @@ class MouseSettingsWidget(QWidget):
         centering_form.addRow(
             label_with_hint(tr("module.mouse.centering.countdown"),
                             tr("module.mouse.centering.countdown.hint")),
-            self._centering_countdown)
+            reset_spin(self._centering_countdown, 3))
         self._clamp_countdown_max()
 
         self._centering_hotkey = HotkeyEdit(
@@ -184,9 +186,9 @@ class MouseSettingsWidget(QWidget):
         precision_form.addRow(
             label_with_hint(tr("module.mouse.precision.mode"),
                             tr("module.mouse.precision.mode.hint")),
-            self._precision_mode_combo)
+            reset_combo(self._precision_mode_combo, "hold"))
 
-        self._precision_slider = ValueSlider(1, 10)
+        self._precision_slider = ValueSlider(1, 10, show_steps=True)
         self._precision_slider.setValue(
             int(self._settings.get("precision_speed", 3)))
         self._precision_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
@@ -194,7 +196,7 @@ class MouseSettingsWidget(QWidget):
         self._precision_slider.valueChanged.connect(
             lambda v: self._save("precision_speed", v))
         precision_form.addRow(tr("module.mouse.precision.speed"),
-                              self._precision_slider)
+                              reset_slider(self._precision_slider, 3))
 
         self._precision_hotkey = HotkeyEdit(
             self._settings.get("precision_hotkey", ""),
@@ -571,7 +573,7 @@ class MouseSettingsWidget(QWidget):
         grid_form.addRow(
             label_with_hint(tr("module.mouse.screen_zones.grid"),
                             tr("module.mouse.screen_zones.grid.hint")),
-            self._grid_combo)
+            reset_combo(self._grid_combo, "3x3"))
         grid_form_widget = QWidget()
         grid_form_widget.setLayout(grid_form)
         self._zones_sec.content_layout.addWidget(grid_form_widget)
@@ -628,28 +630,13 @@ class MouseSettingsWidget(QWidget):
 
     # -- one ↺ per setting ----------------------------------------------
 
-    @staticmethod
-    def _reset_slider(slider: ValueSlider, default: int) -> ResetField:
-        suffix = slider._suffix
-        return ResetField(slider, default, slider.value, slider.setValue,
-                          slider.valueChanged,
-                          describe=lambda v: f"{v}{suffix}")
+    _reset_slider = staticmethod(reset_slider)
 
     @staticmethod
-    def _reset_spin(spin: Any, default: float, suffix: str) -> ResetField:
-        from PySide6.QtCore import QLocale
-        return ResetField(
-            spin, default, lambda: round(spin.value(), 1), spin.setValue,
-            spin.valueChanged,
-            describe=lambda v: QLocale().toString(float(v), "f", 1) + suffix)
+    def _reset_spin(spin: Any, default: float, _suffix: str = "") -> ResetField:
+        return reset_spin(spin, default)
 
-    @staticmethod
-    def _reset_combo(combo: QComboBox, default: str) -> ResetField:
-        return ResetField(
-            combo, default, combo.currentData,
-            lambda v: combo.setCurrentIndex(max(0, combo.findData(v))),
-            combo.currentIndexChanged,
-            describe=lambda v: combo.itemText(max(0, combo.findData(v))))
+    _reset_combo = staticmethod(reset_combo)
 
     def _set_highlight_color(self, color: list[int]) -> None:
         self._highlight_color = list(color)

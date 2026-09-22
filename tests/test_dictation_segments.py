@@ -773,3 +773,49 @@ def test_the_open_quote_is_read_from_the_text_before_the_cursor():
         == "Anführungsstriche unten"
     assert cde.resolve_bare_quotes("Anführerstriche", "") \
         == "Anführerstriche unten"
+
+
+def test_the_pronunciation_training_stays_out_of_a_running_dictation(
+        module, monkeypatch):
+    """Training a word with the dictation still on: the repetitions must
+    not end up in the dictation window."""
+    import module as dic
+    got = {}
+
+    class _Stream:
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    def open_stream(_sd, _device, callback):
+        got["callback"] = callback
+        return _Stream(), st.RATE, 1
+    monkeypatch.setattr(dic, "open_input_stream", open_stream)
+    monkeypatch.setattr(dic, "resolve_input_device", lambda *_a: None)
+    monkeypatch.setattr(module, "_capture_target", lambda: None)
+    module._window.request_open = lambda: None
+    fed = []
+    real_make = module._make_segmenter
+
+    def make():
+        session = real_make()
+        put = session.put
+        session.put = lambda pcm: (fed.append(pcm), put(pcm))
+        return session
+    monkeypatch.setattr(module, "_make_segmenter", make)
+    module._start_recording()
+    assert module._state == "recording"
+    monkeypatch.setattr(module, "_open_mic_16k",
+                        lambda _sd, _feed: (_Stream(), st.RATE, 1))
+    capture = module.capture_takes(lambda _pcm: None)
+    speech = _tone(0.1)
+    got["callback"](speech, 0, None, None)
+    assert fed[-1] == bytes(len(speech))          # the dictation hears silence
+    capture.stop()
+    capture.stop()                                # twice does no harm
+    assert module._mic_borrowed == 0
+    got["callback"](speech, 0, None, None)
+    assert fed[-1] == speech                      # and then listens again
+    module._stop_segmented()

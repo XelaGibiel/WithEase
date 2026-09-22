@@ -114,6 +114,34 @@ def resolve_bare_quotes(text: str, before: str = "") -> str:
         return out
     return _QUOTE_WORD_RE.sub(side, text or "")
 
+# what closes what, and the words that say it
+_PAIRS = {"„": ("“", "Anführungsstriche"), "(": (")", "Klammer zu"),
+          "[": ("]", "eckige Klammer zu")}
+
+
+def open_marks(before: str) -> list[str]:
+    """The quotes and brackets still open in ``before`` (the text up to the
+    cursor), outermost first: "Er sagte „Hallo (du" -> ["„", "("]."""
+    closer_of = {o: c for o, (c, _w) in _PAIRS.items()}
+    opener_of = {c: o for o, c in closer_of.items()}
+    stack: list[str] = []
+    for ch in before or "":
+        if ch in closer_of:
+            stack.append(ch)
+        elif ch in opener_of:
+            want = opener_of[ch]
+            for i in range(len(stack) - 1, -1, -1):
+                if stack[i] == want:
+                    del stack[i:]       # closes it and what was left inside
+                    break
+    return stack
+
+
+def closing_for(opener: str) -> tuple[str, str]:
+    """The mark that closes ``opener`` and the words that set it."""
+    return _PAIRS.get(opener, ("", ""))
+
+
 _INLINE_OPEN = {
     "runde klammer auf": "(", "eckige klammer auf": "[", "klammer auf": "(",
     **_QUOTES_OPEN,

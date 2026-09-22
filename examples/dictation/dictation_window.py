@@ -454,6 +454,59 @@ class _PauseDot(QWidget):
         p.end()
 
 
+class _OpenMarks(QLabel):
+    """A small note under the caret while a quote or bracket is open.
+
+    "Anführungsstriche" sets „ the first time and “ the second - so it has
+    to be visible which of the two comes next.  As long as a „, ( or [
+    before the cursor is still open, this says so, together with the words
+    that close it; it goes as soon as everything is closed again."""
+
+    def __init__(self, edit: QPlainTextEdit) -> None:
+        super().__init__(edit.viewport())
+        self._edit = edit
+        self.setObjectName("openMarks")
+        self.setTextFormat(Qt.TextFormat.RichText)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        try:
+            from withease.gui import theme as _core_theme
+            accent = _core_theme.accent()
+        except Exception:
+            accent = "#1E88E5"
+        self.setStyleSheet(
+            "QLabel#openMarks { background: palette(base);"
+            f" border: 1px solid {accent}; border-radius: 8px;"
+            " padding: 2px 8px; }")
+        edit.cursorPositionChanged.connect(self.sync)
+        edit.textChanged.connect(self.sync)
+        edit.verticalScrollBar().valueChanged.connect(self.sync)
+        self.hide()
+
+    def marks(self) -> list[str]:
+        cursor = self._edit.textCursor()
+        before = self._edit.toPlainText()[:cursor.selectionStart()]
+        return cde.open_marks(before)
+
+    def sync(self) -> None:
+        marks = self.marks()
+        if not marks:
+            self.hide()
+            return
+        close, words = cde.closing_for(marks[-1])
+        key = "open.one" if len(marks) == 1 else "open.many"
+        self.setText(_t(key, marks=" ".join(marks), words=words, close=close))
+        self.adjustSize()
+        caret = self._edit.cursorRect()
+        view = self._edit.viewport().rect()
+        x = min(max(0, caret.left() - 8), max(0, view.width() - self.width()))
+        y = caret.bottom() + 4
+        if y + self.height() > view.height():        # no room below
+            y = max(0, caret.top() - self.height() - 4)
+        self.move(x, y)
+        self.show()
+        self.raise_()
+
+
 class _BadgeOverlay(QWidget):
     """Transparent overlay on the editor's viewport that paints numbered badges
     (①②③ …) at given document positions, for the "nimm N" choices."""
@@ -992,6 +1045,7 @@ class DictationWindow(QWidget):
         self._edit.setMinimumWidth(280)
         self._badges = _BadgeOverlay(self._edit)
         self._pause_dot = _PauseDot(self._edit)
+        self._open_marks = _OpenMarks(self._edit)
         # A pill shown centred over the editor while a KI-Aktion runs, so it is
         # obvious that the text is still being worked on.
         self._busy_chip = QLabel("✨  KI arbeitet …", self._edit.viewport())

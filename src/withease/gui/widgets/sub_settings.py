@@ -14,6 +14,7 @@ The look comes from the theme (objectNames ``settingsGroup`` and
 """
 from __future__ import annotations
 
+from PySide6.QtCore import QSize
 from PySide6.QtWidgets import QFormLayout, QFrame, QLabel
 
 
@@ -34,3 +35,21 @@ class SubSettings(QFrame):
         self.form.setSpacing(8)
         self.form.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt override)
+        """As tall as the rows need at the width the box REALLY has.
+
+        The form works its hint out for a width of its own choosing - far
+        narrower than the page - so every wrapped note inside counted a line
+        or two too many, and the box ended in an empty stretch of accent
+        line under its last setting."""
+        hint = super().sizeHint()
+        if self.width() > 0 and self.form.hasHeightForWidth():
+            return QSize(hint.width(),
+                         self.form.totalHeightForWidth(self.width()))
+        return hint
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if event.oldSize().width() != event.size().width():
+            self.updateGeometry()       # the hint depends on the width

@@ -164,6 +164,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "deps_missing": "⚠ Für dieses Add-on fehlen Komponenten. Zum Aktivieren im Programmordner ausführen:  pip install sounddevice requests  (für lokale Erkennung zusätzlich: faster-whisper)",
         "group.basics": "Grundeinstellungen",
         "group.recognition": "Spracherkennung",
+        "group.rec.engine": "Mikrofon und Erkennung",
+        "group.rec.pauses": "Pausen",
+        "group.rec.report": "Fehler merken",
+        "group.adv.commands": "Befehle",
+        "group.adv.recording": "Aufnahme",
+        "group.adv.text": "Text",
         "group.output": "▸ Textausgabe",
         "group.output.open": "▾ Textausgabe",
         "group.vocab_ai": "Wörterbuch & KI",
@@ -492,6 +498,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "description.long": "Press the hotkey, speak, done – the recognised text is inserted into the active application. Note: with the cloud backend the recording is sent to the chosen provider; with the local backend everything stays on this PC.",
         "group.basics": "Basics",
         "group.recognition": "Speech recognition",
+        "group.rec.engine": "Microphone and recognition",
+        "group.rec.pauses": "Pauses",
+        "group.rec.report": "Remembering errors",
+        "group.adv.commands": "Commands",
+        "group.adv.recording": "Recording",
+        "group.adv.text": "Text",
         "group.output": "▸ Text output",
         "group.output.open": "▾ Text output",
         "group.vocab_ai": "Dictionary & AI",
@@ -907,6 +919,29 @@ def _option_hint(combo, index: int, text: str) -> None:
         set_option_hint(combo, index, text)
     except Exception:
         combo.setItemData(index, text, Qt.ItemDataRole.ToolTipRole)
+
+
+def _settings_parts():
+    """Headings, boxes for dependent settings and the ↺ behind a setting -
+    from the core, or plain stand-ins on an OLDER core (an add-on must never
+    need a newer core than the one it is installed next to)."""
+    try:
+        from withease.gui.widgets.reset_field import reset_combo, reset_spin
+        from withease.gui.widgets.sub_settings import SubSettings, group_heading
+        return reset_combo, reset_spin, SubSettings, group_heading
+    except ImportError:
+        class SubSettings(QFrame):
+            def __init__(self) -> None:
+                super().__init__()
+                self.form = QFormLayout(self)
+                self.form.setContentsMargins(0, 0, 0, 0)
+
+        def group_heading(text: str) -> QLabel:
+            label = QLabel(text)
+            label.setStyleSheet("font-weight: bold;")
+            return label
+        return (lambda field, _d: field), (lambda field, _d: field), \
+            SubSettings, group_heading
 
 
 def _label_with_hint(text: str, tooltip: str):
@@ -2852,6 +2887,7 @@ class DictationSettingsWidget(QWidget):
 
         from withease.gui.ui_utils import em
         label_with_hint = _label_with_hint
+        reset_combo, reset_spin, SubSettings, group_heading = _settings_parts()
 
         # -- (1) Grundeinstellungen ------------------------------------
         basics = _group(_t("group.basics"), "⚙️")
@@ -2876,7 +2912,7 @@ class DictationSettingsWidget(QWidget):
             lambda i: self._save("mode", self._mode.itemData(i)))
         basics.addRow(
             label_with_hint(_t("mode"), _t("mode.hint")),
-            self._mode)
+            reset_combo(self._mode, "toggle"))
 
         # Flags in front of the names, exactly like the Allgemein page's
         # language box – same setting, same picture.  A language without a flag
@@ -2906,7 +2942,7 @@ class DictationSettingsWidget(QWidget):
             self._lang.setCurrentIndex(LANGUAGES.index(saved_lang))
         self._lang.currentIndexChanged.connect(
             lambda i: self._save("language", self._lang.itemData(i)))
-        basics.addRow(_t("language"), self._lang)
+        basics.addRow(_t("language"), reset_combo(self._lang, "auto"))
 
         # Size of the status chip (recording indicator + target-app hint) shown
         # at the top of the screen – some users want it bigger/more visible.
@@ -2936,12 +2972,21 @@ class DictationSettingsWidget(QWidget):
         self._chip_size.valueChanged.connect(
             lambda _v: self._update_chip_sync_btn())
         self._update_chip_sync_btn()
-        chip_row = QHBoxLayout()
-        chip_row.setContentsMargins(0, 0, 0, 0)
-        chip_row.setSpacing(6)
-        chip_row.addWidget(self._chip_size)
-        chip_row.addWidget(self._chip_sync_btn)
-        chip_row.addStretch(1)
+        chip_box = QWidget()
+        chip_inner = QHBoxLayout(chip_box)
+        chip_inner.setContentsMargins(0, 0, 0, 0)
+        chip_inner.setSpacing(6)
+        chip_inner.addWidget(self._chip_size)
+        chip_inner.addWidget(self._chip_sync_btn)
+        # the ↺ goes behind both, the sync button stays next to the box
+        try:
+            from withease.gui.widgets.reset_field import ResetField
+            chip_row = ResetField(
+                chip_box, _CHIP_DEFAULT_H, self._chip_size.value,
+                self._chip_size.setValue, self._chip_size.valueChanged,
+                describe=lambda v: f"{v} px")
+        except ImportError:
+            chip_row = chip_box
         basics.addRow(label_with_hint(_t("chip_size"), _t("chip_size.hint")),
                      chip_row)
 
@@ -2949,6 +2994,7 @@ class DictationSettingsWidget(QWidget):
         rec = _group(_t("group.recognition"), "🎙️")
         self._form_rec = rec
 
+        rec.addRow(group_heading(_t("group.rec.engine")))
         self._backend = QComboBox()
         self._backend.addItem(_t("backend.cloud"), "cloud")
         # The provider list used to be spelled out in the label itself, which
@@ -3161,53 +3207,6 @@ class DictationSettingsWidget(QWidget):
         rec.addRow("", self._local_model_note)
         rec.addRow("", self._model_status)
 
-        # Normal dictation: convert at every longer pause, microphone stays on.
-        self._segment_cb = QCheckBox(_t("segment"))
-        self._segment_cb.setChecked(
-            bool(self._settings.get("segment_on_pause", True)))
-        self._segment_cb.toggled.connect(
-            lambda on: (self._save("segment_on_pause", bool(on)),
-                        self._update_segment_rows()))
-        _whole_row_toggle(self._segment_cb)
-        rec.addRow("", self._segment_cb)
-        self._segment_note = _setting_note(_t("segment.hint"))
-        rec.addRow("", self._segment_note)
-        self._segment_pause = QDoubleSpinBox()
-        self._segment_pause.setRange(0.8, 5.0)
-        self._segment_pause.setSingleStep(0.1)
-        self._segment_pause.setDecimals(1)
-        self._segment_pause.setSuffix(" s")
-        self._segment_pause.setValue(
-            float(self._settings.get("segment_pause", 2.0)))
-        self._segment_pause.valueChanged.connect(
-            lambda v: self._save("segment_pause", round(float(v), 1)))
-        rec.addRow(_t("segment.pause"), self._segment_pause)
-        self._segment_pause_note = _setting_note(_t("segment.pause.hint"))
-        rec.addRow("", self._segment_pause_note)
-        self._pause_dot_cb = QCheckBox(_t("pause_dot"))
-        self._pause_dot_cb.setChecked(bool(self._settings.get("pause_dot", True)))
-        self._pause_dot_cb.toggled.connect(
-            lambda on: self._save("pause_dot", bool(on)))
-        _whole_row_toggle(self._pause_dot_cb)
-        rec.addRow("", self._pause_dot_cb)
-        self._pause_dot_note = _setting_note(_t("pause_dot.hint"))
-        rec.addRow("", self._pause_dot_note)
-        # where "Fehler merken" saves - never C: by accident: chosen once
-        report_row = QHBoxLayout()
-        report_row.setContentsMargins(0, 0, 0, 0)
-        self._report_dir = QLabel()
-        self._report_dir.setWordWrap(True)
-        report_row.addWidget(self._report_dir, 1)
-        pick = QPushButton(_t("report.dir.pick"))
-        pick.clicked.connect(self._on_pick_report_dir)
-        report_row.addWidget(pick)
-        self._report_open = QPushButton(_t("report.dir.open"))
-        self._report_open.clicked.connect(
-            lambda: self._module.open_report_dir())
-        report_row.addWidget(self._report_open)
-        rec.addRow(_t("report.dir"), report_row)
-        rec.addRow("", _setting_note(_t("report.dir.hint")))
-        self._show_report_dir()
 
         # Changing the model means the next dictation would silently download
         # it – say so, right where the choice was made.
@@ -3250,6 +3249,60 @@ class DictationSettingsWidget(QWidget):
         self._test_btn.clicked.connect(self._on_test)
         rec.addRow("", self._test_btn)
 
+        # Normal dictation: convert at every longer pause, microphone stays on.
+        rec.addRow(group_heading(_t("group.rec.pauses")))
+        self._segment_cb = QCheckBox(_t("segment"))
+        self._segment_cb.setChecked(
+            bool(self._settings.get("segment_on_pause", True)))
+        self._segment_cb.toggled.connect(
+            lambda on: (self._save("segment_on_pause", bool(on)),
+                        self._update_segment_rows()))
+        _whole_row_toggle(self._segment_cb)
+        rec.addRow("", self._segment_cb)
+        self._segment_note = _setting_note(_t("segment.hint"))
+        rec.addRow("", self._segment_note)
+        # what only exists with the switch on sits in a box behind it
+        self._segment_sub = SubSettings()
+        rec.addRow("", self._segment_sub)
+        seg = self._segment_sub.form
+        self._segment_pause = QDoubleSpinBox()
+        self._segment_pause.setRange(0.8, 5.0)
+        self._segment_pause.setSingleStep(0.1)
+        self._segment_pause.setDecimals(1)
+        self._segment_pause.setSuffix(" s")
+        self._segment_pause.setValue(
+            float(self._settings.get("segment_pause", 2.0)))
+        self._segment_pause.valueChanged.connect(
+            lambda v: self._save("segment_pause", round(float(v), 1)))
+        seg.addRow(_t("segment.pause"), reset_spin(self._segment_pause, 2.0))
+        self._segment_pause_note = _setting_note(_t("segment.pause.hint"))
+        seg.addRow("", self._segment_pause_note)
+        self._pause_dot_cb = QCheckBox(_t("pause_dot"))
+        self._pause_dot_cb.setChecked(bool(self._settings.get("pause_dot", True)))
+        self._pause_dot_cb.toggled.connect(
+            lambda on: self._save("pause_dot", bool(on)))
+        _whole_row_toggle(self._pause_dot_cb)
+        seg.addRow("", self._pause_dot_cb)
+        self._pause_dot_note = _setting_note(_t("pause_dot.hint"))
+        seg.addRow("", self._pause_dot_note)
+        # where "Fehler merken" saves - never C: by accident: chosen once
+        rec.addRow(group_heading(_t("group.rec.report")))
+        report_row = QHBoxLayout()
+        report_row.setContentsMargins(0, 0, 0, 0)
+        self._report_dir = QLabel()
+        self._report_dir.setWordWrap(True)
+        report_row.addWidget(self._report_dir, 1)
+        pick = QPushButton(_t("report.dir.pick"))
+        pick.clicked.connect(self._on_pick_report_dir)
+        report_row.addWidget(pick)
+        self._report_open = QPushButton(_t("report.dir.open"))
+        self._report_open.clicked.connect(
+            lambda: self._module.open_report_dir())
+        report_row.addWidget(self._report_open)
+        rec.addRow(_t("report.dir"), report_row)
+        rec.addRow("", _setting_note(_t("report.dir.hint")))
+        self._show_report_dir()
+
         # -- (3) Textausgabe -------------------------------------------
         out = _group_foldable(_t("group.output"),
                               _t("group.output.open"), "📋")
@@ -3263,7 +3316,7 @@ class DictationSettingsWidget(QWidget):
         self._output_mode.currentIndexChanged.connect(
             lambda i: self._save("output_mode", self._output_mode.itemData(i)))
         # Decides the whole workflow, and is met once while setting up.
-        out.addRow(_t("output"), self._output_mode)
+        out.addRow(_t("output"), reset_combo(self._output_mode, "window"))
         out.addRow("", _setting_note(_t("output.hint")))
 
         self._insert = QComboBox()
@@ -3277,7 +3330,7 @@ class DictationSettingsWidget(QWidget):
             lambda i: self._save("insert_method", self._insert.itemData(i)))
         out.addRow(
             label_with_hint(_t("insert"), _t("insert.hint")),
-            self._insert)
+            reset_combo(self._insert, "clipboard"))
 
         self._keep_clipboard = QCheckBox(_t("keep_clipboard"))
         self._keep_clipboard.setChecked(
@@ -3414,10 +3467,11 @@ class DictationSettingsWidget(QWidget):
         if bidx >= 0:
             self._ai_backend.setCurrentIndex(bidx)
         self._ai_backend.currentIndexChanged.connect(self._on_ai_backend_changed)
+        self._ai_backend_field = reset_combo(self._ai_backend, "ollama")
         ai.addRow(
             label_with_hint(_t("ai.backend"), _t("ai.backend.hint")),
-            self._ai_backend)
-        self._ai_backend_label = ai.labelForField(self._ai_backend)
+            self._ai_backend_field)
+        self._ai_backend_label = ai.labelForField(self._ai_backend_field)
 
         # Model as an editable dropdown, populated from the running local
         # provider (Ollama / LM Studio); still free-text for the cloud backend.
@@ -3466,6 +3520,8 @@ class DictationSettingsWidget(QWidget):
         layout.addWidget(adv_section)
         self._sections.append(adv_section)
 
+        adv.addRow(group_heading(_t("group.adv.commands")))
+
         self._command_hotkey = HotkeyEdit(
             self._settings.get("command_hotkey", ""),
             action_id="dictation.command")
@@ -3483,6 +3539,7 @@ class DictationSettingsWidget(QWidget):
         adv.addRow("", self._cmds_in_dictation)
         adv.addRow("", _setting_note(_t("commands_in_dictation.hint")))
 
+        adv.addRow(group_heading(_t("group.adv.recording")))
         self._max_seconds = QSpinBox()
         self._max_seconds.setRange(0, 3600)     # 0 = endless (no auto-stop)
         self._max_seconds.setSuffix(" s")
@@ -3490,7 +3547,7 @@ class DictationSettingsWidget(QWidget):
         self._max_seconds.setValue(int(self._settings.get("max_seconds", 0)))
         self._max_seconds.valueChanged.connect(
             lambda v: self._save("max_seconds", v))
-        adv.addRow(_t("max_seconds"), self._max_seconds)
+        adv.addRow(_t("max_seconds"), reset_spin(self._max_seconds, 0))
 
         self._hall_filter = QComboBox()
         for level in ("off", "normal", "strong"):
@@ -3506,7 +3563,7 @@ class DictationSettingsWidget(QWidget):
             lambda i: self._save("hallucination_filter",
                                  self._hall_filter.itemData(i)))
         adv.addRow(label_with_hint(_t("hallucination"), _t("hallucination.hint")),
-                  self._hall_filter)
+                  reset_combo(self._hall_filter, "strong"))
 
         self._preload_cb = QCheckBox(_t("preload"))
         self._preload_cb.setChecked(
@@ -3518,6 +3575,7 @@ class DictationSettingsWidget(QWidget):
         adv.addRow("", self._preload_cb)
         self._update_preload_row()
 
+        adv.addRow(group_heading(_t("group.adv.text")))
         self._raw_cb = QCheckBox(_t("raw"))
         self._raw_cb.setChecked(
             bool(self._settings.get("raw_recognition", False)))
@@ -3573,7 +3631,8 @@ class DictationSettingsWidget(QWidget):
             int(self._settings.get("history_limit", 20)))
         self._history_limit.valueChanged.connect(
             lambda v: self._save("history_limit", v))
-        data.addRow(_t("data.history.limit"), self._history_limit)
+        data.addRow(_t("data.history.limit"),
+                    reset_spin(self._history_limit, 20))
 
         # Storing recordings is gone: what it wrote was the audio plus
         # Whisper's OWN output, which teaches a model nothing, and the switch
@@ -3690,7 +3749,8 @@ class DictationSettingsWidget(QWidget):
         visible = (self._ai_enable.isChecked()
                    or self._punct_ai.isChecked()
                    or bool(self._module.ai_actions()))
-        for w in (self._ai_backend, getattr(self, "_ai_backend_label", None),
+        for w in (getattr(self, "_ai_backend_field", self._ai_backend),
+                  getattr(self, "_ai_backend_label", None),
                   self._ai_model_container, getattr(self, "_ai_model_label", None)):
             if w is not None:
                 w.setVisible(visible)
@@ -4316,10 +4376,7 @@ class DictationSettingsWidget(QWidget):
         if segment is None:
             return
         pause = segment.isChecked()
-        self._form_rec.setRowVisible(self._segment_pause, pause)
-        self._form_rec.setRowVisible(self._segment_pause_note, pause)
-        self._form_rec.setRowVisible(self._pause_dot_cb, pause)
-        self._form_rec.setRowVisible(self._pause_dot_note, pause)
+        self._form_rec.setRowVisible(self._segment_sub, pause)
 
     def _update_cloud_rows(self) -> None:
         cloud = self._backend.currentData() == "cloud"
@@ -4660,6 +4717,9 @@ class DictationModule(BaseModule):
         self._media_pause_thread: threading.Thread | None = None
         self._audio_chunks: list[bytes] = []
         self._segmenter: Any = None         # cuts a recording at pauses
+        # > 0 while the pronunciation training listens: a dictation still
+        # running then hears silence - the training words stay out of it
+        self._mic_borrowed = 0
         # The last parts, kept in memory only, for "Fehler merken":
         # {"time", "wav", "raw", "text", "mode"}.
         import collections
@@ -5401,6 +5461,10 @@ class DictationModule(BaseModule):
 
             def callback(indata, _frames, _time, _status) -> None:
                 block = bytes(indata)
+                if self._mic_borrowed:
+                    # the training has the microphone: silence for the
+                    # dictation, so a pause ends what was said before
+                    block = bytes(len(block))
                 if segmenter is None:
                     self._audio_chunks.append(block)
                 elif fmt["rate"]:
@@ -6442,9 +6506,16 @@ class DictationModule(BaseModule):
 
         mic, _rate, _channels = self._open_mic_16k(sd, feed)
         session.start()
+        module = self
+        module._mic_borrowed += 1        # a running dictation hears nothing
 
         class _Capture:
+            stopped = False
+
             def stop(self) -> None:
+                if not self.stopped:
+                    self.stopped = True
+                    module._mic_borrowed = max(0, module._mic_borrowed - 1)
                 try:
                     mic.stop()
                     mic.close()

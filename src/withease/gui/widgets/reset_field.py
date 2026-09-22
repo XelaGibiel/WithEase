@@ -79,3 +79,42 @@ class ResetField(QWidget):
     def _reset(self) -> None:
         self._set(self._default)
         self.refresh()
+
+
+# -- the usual controls, wrapped in one call ------------------------------
+
+def reset_slider(slider: Any, default: int) -> ResetField:
+    """A ValueSlider (or anything with value/setValue/valueChanged)."""
+    suffix = getattr(slider, "_suffix", "")
+    return ResetField(slider, default, slider.value, slider.setValue,
+                      slider.valueChanged,
+                      describe=lambda v: f"{v}{suffix}")
+
+
+def reset_spin(spin: Any, default: float) -> ResetField:
+    """A QSpinBox or QDoubleSpinBox; the tool-tip names the default the
+    way the box shows it (with its suffix, "aus" for a special value)."""
+    from PySide6.QtWidgets import QDoubleSpinBox
+    decimals = spin.decimals() if isinstance(spin, QDoubleSpinBox) else 0
+
+    def value() -> float:
+        return round(spin.value(), decimals) if decimals else spin.value()
+
+    def describe(v: float) -> str:
+        if spin.specialValueText() and v == spin.minimum():
+            return spin.specialValueText()
+        from PySide6.QtCore import QLocale
+        text = (QLocale().toString(float(v), "f", decimals) if decimals
+                else str(int(v)))
+        return text + spin.suffix()
+    return ResetField(spin, default, value, spin.setValue, spin.valueChanged,
+                      describe=describe)
+
+
+def reset_combo(combo: Any, default: Any) -> ResetField:
+    """A QComboBox whose items carry their value as item data."""
+    return ResetField(
+        combo, default, combo.currentData,
+        lambda v: combo.setCurrentIndex(max(0, combo.findData(v))),
+        combo.currentIndexChanged,
+        describe=lambda v: combo.itemText(max(0, combo.findData(v))))

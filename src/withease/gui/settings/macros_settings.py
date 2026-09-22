@@ -891,6 +891,8 @@ class MacrosSettingsWidget(QWidget):
         super().__init__(parent)
         self._module = module
         self._build_ui()
+        from withease.gui.ui_utils import wrap_long_rows
+        wrap_long_rows(self)
         from withease.gui.settings.module_sync import sync_module_checkbox
         sync_module_checkbox(self, module, self._enabled_cb,
                              self._update_enabled_state)
@@ -978,7 +980,13 @@ class MacrosSettingsWidget(QWidget):
         self._ov_enabled.toggled.connect(
             lambda v: self._module.set_cmd_overlay_option("enabled", v))
         self._ov_enabled.toggled.connect(self._on_overlay_toggled)
-        form.addRow(tr("module.macros.overlay.title"), self._ov_enabled)
+        from withease.gui.widgets.reset_field import reset_combo
+        from withease.gui.widgets.sub_settings import SubSettings, group_heading
+        form.addRow(group_heading(tr("module.macros.overlay.title")))
+        form.addRow("", self._ov_enabled)
+        # sort order and position belong to the list switch right above
+        self._ov_sub = SubSettings()
+        form.addRow("", self._ov_sub)
 
         self._ov_sort = QComboBox()
         for val, key in (("manual", "module.macros.overlay.sort.manual"),
@@ -994,10 +1002,10 @@ class MacrosSettingsWidget(QWidget):
         self._ov_sort.currentIndexChanged.connect(
             lambda i: self._module.set_cmd_overlay_option(
                 "sort", self._ov_sort.itemData(i)))
-        form.addRow(
+        self._ov_sub.form.addRow(
             label_with_hint(tr("module.macros.overlay.sort"),
                             tr("module.macros.overlay.sort.hint")),
-            self._ov_sort)
+            reset_combo(self._ov_sort, "manual"))
 
         self._ov_pos = QComboBox()
         for val in ("top-center", "top-left", "top-right", "center",
@@ -1009,7 +1017,8 @@ class MacrosSettingsWidget(QWidget):
         self._ov_pos.currentIndexChanged.connect(
             lambda i: self._module.set_cmd_overlay_option(
                 "position", self._ov_pos.itemData(i)))
-        form.addRow(tr("module.macros.overlay.position"), self._ov_pos)
+        self._ov_sub.form.addRow(tr("module.macros.overlay.position"),
+                                 reset_combo(self._ov_pos, "top-center"))
 
         # Sort order and position only describe the overlay – with the overlay
         # off they are dead controls, so the whole rows go away.
@@ -1371,8 +1380,7 @@ class MacrosSettingsWidget(QWidget):
         form = getattr(self, "_overlay_form", None)
         if form is None:
             return
-        for widget in (self._ov_sort, self._ov_pos):
-            form.setRowVisible(widget, enabled)
+        form.setRowVisible(self._ov_sub, enabled)
 
     def _on_trigger_changed(self, key: str) -> None:
         self._module._settings["trigger_key"] = key

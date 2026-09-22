@@ -223,7 +223,7 @@ def test_each_setting_resets_on_its_own(app):
     page._update_enabled_state(True)      # the module is on: clickable
     assert not hasattr(page, "_highlight_reset_btn")      # no reset-all
     resets = page.findChildren(ResetField)
-    assert len(resets) == 11
+    assert len(resets) == 16          # 11 in the highlight, 5 elsewhere
     radius = next(r for r in resets if r.field is page._highlight_radius)
     duration = next(r for r in resets if r.field is page._highlight_duration)
     assert not radius.is_default() and not radius.button.isHidden()

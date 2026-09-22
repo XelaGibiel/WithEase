@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
 from withease.core.i18n import tr
 from withease.gui.widgets.collapsible_section import CollapsibleSection
 from withease.gui.widgets.key_list_edit import KeyListEdit
+from withease.gui.widgets.reset_field import reset_combo, reset_spin
+from withease.gui.widgets.sub_settings import group_heading
 from withease.gui.ui_utils import label_with_hint, setting_note
 from withease.gui import theme
 
@@ -31,6 +33,8 @@ class KeyboardSettingsWidget(QWidget):
         self._module = module
         self._settings = module._settings
         self._build_ui()
+        from withease.gui.ui_utils import wrap_long_rows
+        wrap_long_rows(self)
         from withease.gui.settings.module_sync import sync_module_checkbox
         sync_module_checkbox(self, module, self._enabled_cb,
                              self._update_enabled_state)
@@ -85,7 +89,8 @@ class KeyboardSettingsWidget(QWidget):
         self._delay_ms.valueChanged.connect(lambda v: self._save("delay_ms", v))
         # Visible, not a tooltip: a value set too high makes the whole
         # keyboard look broken, and nobody hovers a caption to find that out.
-        delay_form.addRow(tr("module.keyboard.delay.ms"), self._delay_ms)
+        delay_form.addRow(tr("module.keyboard.delay.ms"),
+                          reset_spin(self._delay_ms, 500))
         delay_form.addRow("", setting_note(tr("module.keyboard.delay.ms.hint")))
 
         self._delay_exceptions = KeyListEdit(
@@ -151,6 +156,7 @@ class KeyboardSettingsWidget(QWidget):
         # caption is clickable (a far bigger target than the 20px indicator)
         # and the block is much more compact.
         self._sticky_cbs: dict[str, QCheckBox] = {}
+        sticky_form.addRow(group_heading(tr("module.keyboard.sticky.group.keys")))
         for key in ("shift", "ctrl", "alt", "altgr", "win"):
             cb = QCheckBox(tr(f"module.keyboard.sticky.{key}"))
             cb.setChecked(self._settings.get(f"sticky_{key}", False))
@@ -159,6 +165,8 @@ class KeyboardSettingsWidget(QWidget):
             self._sticky_cbs[key] = cb
 
         # Same treatment for the caption.
+        sticky_form.addRow(
+            group_heading(tr("module.keyboard.sticky.group.behaviour")))
         self._sticky_auto = QCheckBox(
             tr("module.keyboard.sticky.auto_release"))
         self._sticky_auto.setChecked(
@@ -188,6 +196,8 @@ class KeyboardSettingsWidget(QWidget):
                              checkbox=True))
 
         from withease.gui.widgets.modifier_indicator import POSITIONS
+        sticky_form.addRow(
+            group_heading(tr("module.keyboard.sticky.group.display")))
         self._sticky_pos = QComboBox()
         for pos in POSITIONS:
             self._sticky_pos.addItem(tr(f"keyboard.indicator.pos.{pos}"), pos)
@@ -195,7 +205,8 @@ class KeyboardSettingsWidget(QWidget):
         idx = POSITIONS.index(saved_pos) if saved_pos in POSITIONS else 5
         self._sticky_pos.setCurrentIndex(idx)
         self._sticky_pos.currentIndexChanged.connect(self._on_position_changed)
-        sticky_form.addRow(tr("keyboard.indicator.position"), self._sticky_pos)
+        sticky_form.addRow(tr("keyboard.indicator.position"),
+                           reset_combo(self._sticky_pos, "bottom-right"))
 
         # Chip size (indicator + preview) moved to Allgemein – it's shared
         # with the macro-mode chip, not specific to the keyboard module.
