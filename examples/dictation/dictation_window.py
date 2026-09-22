@@ -761,6 +761,11 @@ class CommandCheatSheet(QDialog):
             manual.setToolTip(_wrap_tip(self.MANUAL_URL))
             manual.clicked.connect(self._open_manual)
             footer.addWidget(manual)
+        train = QPushButton(_t("cmd.train"))
+        train.setToolTip(_wrap_tip(_t("cmd.train.hint")))
+        train.clicked.connect(
+            lambda: bus.publish("dictation.train_commands", parent=self))
+        footer.addWidget(train)
         close_btn = QPushButton(_t("cheat.close"))
         close_btn.setDefault(True)
         close_btn.clicked.connect(self.accept)

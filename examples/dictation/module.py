@@ -3538,6 +3538,15 @@ class DictationSettingsWidget(QWidget):
         _whole_row_toggle(self._cmds_in_dictation)
         adv.addRow("", self._cmds_in_dictation)
         adv.addRow("", _setting_note(_t("commands_in_dictation.hint")))
+        train_row = QHBoxLayout()
+        train_row.setContentsMargins(0, 0, 0, 0)
+        train_btn = QPushButton(_t("cmd.train"))
+        train_btn.clicked.connect(
+            lambda: self._module.open_command_training(self))
+        train_row.addWidget(train_btn)
+        train_row.addStretch(1)
+        adv.addRow(label_with_hint(_t("cmd.train.label"), _t("cmd.train.hint")),
+                   train_row)
 
         adv.addRow(group_heading(_t("group.adv.recording")))
         self._max_seconds = QSpinBox()
@@ -4768,6 +4777,8 @@ class DictationModule(BaseModule):
         bus.subscribe("theme.changed", self._on_theme_changed)
         bus.subscribe("dictation.capture_request", self._on_capture_request)
         bus.subscribe("dictation.capture_stop", self._on_capture_stop)
+        # "Befehl einlernen" from the command list in the dictation window
+        bus.subscribe("dictation.train_commands", self._on_train_commands)
         # The tray names the microphone in use and lists the others, so a
         # quick switch does not need the settings.  The core asks; this
         # module answers - the tray itself knows nothing about audio.
@@ -4904,6 +4915,11 @@ class DictationModule(BaseModule):
         bus.publish("tray.refresh")          # new name in tooltip and menu
 
     def on_settings_changed(self) -> None:
+        try:                            # the spellings trained for commands
+            import commands_de as cde
+            cde.set_trained(self._settings.get("trained_commands") or {})
+        except Exception:
+            _log.warning("trained commands not applied", exc_info=True)
         self._refresh_trigger()
         action_manager.assign_trigger(
             "dictation.toggle", self._trigger if self.enabled else "")
@@ -6528,6 +6544,43 @@ class DictationModule(BaseModule):
     def _open_pronunciation_for(self, word: str, parent: Any) -> None:
         from pronunciation import PronunciationDialog
         PronunciationDialog(word, self, parent=parent).exec()
+
+    # -- Befehl einlernen ---------------------------------------------------
+
+    def open_command_training(self, parent: Any = None,
+                              phrase: str = "") -> None:
+        from pronunciation import CommandTrainingDialog
+        CommandTrainingDialog(self, phrase, parent=parent).exec()
+
+    def _on_train_commands(self, parent: Any = None, **_: object) -> None:
+        self.open_command_training(parent)
+
+    def command_variants(self, phrase: str) -> list[str]:
+        """The spellings trained for a command, as they were heard."""
+        import commands_de as cde
+        want = cde.normalise(phrase)
+        return [heard for heard, meant in
+                (self._settings.get("trained_commands") or {}).items()
+                if meant == want]
+
+    def add_command_variants(self, phrase: str, variants: list[str]) -> None:
+        """From now on these spellings count as the command ``phrase``."""
+        import commands_de as cde
+        trained = dict(self._settings.get("trained_commands") or {})
+        meant = cde.normalise(phrase)
+        for variant in variants:
+            heard = cde.normalise(variant)
+            if heard and heard != meant:
+                trained[heard] = meant
+        self._settings["trained_commands"] = trained
+        self.on_settings_changed()
+
+    def remove_command_variant(self, variant: str) -> None:
+        import commands_de as cde
+        trained = dict(self._settings.get("trained_commands") or {})
+        trained.pop(cde.normalise(variant), None)
+        self._settings["trained_commands"] = trained
+        self.on_settings_changed()
 
     def heard_variants(self, written: str) -> list[str]:
         """The spellings "Aussprache anlernen" kept for a word."""

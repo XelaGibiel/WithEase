@@ -544,7 +544,26 @@ _MATCHERS = (_m_window, _m_mode, _m_correct, _m_pick, _m_delete, _m_select,
 
 def parse(transcript: str) -> Command | None:
     """Return the :class:`Command` for a full utterance, or ``None`` for plain
-    dictation text."""
+    dictation text.
+
+    Whisper does not always write a command the way the list has it
+    ("Streicht das", "Streich dass").  So after the exact match come the
+    variants the user trained for a command (``set_trained``), and then a
+    near match: a short utterance that differs from a fixed command phrase
+    by a letter or two per word (see ``near_command``)."""
+    cmd = _parse_exact(transcript)
+    if cmd is not None:
+        return cmd
+    t = normalise(transcript)
+    if not t:
+        return None
+    phrase = _TRAINED.get(t) or near_command(t)
+    if phrase:
+        return _parse_exact(phrase)
+    return None
+
+
+def _parse_exact(transcript: str) -> Command | None:
     t = normalise(transcript)
     if not t:
         return None
@@ -635,7 +654,8 @@ def command_in_dictation(text: str) -> "Command | None":
     if cmd is None:
         return None
     words = normalise(text).split()
-    if len(words) == 1 and words[0] not in _SINGLE_WORDS_IN_DICTATION:
+    if len(words) == 1 and words[0] not in _SINGLE_WORDS_IN_DICTATION \
+            and words[0] not in _TRAINED:       # taught on purpose: counts
         return None
     return cmd
 
@@ -784,3 +804,177 @@ def cheat_sheet_rows() -> list[tuple[str, str, str]]:
     and what its search filters."""
     return [(group, said, means)
             for group, items in CHEAT_SHEET for said, means in items]
+
+
+# ---------------------------------------------------------------------------
+# Commands Whisper writes a little differently: near matches and trained ones
+# ---------------------------------------------------------------------------
+
+# How the user's own voice came out for a command, from "Befehl einlernen":
+# normalised utterance -> the command phrase it stands for.
+_TRAINED: dict[str, str] = {}
+
+
+def set_trained(variants: dict[str, str]) -> None:
+    """Replace the trained variants (``{"streich dass": "streich das"}``)."""
+    _TRAINED.clear()
+    for heard, phrase in (variants or {}).items():
+        heard, phrase = normalise(heard), normalise(phrase)
+        if heard and phrase and heard != phrase:
+            _TRAINED[heard] = phrase
+
+
+def trained() -> dict[str, str]:
+    return dict(_TRAINED)
+
+
+def _distance(a: str, b: str) -> int:
+    """Edit distance (insert, delete, change one letter)."""
+    if a == b:
+        return 0
+    if len(a) < len(b):
+        a, b = b, a
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        current = [i]
+        for j, cb in enumerate(b, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1,
+                               previous[j - 1] + (ca != cb)))
+        previous = current
+    return previous[-1]
+
+
+def _fixed_phrases() -> list[str]:
+    """Every command said in fixed words ("streich das", "fenster
+    schließen"), read from the matchers themselves - so a new command is
+    covered without a second list to keep up to date.  Only phrases of two
+    or more words: one word ("kopieren", "streichen") is too easily a word
+    of normal text that merely looks alike."""
+    import ast
+    import inspect
+    try:
+        tree = ast.parse(inspect.getsource(inspect.getmodule(parse)))
+    except (OSError, TypeError, SyntaxError):
+        return []
+    found: set[str] = set()
+
+    def strings(node: ast.AST) -> list[str]:
+        if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            return [e.value for e in node.elts
+                    if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+        if isinstance(node, ast.Name):
+            value = globals().get(node.id)
+            if isinstance(value, (dict, set, frozenset, tuple, list)):
+                return [v for v in value if isinstance(v, str)]
+        return []
+
+    for fn in tree.body:
+        if not (isinstance(fn, ast.FunctionDef) and fn.name.startswith("_m_")):
+            continue
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Compare) and any(
+                    isinstance(op, ast.In) for op in node.ops):
+                for right in node.comparators:
+                    found.update(strings(right))
+    phrases = []
+    for text in sorted(found):
+        phrase = normalise(text)
+        if len(phrase.split()) >= 2 and _parse_exact(phrase) is not None:
+            phrases.append(phrase)
+    return phrases
+
+
+_PHRASES: list[str] | None = None
+
+
+# words Whisper swaps for each other in a command
+_SOUND_ALIKE = ({"das", "dass", "des"},)
+
+
+def _words_close(said: str, meant: str) -> int | None:
+    """How far one spoken word is from the command's word - or None when
+    they are simply different words.
+
+    Only a different ENDING counts as close ("streicht" for "streich",
+    "merkten" for "merken", "zeilen" for "zeile"): that is how Whisper gets
+    a command wrong.  A different beginning makes another word ("doch" is
+    not "noch", "viel" is not "ziel")."""
+    if said == meant:
+        return 0
+    if any(said in group and meant in group for group in _SOUND_ALIKE):
+        return 1
+    d = _distance(said, meant)
+    shorter = min(len(said), len(meant))
+    common = 0
+    for a, b in zip(said, meant):
+        if a != b:
+            break
+        common += 1
+    if common < max(3, shorter - 2):
+        return None
+    if shorter >= 7 and d <= 2:
+        return d
+    if shorter >= 4 and d <= 1:
+        return d
+    return None
+
+
+def near_command(t: str) -> str | None:
+    """The fixed command phrase that the normalised utterance ``t`` almost
+    is ("streicht das" -> "streich das"), or None.
+
+    Close means: the same number of words, every word at most a letter
+    apart (two for long words), two letters apart at most in all - and one
+    command clearly closer than any other, never a tie between two."""
+    global _PHRASES
+    words = t.split()
+    if not 2 <= len(words) <= 4:
+        return None
+    if _PHRASES is None:
+        _PHRASES = _fixed_phrases()
+    best: list[tuple[int, str]] = []
+    for phrase in _PHRASES:
+        if len(phrase) < 10:
+            continue        # "das klein", "zum ende": too near normal text
+        target = phrase.split()
+        if len(target) != len(words):
+            continue
+        total = 0
+        for said, meant in zip(words, target):
+            d = _words_close(said, meant)
+            if d is None:
+                break
+            total += d
+        else:
+            if 0 < total <= 2:
+                best.append((total, phrase))
+    if not best:
+        return None
+    best.sort()
+    top = [phrase for d, phrase in best if d == best[0][0]]
+    kinds = {repr(_parse_exact(phrase)) for phrase in top}
+    return top[0] if len(kinds) == 1 else None
+
+
+
+def trainable_commands() -> list[str]:
+    """The commands "Befehl einlernen" offers, the way the cheat sheet
+    writes them ("Streich das", "Text übernehmen") - one per command."""
+    seen: list[Command] = []
+    out: list[str] = []
+    for _group, items in CHEAT_SHEET:
+        for said, _means in items:
+            for part in said.split(" · "):
+                part = part.strip()
+                if not part or "<" in part or "…" in part:
+                    continue
+                # a command with something of your own in it (a number,
+                # "A durch B") is not one fixed phrase to learn
+                if re.search(r"\d|\b[AB]\b", part):
+                    continue
+                cmd = _parse_exact(part)
+                if cmd is None or cmd in seen or cmd.kind == "literal":
+                    continue
+                seen.append(cmd)
+                out.append(part[:1].upper() + part[1:])
+    return out
