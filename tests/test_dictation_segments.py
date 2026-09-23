@@ -139,6 +139,8 @@ def test_nothing_said_at_all_is_reported(module, monkeypatch):
 
 def test_the_settings_show_the_pause_rows_with_the_switch(app, module):
     page = module.get_settings_widget()
+    # the pauses live with the text output now - open that card
+    page._jump.jump_to(dict(page._jump._targets)["Textausgabe"])
     assert page._segment_cb.isVisibleTo(page)
     assert page._segment_pause.isVisibleTo(page)
     assert page._pause_dot_cb.isVisibleTo(page)

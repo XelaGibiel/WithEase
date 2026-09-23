@@ -182,3 +182,47 @@ def test_using_a_command_counts_it(app):
     w._on_transcript("Streich das", "auto", [])
     assert counted == ["strike_last"]
     w.close()
+
+
+# -- the jump bar above the long page ----------------------------------------
+
+def test_the_jump_bar_lists_every_section_and_opens_it(app):
+    from PySide6.QtWidgets import QScrollArea
+    import module as dic
+    m = dic.DictationModule()
+    m._settings.update({"backend": "local"})
+    page = m.get_settings_widget()
+    page._update_enabled_state(True)
+    assert page._jump.names() == [
+        "Grundeinstellungen", "Spracherkennung", "Textausgabe", "Wörterbuch",
+        "KI", "Erweitert", "Deine Daten"]
+    page.resize(830, 700)
+    page.show()
+    app.processEvents()
+    targets = dict(page._jump._targets)
+    scroll = page.findChild(QScrollArea)
+    assert scroll.verticalScrollBar().value() == 0
+    page._jump.jump_to(targets["Deine Daten"])
+    app.processEvents()
+    app.processEvents()
+    assert scroll.verticalScrollBar().value() > 0        # scrolled down
+    assert page._data_history.isVisibleTo(page)          # and opened
+    page.deleteLater()
+
+
+def test_the_technical_settings_are_folded_away(app):
+    import module as dic
+    m = dic.DictationModule()
+    m._settings.update({"backend": "local"})
+    page = m.get_settings_widget()
+    page._update_enabled_state(True)
+    page.show()
+    app.processEvents()
+    assert not page._engine.isVisibleTo(page)       # engine, whisper.cpp, GPU
+    assert page._backend.isVisibleTo(page)          # what you do need is there
+    assert page._device.isVisibleTo(page)
+    assert page._test_btn.isVisibleTo(page)
+    page._tech.set_open(True)
+    app.processEvents()
+    assert page._engine.isVisibleTo(page)
+    page.deleteLater()

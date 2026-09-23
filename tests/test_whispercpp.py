@@ -288,6 +288,7 @@ def test_the_whispercpp_rows_only_appear_when_they_matter(app, monkeypatch):
     m = dic.DictationModule()
     monkeypatch.setattr(m, "_faster_whisper_usable", lambda: True)
     page = m.get_settings_widget()
+    page._tech.set_open(True)       # engine + whisper.cpp live in "Technik"
     assert not page._cpp_note.isVisibleTo(page)
 
     page._engine.setCurrentIndex(page._engine.findData("whispercpp"))
@@ -301,6 +302,7 @@ def test_they_appear_by_themselves_when_faster_whisper_cannot_run(app,
     m = dic.DictationModule()
     monkeypatch.setattr(m, "_faster_whisper_usable", lambda: False)
     page = m.get_settings_widget()
+    page._tech.set_open(True)
     assert page._cpp_note.isVisibleTo(page), "this machine has nothing else"
     page.deleteLater()
 

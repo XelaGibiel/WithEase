@@ -164,6 +164,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "deps_missing": "⚠ Für dieses Add-on fehlen Komponenten. Zum Aktivieren im Programmordner ausführen:  pip install sounddevice requests  (für lokale Erkennung zusätzlich: faster-whisper)",
         "group.basics": "Grundeinstellungen",
         "group.recognition": "Spracherkennung",
+        "group.tech": "▸ Technik (Motor, Installation, GPU)",
+        "group.tech.open": "▾ Technik (Motor, Installation, GPU)",
         "group.rec.engine": "Mikrofon und Erkennung",
         "group.rec.pauses": "Pausen",
         "group.rec.report": "Fehler merken",
@@ -501,6 +503,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "description.long": "Press the hotkey, speak, done – the recognised text is inserted into the active application. Note: with the cloud backend the recording is sent to the chosen provider; with the local backend everything stays on this PC.",
         "group.basics": "Basics",
         "group.recognition": "Speech recognition",
+        "group.tech": "▸ Technical (engine, installation, GPU)",
+        "group.tech.open": "▾ Technical (engine, installation, GPU)",
         "group.rec.engine": "Microphone and recognition",
         "group.rec.pauses": "Pauses",
         "group.rec.report": "Remembering errors",
@@ -925,6 +929,16 @@ def _option_hint(combo, index: int, text: str) -> None:
         set_option_hint(combo, index, text)
     except Exception:
         combo.setItemData(index, text, Qt.ItemDataRole.ToolTipRole)
+
+
+def _jump_bar():
+    """The row of jump targets above a long page - None on an OLDER core
+    that has no JumpBar yet (see _label_with_hint for why)."""
+    try:
+        from withease.gui.widgets.jump_bar import JumpBar
+        return JumpBar()
+    except ImportError:
+        return None
 
 
 def _settings_parts():
@@ -2859,6 +2873,9 @@ class DictationSettingsWidget(QWidget):
         # Every settings card/section is collected here so the whole block can
         # be greyed out while the module is off (like the Mouse/Keyboard pages).
         self._sections: list[QWidget] = []
+        # One click per section instead of scrolling through three screens -
+        # and, unlike tabs, every heading stays visible on the page itself.
+        self._jump = _jump_bar()
 
         def _group(title: str, icon: str = "") -> QFormLayout:
             # Use the app's card helper: it gives a BOLD title label inside the
@@ -2871,8 +2888,10 @@ class DictationSettingsWidget(QWidget):
             f.setFieldGrowthPolicy(
                 QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
             body.addLayout(f)
+            self._last_card_body = body
             layout.addWidget(card_w)
             self._sections.append(card_w)
+            self._jump_add(title, card_w)
             return f
 
         def _group_foldable(title: str, title_open: str,
@@ -2892,6 +2911,7 @@ class DictationSettingsWidget(QWidget):
             sec.toggled.connect(lambda on, x=sec: self._reveal_section(x, on))
             layout.addWidget(sec)
             self._sections.append(sec)
+            self._jump_add(title, sec)
             return f
 
         from withease.gui.ui_utils import em
@@ -3112,68 +3132,6 @@ class DictationSettingsWidget(QWidget):
             label_with_hint(_t("model"), _t("model.hint")),
             self._model)
 
-        # -- which engine does the local recognition ----------------------
-        self._rec_form = rec
-        self._engine = QComboBox()
-        for engine_id, key in (("auto", "engine.auto"),
-                               ("faster-whisper", "engine.faster"),
-                               ("whispercpp", "engine.cpp")):
-            self._engine.addItem(_t(key), engine_id)
-        _option_hint(self._engine, 0, _t("engine.auto.hint"))
-        engine_index = self._engine.findData(
-            self._settings.get("local_engine", "auto"))
-        if engine_index >= 0:
-            self._engine.setCurrentIndex(engine_index)
-        self._engine.currentIndexChanged.connect(self._on_engine_changed)
-        rec.addRow(label_with_hint(_t("engine"), _t("engine.hint")),
-                   self._engine)
-
-        # whisper.cpp needs a program of its own: whisper.cpp publishes no
-        # ready-made files with its releases, so WithEase cannot ship one.
-        self._cpp_path = QLineEdit(self._settings.get("whispercpp_binary", ""))
-        self._cpp_path.setMinimumWidth(em(14))
-        self._cpp_path.editingFinished.connect(self._on_cpp_path_changed)
-        cpp_browse = QPushButton(_t("engine.cpp.browse"))
-        cpp_browse.clicked.connect(self._on_browse_cpp)
-        cpp_path_row = QWidget()
-        cpp_path_layout = QHBoxLayout(cpp_path_row)
-        cpp_path_layout.setContentsMargins(0, 0, 0, 0)
-        cpp_path_layout.setSpacing(8)
-        cpp_path_layout.addWidget(self._cpp_path, 1)
-        cpp_path_layout.addWidget(cpp_browse)
-        rec.addRow(label_with_hint(_t("engine.cpp.program"),
-                                   _t("engine.cpp.program.hint")),
-                   cpp_path_row)
-        self._cpp_path_status = _setting_note("")
-        rec.addRow("", self._cpp_path_status)
-
-        self._cpp_model = QComboBox()
-        self._cpp_model.currentIndexChanged.connect(self._on_cpp_model_changed)
-        self._cpp_dl = QPushButton(_t("engine.cpp.download"))
-        self._cpp_dl.clicked.connect(self._on_download_cpp_model)
-        cpp_model_row = QWidget()
-        cpp_model_layout = QHBoxLayout(cpp_model_row)
-        cpp_model_layout.setContentsMargins(0, 0, 0, 0)
-        cpp_model_layout.setSpacing(8)
-        # No stretch on the box: compact_fields sizes it to its longest
-        # entry, and a stretch would then park it in mid-air.
-        cpp_model_layout.addWidget(self._cpp_model)
-        cpp_model_layout.addWidget(self._cpp_dl)
-        cpp_model_layout.addStretch(1)
-        rec.addRow(label_with_hint(_t("engine.cpp.model"),
-                                   _t("engine.cpp.model.hint")),
-                   cpp_model_row)
-        self._cpp_status = _setting_note("")
-        rec.addRow("", self._cpp_status)
-        # What this engine cannot do belongs where it is chosen, not in a
-        # release note nobody reads.
-        self._cpp_note = _setting_note(_t("engine.cpp.note"))
-        rec.addRow("", self._cpp_note)
-
-        self._cpp_fields = [cpp_path_row, self._cpp_path_status,
-                            cpp_model_row, self._cpp_status, self._cpp_note]
-        self._fill_cpp_models()
-
         # Local fields
         self._local_model = QComboBox()
         for m in LOCAL_MODELS:
@@ -3222,6 +3180,87 @@ class DictationSettingsWidget(QWidget):
         self._local_model.currentIndexChanged.connect(
             lambda _i: self._note_model_change())
 
+        self._test_btn = QPushButton(_t("test"))
+        self._test_btn.clicked.connect(self._on_test)
+        rec.addRow("", self._test_btn)
+
+        # Everything you set up once, if ever: which engine does the work,
+        # whisper.cpp, the installation and the GPU.  Folded away, because
+        # it was half of the card people meet first.
+        self._tech = _Collapsible(_t("group.tech"), _t("group.tech.open"),
+                                  icon="🔧")
+        tech_form = QFormLayout()
+        tech_form.setSpacing(10)
+        tech_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self._tech.content_body().addLayout(tech_form)
+        self._tech.toggled.connect(
+            lambda on, s=self._tech: self._reveal_section(s, on))
+        self._last_card_body.addWidget(self._tech)
+        self._tech_form = tech_form
+
+        # -- which engine does the local recognition ----------------------
+        self._rec_form = rec
+        self._engine = QComboBox()
+        for engine_id, key in (("auto", "engine.auto"),
+                               ("faster-whisper", "engine.faster"),
+                               ("whispercpp", "engine.cpp")):
+            self._engine.addItem(_t(key), engine_id)
+        _option_hint(self._engine, 0, _t("engine.auto.hint"))
+        engine_index = self._engine.findData(
+            self._settings.get("local_engine", "auto"))
+        if engine_index >= 0:
+            self._engine.setCurrentIndex(engine_index)
+        self._engine.currentIndexChanged.connect(self._on_engine_changed)
+        tech_form.addRow(label_with_hint(_t("engine"), _t("engine.hint")),
+                   self._engine)
+
+        # whisper.cpp needs a program of its own: whisper.cpp publishes no
+        # ready-made files with its releases, so WithEase cannot ship one.
+        self._cpp_path = QLineEdit(self._settings.get("whispercpp_binary", ""))
+        self._cpp_path.setMinimumWidth(em(14))
+        self._cpp_path.editingFinished.connect(self._on_cpp_path_changed)
+        cpp_browse = QPushButton(_t("engine.cpp.browse"))
+        cpp_browse.clicked.connect(self._on_browse_cpp)
+        cpp_path_row = QWidget()
+        cpp_path_layout = QHBoxLayout(cpp_path_row)
+        cpp_path_layout.setContentsMargins(0, 0, 0, 0)
+        cpp_path_layout.setSpacing(8)
+        cpp_path_layout.addWidget(self._cpp_path, 1)
+        cpp_path_layout.addWidget(cpp_browse)
+        tech_form.addRow(label_with_hint(_t("engine.cpp.program"),
+                                   _t("engine.cpp.program.hint")),
+                   cpp_path_row)
+        self._cpp_path_status = _setting_note("")
+        tech_form.addRow("", self._cpp_path_status)
+
+        self._cpp_model = QComboBox()
+        self._cpp_model.currentIndexChanged.connect(self._on_cpp_model_changed)
+        self._cpp_dl = QPushButton(_t("engine.cpp.download"))
+        self._cpp_dl.clicked.connect(self._on_download_cpp_model)
+        cpp_model_row = QWidget()
+        cpp_model_layout = QHBoxLayout(cpp_model_row)
+        cpp_model_layout.setContentsMargins(0, 0, 0, 0)
+        cpp_model_layout.setSpacing(8)
+        # No stretch on the box: compact_fields sizes it to its longest
+        # entry, and a stretch would then park it in mid-air.
+        cpp_model_layout.addWidget(self._cpp_model)
+        cpp_model_layout.addWidget(self._cpp_dl)
+        cpp_model_layout.addStretch(1)
+        tech_form.addRow(label_with_hint(_t("engine.cpp.model"),
+                                   _t("engine.cpp.model.hint")),
+                   cpp_model_row)
+        self._cpp_status = _setting_note("")
+        tech_form.addRow("", self._cpp_status)
+        # What this engine cannot do belongs where it is chosen, not in a
+        # release note nobody reads.
+        self._cpp_note = _setting_note(_t("engine.cpp.note"))
+        tech_form.addRow("", self._cpp_note)
+
+        self._cpp_fields = [cpp_path_row, self._cpp_path_status,
+                            cpp_model_row, self._cpp_status, self._cpp_note]
+        self._fill_cpp_models()
+
         import sys as _sys
         self._frozen = bool(getattr(_sys, "frozen", False))
         self._install_box = QWidget()
@@ -3251,66 +3290,10 @@ class DictationSettingsWidget(QWidget):
         self._install_status.setWordWrap(True)
         self._install_status.setVisible(False)
         install_layout.addWidget(self._install_status)
-        rec.addRow("", self._install_box)
+        tech_form.addRow("", self._install_box)
         self._update_install_note()
 
-        self._test_btn = QPushButton(_t("test"))
-        self._test_btn.clicked.connect(self._on_test)
-        rec.addRow("", self._test_btn)
 
-        # Normal dictation: convert at every longer pause, microphone stays on.
-        rec.addRow(group_heading(_t("group.rec.pauses")))
-        self._segment_cb = QCheckBox(_t("segment"))
-        self._segment_cb.setChecked(
-            bool(self._settings.get("segment_on_pause", True)))
-        self._segment_cb.toggled.connect(
-            lambda on: (self._save("segment_on_pause", bool(on)),
-                        self._update_segment_rows()))
-        _whole_row_toggle(self._segment_cb)
-        rec.addRow("", self._segment_cb)
-        self._segment_note = _setting_note(_t("segment.hint"))
-        rec.addRow("", self._segment_note)
-        # what only exists with the switch on sits in a box behind it
-        self._segment_sub = SubSettings()
-        rec.addRow("", self._segment_sub)
-        seg = self._segment_sub.form
-        self._segment_pause = QDoubleSpinBox()
-        self._segment_pause.setRange(0.8, 5.0)
-        self._segment_pause.setSingleStep(0.1)
-        self._segment_pause.setDecimals(1)
-        self._segment_pause.setSuffix(" s")
-        self._segment_pause.setValue(
-            float(self._settings.get("segment_pause", 2.0)))
-        self._segment_pause.valueChanged.connect(
-            lambda v: self._save("segment_pause", round(float(v), 1)))
-        seg.addRow(_t("segment.pause"), reset_spin(self._segment_pause, 2.0))
-        self._segment_pause_note = _setting_note(_t("segment.pause.hint"))
-        seg.addRow("", self._segment_pause_note)
-        self._pause_dot_cb = QCheckBox(_t("pause_dot"))
-        self._pause_dot_cb.setChecked(bool(self._settings.get("pause_dot", True)))
-        self._pause_dot_cb.toggled.connect(
-            lambda on: self._save("pause_dot", bool(on)))
-        _whole_row_toggle(self._pause_dot_cb)
-        seg.addRow("", self._pause_dot_cb)
-        self._pause_dot_note = _setting_note(_t("pause_dot.hint"))
-        seg.addRow("", self._pause_dot_note)
-        # where "Fehler merken" saves - never C: by accident: chosen once
-        rec.addRow(group_heading(_t("group.rec.report")))
-        report_row = QHBoxLayout()
-        report_row.setContentsMargins(0, 0, 0, 0)
-        self._report_dir = QLabel()
-        self._report_dir.setWordWrap(True)
-        report_row.addWidget(self._report_dir, 1)
-        pick = QPushButton(_t("report.dir.pick"))
-        pick.clicked.connect(self._on_pick_report_dir)
-        report_row.addWidget(pick)
-        self._report_open = QPushButton(_t("report.dir.open"))
-        self._report_open.clicked.connect(
-            lambda: self._module.open_report_dir())
-        report_row.addWidget(self._report_open)
-        rec.addRow(_t("report.dir"), report_row)
-        rec.addRow("", _setting_note(_t("report.dir.hint")))
-        self._show_report_dir()
 
         # -- (3) Textausgabe -------------------------------------------
         out = _group_foldable(_t("group.output"),
@@ -3364,6 +3347,42 @@ class DictationSettingsWidget(QWidget):
         out.addRow("", _checkbox_with_hint(
             self._take_sel_cb, _t("take_selection.hint")))
 
+        # Normal dictation: convert at every longer pause, microphone stays on.
+        out.addRow(group_heading(_t("group.rec.pauses")))
+        self._segment_cb = QCheckBox(_t("segment"))
+        self._segment_cb.setChecked(
+            bool(self._settings.get("segment_on_pause", True)))
+        self._segment_cb.toggled.connect(
+            lambda on: (self._save("segment_on_pause", bool(on)),
+                        self._update_segment_rows()))
+        _whole_row_toggle(self._segment_cb)
+        out.addRow("", _checkbox_with_hint(self._segment_cb,
+                                           _t("segment.hint")))
+        # what only exists with the switch on sits in a box behind it
+        self._segment_sub = SubSettings()
+        out.addRow("", self._segment_sub)
+        seg = self._segment_sub.form
+        self._segment_pause = QDoubleSpinBox()
+        self._segment_pause.setRange(0.8, 5.0)
+        self._segment_pause.setSingleStep(0.1)
+        self._segment_pause.setDecimals(1)
+        self._segment_pause.setSuffix(" s")
+        self._segment_pause.setValue(
+            float(self._settings.get("segment_pause", 2.0)))
+        self._segment_pause.valueChanged.connect(
+            lambda v: self._save("segment_pause", round(float(v), 1)))
+        seg.addRow(label_with_hint(_t("segment.pause"),
+                                   _t("segment.pause.hint")),
+                   reset_spin(self._segment_pause, 2.0))
+        self._pause_dot_cb = QCheckBox(_t("pause_dot"))
+        self._pause_dot_cb.setChecked(bool(self._settings.get("pause_dot", True)))
+        self._pause_dot_cb.toggled.connect(
+            lambda on: self._save("pause_dot", bool(on)))
+        _whole_row_toggle(self._pause_dot_cb)
+        seg.addRow("", _checkbox_with_hint(self._pause_dot_cb,
+                                           _t("pause_dot.hint")))
+        self._segment_form = out
+
         # -- (4) Woerterbuch -------------------------------------------
         # One full-width row (the card is already titled "Wörterbuch", so no
         # extra label column – that duplicated the heading and, being top-
@@ -3416,6 +3435,7 @@ class DictationSettingsWidget(QWidget):
             lambda on, s=ki_section: self._reveal_section(s, on))
         layout.addWidget(ki_section)
         self._sections.append(ki_section)
+        self._jump_add(_t("group.ai"), ki_section)
 
         # Button on the "KI-Aktionen" row; its long description sits on its own
         # full-width row below so it wraps freely instead of being clipped.
@@ -3460,8 +3480,8 @@ class DictationSettingsWidget(QWidget):
         self._punct_ai.toggled.connect(
             lambda v: self._save("punctuation_ai", v))
         self._punct_ai.toggled.connect(lambda _v: self._update_ai_rows())
-        ai.addRow("", self._punct_ai)
-        ai.addRow("", _setting_note(_t("punct_ai.hint")))
+        ai.addRow("", _checkbox_with_hint(self._punct_ai,
+                                          _t("punct_ai.hint")))
 
         self._ai_backend = QComboBox()
         self._ai_backend.addItem(_t("ai.ollama"), "ollama")
@@ -3528,6 +3548,7 @@ class DictationSettingsWidget(QWidget):
             lambda on, s=adv_section: self._reveal_section(s, on))
         layout.addWidget(adv_section)
         self._sections.append(adv_section)
+        self._jump_add(_t("group.advanced"), adv_section)
 
         adv.addRow(group_heading(_t("group.adv.commands")))
 
@@ -3545,8 +3566,8 @@ class DictationSettingsWidget(QWidget):
         self._cmds_in_dictation.toggled.connect(
             lambda on: self._save("commands_in_dictation", bool(on)))
         _whole_row_toggle(self._cmds_in_dictation)
-        adv.addRow("", self._cmds_in_dictation)
-        adv.addRow("", _setting_note(_t("commands_in_dictation.hint")))
+        adv.addRow("", _checkbox_with_hint(
+            self._cmds_in_dictation, _t("commands_in_dictation.hint")))
         train_row = QHBoxLayout()
         train_row.setContentsMargins(0, 0, 0, 0)
         train_btn = QPushButton(_t("cmd.train"))
@@ -3676,12 +3697,34 @@ class DictationSettingsWidget(QWidget):
         _data_row("data.key", "data.key.hint", self._data_key,
                   self._on_clear_api_key)
 
+        # where "Fehler merken" saves - never C: by accident: chosen once
+        data.addRow(group_heading(_t("group.rec.report")))
+        report_row = QHBoxLayout()
+        report_row.setContentsMargins(0, 0, 0, 0)
+        self._report_dir = QLabel()
+        self._report_dir.setWordWrap(True)
+        report_row.addWidget(self._report_dir, 1)
+        pick = QPushButton(_t("report.dir.pick"))
+        pick.clicked.connect(self._on_pick_report_dir)
+        report_row.addWidget(pick)
+        self._report_open = QPushButton(_t("report.dir.open"))
+        self._report_open.clicked.connect(
+            lambda: self._module.open_report_dir())
+        report_row.addWidget(self._report_open)
+        data.addRow(label_with_hint(_t("report.dir"),
+                                    _t("report.dir.hint")), report_row)
+        self._show_report_dir()
+
         self._refresh_data_stats()
 
         layout.addStretch()
         scroll.setWidget(content)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        if self._jump is not None:
+            self._jump.attach(scroll)
+            self._jump.setContentsMargins(24, 10, 24, 6)
+            outer.addWidget(self._jump)     # stays put while the page scrolls
         outer.addWidget(scroll)
 
         self._on_backend_changed(self._backend.currentIndex())
@@ -3693,6 +3736,13 @@ class DictationSettingsWidget(QWidget):
         self._update_enabled_state(self._module.enabled)
 
     # ------------------------------------------------------------------
+
+    def _jump_add(self, title: str, section: Any) -> None:
+        """One more signpost in the bar above the page (without the ▸/▾ of a
+        foldable section's title)."""
+        if self._jump is None:
+            return
+        self._jump.add(title.lstrip("▸▾ ").strip(), section)
 
     def _save(self, key: str, value: Any) -> None:
         self._settings[key] = value
@@ -4286,7 +4336,7 @@ class DictationSettingsWidget(QWidget):
             engine == "auto" and not self._module._faster_whisper_usable())
         for field in self._cpp_fields:
             field.setVisible(show)
-            label = self._rec_form.labelForField(field)
+            label = self._tech_form.labelForField(field)
             if label is not None:
                 label.setVisible(show)
         if show:
@@ -4398,7 +4448,9 @@ class DictationSettingsWidget(QWidget):
         # The setup box stays visible for the whole local backend – so the
         # "Automatisch installieren" button is always reachable (also to set up
         # GPU acceleration), not only when faster-whisper is still missing.
-        self._form_rec.setRowVisible(self._install_box, not cloud)
+        self._tech_form.setRowVisible(self._install_box, not cloud)
+        # engine, whisper.cpp and the installation are local-only
+        self._tech.setVisible(not cloud)
         if not cloud:
             self._update_install_note()
         self._update_cloud_rows()
@@ -4418,7 +4470,7 @@ class DictationSettingsWidget(QWidget):
         if segment is None:
             return
         pause = segment.isChecked()
-        self._form_rec.setRowVisible(self._segment_sub, pause)
+        self._segment_form.setRowVisible(self._segment_sub, pause)
 
     def _update_cloud_rows(self) -> None:
         cloud = self._backend.currentData() == "cloud"

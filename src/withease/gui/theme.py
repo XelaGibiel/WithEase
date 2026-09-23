@@ -481,6 +481,14 @@ def app_stylesheet() -> str:
         /* A quiet heading that splits a long section into topics. */
         QLabel#settingsGroup {{ color: {hint_color()}; font-weight: bold;
             padding-top: 10px; }}
+        /* The jump bar above a long page (jump_bar.py): quiet buttons that
+           read as a row of signposts, not as actions. */
+        QWidget#jumpBar {{ background: transparent; }}
+        QPushButton#jumpButton {{ background: {s['navbg']};
+            border: 1px solid {s['border']}; border-radius: 12px;
+            padding: 3px 12px; color: {s['text']}; }}
+        QPushButton#jumpButton:hover {{ border-color: {acc}; color: {acc}; }}
+        QPushButton#jumpButton:focus {{ border-color: {acc}; color: {acc}; }}
 
         /* Cards – anything marked with objectName "card". */
         QFrame#card, QWidget#card {{
