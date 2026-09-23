@@ -109,9 +109,12 @@ class LearnFromTextDialog(QDialog):
         cancel.clicked.connect(self.reject)
         footer.addWidget(cancel)
         take = QPushButton(_t("learn.accept"))
+        take.setDefault(True)
         take.clicked.connect(self._accept)
         footer.addWidget(take)
         layout.addLayout(footer)
+        # start in the text field - that is what this dialog is for
+        self._text.setFocus()
 
     def _load_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -376,6 +379,11 @@ class ListEditorDialog(QDialog):
         return widget
 
     # -- actions --------------------------------------------------------
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        if self._input is not None:
+            self._input.setFocus()      # type straight away
 
     def _add(self) -> None:
         if self._on_add is None or self._input is None:
@@ -853,6 +861,25 @@ class DictionaryDialog(QDialog):
         self._written.clear()
         self._spoken.clear()
         self._reload()
+        # A new word is usually added BECAUSE it was misheard - so the next
+        # step is almost always teaching it.  The new entry is selected and
+        # the teach button takes the focus: another Enter starts the
+        # recording, instead of hunting for the button with the mouse.
+        self._select_word(written)
+        if self._on_pronounce is not None:
+            self._pron_btn.setDefault(True)
+            self._pron_btn.setFocus()
+            self._exists.setText(_t("dlg.vocab.added_next", word=written))
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        self._written.setFocus()        # type or search straight away
+
+    def _select_word(self, word: str) -> None:
+        for row, meta in enumerate(self._row_meta):
+            if meta[0] == "dict" and str(meta[1]).casefold() == word.casefold():
+                self._table.selectRow(row)
+                return
 
     def _pronounce(self) -> None:
         """For the word being typed (added first when new) or the selected
@@ -875,6 +902,7 @@ class DictionaryDialog(QDialog):
         self._written.clear()
         self._spoken.clear()
         self._reload()
+        self._written.setFocus()        # ready for the next word
 
     def _remove(self, kind: str, key: str) -> None:
         self._on_remove(kind, key)

@@ -622,6 +622,7 @@ class _MacroDialog(QDialog):
         self._name = QLineEdit()
         self._name.setPlaceholderText(tr("module.macros.dialog.name"))
         form.addRow(tr("module.macros.dialog.name"), self._name)
+        self._name.setFocus()           # the name is what you type first
 
         # Category (free text; existing categories offered as suggestions).
         self._category = QComboBox()
@@ -767,6 +768,9 @@ class _MacroDialog(QDialog):
         self._buttons.accepted.connect(self.accept)
         self._buttons.rejected.connect(self.reject)
         layout.addWidget(self._buttons)
+        # the kind of step is the first decision - Tab from there, Enter
+        # confirms, Escape cancels (as everywhere else)
+        self._type_box.setFocus()
 
     def _on_type_changed(self, index: int) -> None:
         self._stack.setCurrentIndex(index)

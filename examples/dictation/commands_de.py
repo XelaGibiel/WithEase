@@ -404,6 +404,10 @@ def _m_correct(t: str) -> Command | None:
              "streiche das weg", "streichen", "weg damit", "streich es",
              "streiche es"):
         return Command("strike_last")
+    if t in ("wort merken", "merk das wort", "merke das wort",
+             "wort einlernen", "wort ins wörterbuch",
+             "wort ins woerterbuch", "aussprache anlernen"):
+        return Command("learn_word")
     if t in ("korrigiere das", "korrigier das", "korrigiere letztes"):
         return Command("correct_last")
     m = re.fullmatch(r"(?:korrigiere|korrigier) (.+)", t)
@@ -774,6 +778,8 @@ CHEAT_SHEET: list[tuple[str, list[tuple[str, str]]]] = [
     ]),
     ("Korrigieren", [
         ("korrigiere das", "Korrekturfenster zum zuletzt Eingefügten"),
+        ("Wort merken", "das markierte (oder zuletzt diktierte) Wort ins "
+                        "Wörterbuch legen und gleich einsprechen"),
         ("korrigiere <Wort>", "Korrekturfenster zu diesem Wort"),
         ("ersetze A durch B", "A durch B ersetzen"),
         ("rückgängig · wiederholen", "letzte Änderung zurück/erneut"),
@@ -919,7 +925,39 @@ def _words_close(said: str, meant: str) -> int | None:
     return None
 
 
-def near_command(t: str) -> str | None:
+def almost_command(t: str) -> str | None:
+    """The command an utterance was probably MEANT to be, judged loosely.
+
+    Only ever a suggestion to the user ("Als Befehl einlernen?"), never
+    something that runs by itself - so this may guess where
+    ``near_command`` must not: a different first letter counts too, and up
+    to three letters in a longer word.  The answer is the command the way
+    the list writes it ("Fehler merken"), ready to be shown."""
+    phrase = near_command(t, loose=True)
+    return display_for(phrase) if phrase else None
+
+
+def name_for_kind(kind: str) -> str:
+    """The command list's name for a kind of command ("strike_last" ->
+    "Streich das"), for counting what gets used."""
+    for name in trainable_commands():
+        cmd = _parse_exact(name)
+        if cmd is not None and cmd.kind == kind:
+            return name
+    return kind
+
+
+def display_for(phrase: str) -> str:
+    """How the command list writes this command ("fehler merken" ->
+    "Fehler merken")."""
+    cmd = _parse_exact(phrase)
+    for name in trainable_commands():
+        if cmd is not None and _parse_exact(name) == cmd:
+            return name
+    return phrase[:1].upper() + phrase[1:]
+
+
+def near_command(t: str, loose: bool = False) -> str | None:
     """The fixed command phrase that the normalised utterance ``t`` almost
     is ("streicht das" -> "streich das"), or None.
 
@@ -941,12 +979,18 @@ def near_command(t: str) -> str | None:
             continue
         total = 0
         for said, meant in zip(words, target):
-            d = _words_close(said, meant)
-            if d is None:
-                break
+            if loose:
+                d = _distance(said, meant)
+                shorter = min(len(said), len(meant))
+                if d > (3 if shorter >= 6 else 2) or d >= shorter - 1:
+                    break
+            else:
+                d = _words_close(said, meant)
+                if d is None:
+                    break
             total += d
         else:
-            if 0 < total <= 2:
+            if 0 < total <= (4 if loose else 2):
                 best.append((total, phrase))
     if not best:
         return None

@@ -423,7 +423,7 @@ class CommandTrainingDialog(PronunciationDialog):
 
     PREFIX = "cmd"
 
-    def __init__(self, module: Any, phrase: str = "",
+    def __init__(self, module: Any, phrase: str = "", heard: str = "",
                  parent: QWidget | None = None) -> None:
         import commands_de as cde
         self._cde = cde
@@ -451,6 +451,10 @@ class CommandTrainingDialog(PronunciationDialog):
         self._known.linkActivated.connect(self._forget)
         self.layout().insertWidget(2, self._known)
         self._show_known()
+        if heard:
+            # opened from "was that a command?": what was heard is already
+            # there to keep - Enter is enough
+            self._show_results([("", heard)])
 
     def _on_pick(self, _index: int) -> None:
         self._word = self._pick.currentData() or ""

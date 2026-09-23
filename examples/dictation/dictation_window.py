@@ -711,8 +711,12 @@ class CommandCheatSheet(QDialog):
     # thread through this signal first.
     _captured = Signal(str, str)        # token, text
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None,
+                 top: list[str] | None = None) -> None:
         super().__init__(parent)
+        # The commands this user says most often, so the ones that matter
+        # are not somewhere down a list of forty.
+        self._top = [str(name) for name in (top or [])][:5]
         self.setWindowTitle("Sprachbefehle")
         # Wide enough for the two columns side by side, and only as tall as the
         # screen allows – the footer must never be pushed out of view.
@@ -727,6 +731,12 @@ class CommandCheatSheet(QDialog):
         intro = QLabel(_t("cheat.intro"))
         intro.setWordWrap(True)
         layout.addWidget(intro)
+
+        if self._top:
+            often = QLabel(_t("cheat.often",
+                              list=" · ".join(f"„{name}“" for name in self._top)))
+            often.setWordWrap(True)
+            layout.addWidget(often)
 
         self._filter = QLineEdit()
         self._filter.setPlaceholderText(_t("cheat.search"))
@@ -936,6 +946,8 @@ class DictationWindow(QWidget):
                  on_compact_changed: Callable[[bool], None] | None = None,
                  on_finish_listening: Callable[[bool], None] | None = None,
                  on_report_error: Callable[[str], None] | None = None,
+                 on_command_used: Callable[[str], None] | None = None,
+                 top_commands: Callable[[], list[str]] | None = None,
                  on_compact_geometry_changed: Callable[[list], None]
                  | None = None,
                  ai_visible: bool = True,
@@ -952,6 +964,9 @@ class DictationWindow(QWidget):
         self._on_confirm_words = on_confirm_words or (lambda _words: None)
         self._on_add_vocab = on_add_vocab or (lambda _s, _w: None)
         self._on_pronounce = on_pronounce
+        # which commands you actually use - the command list puts those first
+        self._on_command_used = on_command_used or (lambda _kind: None)
+        self._top_commands = top_commands or (lambda: [])
         self._on_ai_action = on_ai_action or (lambda _prompt: None)
         # Voice-inserted text blocks: the module owns the list, the
         # editor only asks for one by its spoken name.
@@ -1178,7 +1193,9 @@ class DictationWindow(QWidget):
         self._hint.setSizePolicy(QSizePolicy.Policy.Ignored,
                                  QSizePolicy.Policy.Fixed)
         self._hint.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse)
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self._hint.linkActivated.connect(self._on_hint_link)
         self._style_hint()
         layout.addWidget(self._hint)
 
@@ -1833,14 +1850,17 @@ class DictationWindow(QWidget):
             if mode == "command":
                 # Command key but nothing matched: do not dump text into buffer.
                 self._report(text, _t("msg.no_command"))
+                self._offer_training(text)
                 return
             self._editor.insert_dictation(
                 cde.apply_inline_punctuation(self._with_quote_sides(text)))
             self._forward_correction()
             self._highlight_low_words(low_words)
             self._report(text, _t("msg.as_text"))
+            self._offer_training(text)
             return
 
+        self._on_command_used(cmd.kind)
         # Window-level commands handled here; editing commands go to the editor.
         if cmd.kind == "paste":
             from PySide6.QtWidgets import QApplication
@@ -1875,6 +1895,9 @@ class DictationWindow(QWidget):
             return
         if cmd.kind == "report_error":
             self._do_report_error()
+            return
+        if cmd.kind == "learn_word":
+            self._learn_word()
             return
         if cmd.kind == "history_show":
             if self._compact:
@@ -2336,7 +2359,7 @@ class DictationWindow(QWidget):
         self._pending_low_words.extend(matched)
 
     def _show_cheatsheet(self) -> None:
-        dlg = CommandCheatSheet(parent=self)
+        dlg = CommandCheatSheet(parent=self, top=self._top_commands())
         dlg.show()
         dlg.raise_()
 
@@ -2516,7 +2539,10 @@ class DictationWindow(QWidget):
         self._report_sig.emit(message or "", bool(saved))
 
     def _apply_report_done(self, message: str, saved: bool) -> None:
-        self._set_hint(message)
+        # saved reports were only reachable through the settings page; the
+        # answer itself now offers the folder
+        self._set_hint(f"{message}  <a href=\"report\">{_t('msg.report.open')}</a>"
+                       if saved else message)
         if saved:
             # the button itself answers - the hint line is hidden in the
             # compact view
@@ -2540,6 +2566,43 @@ class DictationWindow(QWidget):
 
     def _set_hint(self, msg: str) -> None:
         self._hint.setText(msg or "")
+
+    def _offer_training(self, text: str) -> None:
+        """A part that was almost a command: offer to teach it, right here.
+
+        The words are already known, so the teaching dialog opens with them
+        ready to keep - nothing has to be said a second time."""
+        phrase = cde.almost_command(cde.normalise(text))
+        if not phrase:
+            return
+        import html
+        link = (f'<a href="train|{html.escape(phrase)}|{html.escape(text)}">'
+                f'{_t("msg.command.teach", command=phrase)}</a>')
+        self._hint.setText(f"{self._hint.text()}  {link}")
+
+    def _on_hint_link(self, href: str) -> None:
+        """A link in the answer line - the one offer that fits right now."""
+        if href == "report":
+            bus.publish("dictation.open_report_dir")
+            return
+        if href.startswith("train|"):
+            _, phrase, heard = href.split("|", 2)
+            bus.publish("dictation.train_commands", parent=self,
+                        phrase=phrase, heard=heard)
+
+    def _learn_word(self) -> None:
+        """"Wort merken": the marked word - or, with nothing marked, the last
+        one written - into the dictionary, and straight on to teaching it."""
+        cursor = self._edit.textCursor()
+        if not cursor.selectedText().strip():
+            cursor.movePosition(QTextCursor.MoveOperation.PreviousWord,
+                                QTextCursor.MoveMode.KeepAnchor)
+            word = cursor.selectedText().strip()
+            if not word or not any(c.isalnum() for c in word):
+                self._set_hint(_t("msg.mark_word_first"))
+                return
+            self._edit.setTextCursor(cursor)
+        self._add_selection_to_vocab()
 
     def _report(self, raw: str, outcome: str) -> None:
         """Always show what Whisper heard and what was done with it – makes it

@@ -2841,6 +2841,9 @@ class DictationSettingsWidget(QWidget):
         self._setup_note = QLabel("")
         self._setup_note.setWordWrap(True)
         self._setup_note.setVisible(False)
+        # every step is a link to the setting it means
+        self._setup_note.setTextFormat(Qt.TextFormat.RichText)
+        self._setup_note.linkActivated.connect(self._goto_setup)
         layout.addWidget(self._setup_note)
 
         self._deps_box = self._build_deps_box()
@@ -3804,26 +3807,46 @@ class DictationSettingsWidget(QWidget):
 
     # -- "what is still missing" -----------------------------------------
 
-    def _missing_steps(self) -> list[str]:
-        """The steps left before dictation can work at all, in order."""
-        steps: list[str] = []
+    def _missing_steps(self) -> list[tuple[str, str]]:
+        """The steps left before dictation can work at all, in order - each
+        with the name of the setting it is about, so it can be jumped to."""
+        steps: list[tuple[str, str]] = []
         if not (self._settings.get("hotkey") or "").strip():
-            steps.append(_t("setup.hotkey"))
+            steps.append(("hotkey", _t("setup.hotkey")))
         backend = self._backend.currentData() if hasattr(self, "_backend")             else self._settings.get("backend", "local")
         if backend == "local":
             if not local_recognition_ready():
-                steps.append(_t("setup.local"))
+                steps.append(("local", _t("setup.local")))
         else:
             # The key of the PROVIDER that is actually selected – see
             # DictationModule.stored_api_keys() for why not _settings.
             provider = (self._provider.currentData()
                         if hasattr(self, "_provider") else "")
             if not self._module.get_api_key(provider).strip():
-                steps.append(_t("setup.key"))
+                steps.append(("key", _t("setup.key")))
             if (self._provider.currentData() == "custom"
                     and not (self._settings.get("base_url") or "").strip()):
-                steps.append(_t("setup.url"))
+                steps.append(("url", _t("setup.url")))
         return steps
+
+    def _setup_target(self, name: str):
+        """The control a setup step is about."""
+        return {"hotkey": getattr(self, "_hotkey", None),
+                "local": getattr(self, "_install_btn", None),
+                "key": getattr(self, "_api_key", None),
+                "url": getattr(self, "_base_url", None),
+                "test": getattr(self, "_test_btn", None)}.get(name)
+
+    def _goto_setup(self, name: str) -> None:
+        """A step in the "Noch zu tun" line was clicked: show that setting
+        and put the cursor in it, instead of leaving it to be searched for."""
+        widget = self._setup_target(name)
+        if widget is None:
+            return
+        scroll = getattr(self, "_scroll", None)
+        if scroll is not None:
+            scroll.ensureWidgetVisible(widget, 0, 40)
+        widget.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _refresh_setup_note(self) -> None:
         """Show the remaining steps – and nothing once there are none."""
@@ -3834,10 +3857,14 @@ class DictationSettingsWidget(QWidget):
         if not steps:
             note.setVisible(False)
             return
-        numbered = "  ".join(f"{i}. {t}" for i, t in enumerate(steps, 1))
         # The test button is always the last step: it is the only way to find
-        # out whether the setup actually took.
-        numbered += f"  {len(steps) + 1}. {_t('setup.test')}"
+        # out whether the setup actually took.  Every step is a link that
+        # scrolls to its setting and puts the cursor in it.
+        steps = steps + [("test", _t("setup.test"))]
+        colour = _warn_style().split(":", 1)[1].split(";")[0].strip()
+        numbered = "  ".join(
+            f'{i}. <a href="{name}" style="color: {colour}">{text}</a>'
+            for i, (name, text) in enumerate(steps, 1))
         note.setText(f"{_t('setup.todo')}  {numbered}")
         note.setStyleSheet(_warn_style())
         note.setVisible(True)
@@ -4779,6 +4806,7 @@ class DictationModule(BaseModule):
         bus.subscribe("dictation.capture_stop", self._on_capture_stop)
         # "Befehl einlernen" from the command list in the dictation window
         bus.subscribe("dictation.train_commands", self._on_train_commands)
+        bus.subscribe("dictation.open_report_dir", self._on_open_report_dir)
         # The tray names the microphone in use and lists the others, so a
         # quick switch does not need the settings.  The core asks; this
         # module answers - the tray itself knows nothing about audio.
@@ -5030,6 +5058,8 @@ class DictationModule(BaseModule):
                     on_compact_changed=self._save_compact,
                     on_finish_listening=self.finish_listening,
                     on_report_error=self.report_error,
+                    on_command_used=self.count_command_use,
+                    top_commands=self.top_commands,
                     on_compact_geometry_changed=self._save_compact_geometry,
                     ai_visible=bool(
                         self._settings.get("ai_panel_visible", True)),
@@ -6547,13 +6577,32 @@ class DictationModule(BaseModule):
 
     # -- Befehl einlernen ---------------------------------------------------
 
-    def open_command_training(self, parent: Any = None,
-                              phrase: str = "") -> None:
+    def open_command_training(self, parent: Any = None, phrase: str = "",
+                              heard: str = "") -> None:
         from pronunciation import CommandTrainingDialog
-        CommandTrainingDialog(self, phrase, parent=parent).exec()
+        CommandTrainingDialog(self, phrase, heard, parent=parent).exec()
 
-    def _on_train_commands(self, parent: Any = None, **_: object) -> None:
-        self.open_command_training(parent)
+    def _on_train_commands(self, parent: Any = None, phrase: str = "",
+                           heard: str = "", **_: object) -> None:
+        self.open_command_training(parent, phrase, heard)
+
+    def _on_open_report_dir(self, **_: object) -> None:
+        self.open_report_dir()
+
+    def count_command_use(self, kind: str) -> None:
+        """Remember that a command was used, so the list can show yours
+        first.  Only the kind and a number - never what was said."""
+        uses = dict(self._settings.get("command_uses") or {})
+        uses[kind] = int(uses.get(kind, 0)) + 1
+        self._settings["command_uses"] = uses
+        self.on_settings_changed()          # kept across sessions
+
+    def top_commands(self, limit: int = 5) -> list[str]:
+        """The commands used most, by name, most used first."""
+        import commands_de as cde
+        uses = self._settings.get("command_uses") or {}
+        best = sorted(uses.items(), key=lambda kv: -int(kv[1]))[:limit]
+        return [cde.name_for_kind(kind) for kind, _n in best]
 
     def command_variants(self, phrase: str) -> list[str]:
         """The spellings trained for a command, as they were heard."""
