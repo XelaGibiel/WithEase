@@ -267,3 +267,19 @@ def test_taught_spellings_have_their_own_column(app, module):
     assert dlg._table.item(0, 3).text() == "🎤 3"
     assert "Liebig" in dlg._table.item(0, 3).toolTip()
     dlg.close()
+
+
+def test_enter_starts_the_recording_and_then_keeps_the_result(app):
+    """Open, press Enter, speak - no hunting for the button with the mouse."""
+    fake = _FakeModule(["Parakit.", "Parakit", "Parakeet"])
+    dlg = pr.PronunciationDialog("Parakeet", fake)
+    dlg.show()
+    app.processEvents()
+    assert dlg._start.hasFocus() and dlg._start.isDefault()
+    dlg._begin()
+    _wait(app, lambda: dlg._save.isEnabled())
+    # something to keep: Enter now applies it
+    assert dlg._save.hasFocus() and dlg._save.isDefault()
+    dlg._save_variants()
+    assert dlg._start.hasFocus()          # and then records again
+    dlg.close()

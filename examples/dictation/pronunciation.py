@@ -228,8 +228,21 @@ class PronunciationDialog(QDialog):
                 button.setMinimumHeight(theme.target_px())
         except Exception:
             pass
+        # Enter does the obvious next thing: start the recording - and, once
+        # there is something to keep, apply it.  Opening the dialog and then
+        # having to find the button with the mouse broke a flow that is
+        # otherwise all voice and Enter.
+        for button in (self._start, self._save, close):
+            button.setAutoDefault(button is not close)
+        self._start.setDefault(True)
 
         self._set_status(self._tt("ready"))
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        button = self._save if self._save.isEnabled() else self._start
+        button.setDefault(True)
+        button.setFocus()
 
     def _tt(self, key: str, **kwargs: str) -> str:
         import dict_i18n
@@ -372,6 +385,9 @@ class PronunciationDialog(QDialog):
             self._rows.append((box, row))
         self._results_layout.addStretch()
         self._save.setEnabled(bool(wrong))
+        if wrong:               # Enter keeps what was ticked
+            self._save.setDefault(True)
+            self._save.setFocus()
 
     def chosen(self) -> list[str]:
         return [row["text"] for box, row in self._rows
@@ -380,6 +396,8 @@ class PronunciationDialog(QDialog):
     def _save_variants(self) -> None:
         variants = self.chosen()
         self._store(variants)
+        self._start.setDefault(True)        # Enter records again
+        self._start.setFocus()
         if self._on_saved is not None:
             self._on_saved()
         self._set_status(self._tt("saved", n=str(len(variants))))
