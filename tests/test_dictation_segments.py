@@ -829,3 +829,53 @@ def test_the_pronunciation_training_stays_out_of_a_running_dictation(
     got["callback"](speech, 0, None, None)
     assert fed[-1] == speech                      # and then listens again
     module._stop_segmented()
+
+
+# -- from two kept error reports ------------------------------------------------
+
+@pytest.mark.parametrize("said, written", [
+    # a letter dictated with its case, and the count in front of it
+    ("Hierin befanden sich drei Klein-X-Urinale.",
+     "Hierin befanden sich 3x Urinale."),
+    ("drei klein x Urinale", "3x Urinale"),
+    ("3 x Urinale", "3x Urinale"),
+    ("groß A wie Anton", "A wie Anton"),
+    # ordinary German with those words stays untouched
+    ("Das große X ist gemeint.", "Das große X ist gemeint."),
+    ("ein kleines x", "ein kleines x"),
+    ("Das ist ein klein wenig schwer.", "Das ist ein klein wenig schwer."),
+    ("Er hat 2x gewonnen.", "Er hat 2x gewonnen."),
+])
+def test_a_letter_said_with_its_case(said, written):
+    from postprocess import fix_spoken_letters
+    assert fix_spoken_letters(said) == written
+
+
+@pytest.mark.parametrize("before, part, joined", [
+    # a part continuing a sentence must not start with a capital
+    ("und Beinbeutel bzw. Befestigungsbänder ", "Erst auf Anfrage",
+     "erst auf Anfrage"),
+    ("Da der Verbrauch geringer ist, ", "Bitte ich darum", "bitte ich darum"),
+    ("mir zukünftig ", "Weiterhin automatisiert", "weiterhin automatisiert"),
+    # after a full stop it stays a capital, and a noun always does
+    ("Ein Satz. ", "Bitte kommen Sie", "Bitte kommen Sie"),
+    ("und dann ", "Haus und Hof", "Haus und Hof"),
+])
+def test_a_continuing_part_keeps_its_small_letter(before, part, joined):
+    from postprocess import match_case
+    assert match_case(before, part) == joined
+
+
+def test_a_word_dictated_at_the_cursor_fits_the_sentence(app):
+    """From the report: cursor put before a word, then one word dictated -
+    it arrived capitalised in the middle of the sentence."""
+    import dictation_window as dw
+    win = dw.DictationWindow(on_insert=lambda _t: True, on_copy=lambda _t: None)
+    for part in ("und Beinbeutel bzw.", "Befestigungsbänder",
+                 "Auf Anfrage zuzusenden."):
+        win._on_transcript(part, "text", [])
+    win._on_transcript("Cursor vor, auf.", "auto", [])
+    win._on_transcript("Erst.", "auto", [])
+    assert win.text() == ("und Beinbeutel bzw. Befestigungsbänder "
+                          "erst auf Anfrage zuzusenden.")
+    win.close()

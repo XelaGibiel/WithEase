@@ -268,6 +268,18 @@ _LOWER_WORDS = frozenset((
     "dann jetzt hier dort schon noch auch nur sehr immer wieder nicht "
     "eigentlich vielleicht wirklich gerne ziemlich sofort bald oft "
     "manchmal nie niemals überhaupt eben "
+    # adverbs and particles a continuing part starts with - none of them
+    # is ever a noun ("…, bitte ich darum", "… Befestigungsbänder erst auf")
+    "erst erstmal zuerst zunächst danach vorher nachher seitdem inzwischen "
+    "mittlerweile derzeit momentan aktuell künftig zukünftig weiterhin "
+    "zusätzlich außerdem ausserdem ferner zudem ebenfalls ebenso genauso "
+    "allerdings jedoch zwar leider hoffentlich bitte lieber unbedingt "
+    "natürlich selbstverständlich tatsächlich wahrscheinlich vermutlich "
+    "möglicherweise eventuell gegebenenfalls ansonsten deshalb deswegen "
+    "daher darum somit folglich grundsätzlich generell normalerweise "
+    "üblicherweise insgesamt überwiegend meistens häufig selten "
+    "regelmäßig jederzeit schließlich endlich plötzlich bereits fast "
+    "kaum zumindest wenigstens mindestens höchstens besonders "
     # possessives
     "mein meine meinen meinem meiner meines dein deine deinen deinem "
     "deiner deines unser unsere unseren unserem unserer euer eure "
@@ -648,6 +660,36 @@ def fix_digit_sequences(text: str) -> str:
     if line:
         return f"{line.group(1)} {line.group(2)}"
     return text
+
+
+# A letter said with its case ("klein x", "großes X") - Whisper writes the
+# words, sometimes hyphenated ("Klein-X").  Only a SINGLE letter: "klein"
+# in front of a word is an adjective and stays.
+# Only the bare forms: "klein x" / "groß X" is how a letter is dictated,
+# while "ein kleines x" or "das große X" is ordinary German and stays.
+_SPOKEN_LETTER = re.compile(
+    r"\b(klein|gross|groß)[ \t-]+([A-Za-zÄÖÜäöüß])\b", re.IGNORECASE)
+
+# "drei x Urinale" / "3 x Urinale" -> "3x Urinale": how a count is written
+# once the letter above has been turned into an x.
+_TIMES = re.compile(
+    r"\b(" + "|".join(_DIGIT_WORDS) + r"|\d{1,3})[ \t-]*x(?=[ \t-]|$)",
+    re.IGNORECASE)
+
+
+def fix_spoken_letters(text: str) -> str:
+    """"drei Klein-X-Urinale." -> "drei x Urinale." -> "3x Urinale"."""
+    def letter(m: re.Match) -> str:
+        word, char = m.group(1).lower(), m.group(2)
+        return char.lower() if word.startswith("klein") else char.upper()
+    text = _SPOKEN_LETTER.sub(letter, text or "")
+
+    def times(m: re.Match) -> str:
+        word = m.group(1).lower()
+        return _DIGIT_WORDS.get(word, m.group(1)) + "x"
+    text = _TIMES.sub(times, text)
+    # "3x-Urinale" is not how a count is written - one space instead
+    return re.sub(r"(?<=\dx)-(?=[^\W\d_])", " ", text)
 
 
 def fix_dates(text: str) -> str:

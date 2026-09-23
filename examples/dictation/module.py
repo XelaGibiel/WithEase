@@ -5824,9 +5824,12 @@ class DictationModule(BaseModule):
             if self._active_mode != "command":
                 from postprocess import (fix_casing, fix_commas, fix_dates,
                                          fix_digit_sequences,
-                                         fix_question_marks)
+                                         fix_question_marks,
+                                         fix_spoken_letters)
                 # digits said one by one: "eins, acht, acht, sieben" -> 1887
                 text = fix_digit_sequences(text)
+                # a letter said with its case, and "drei x" as "3x"
+                text = fix_spoken_letters(text)
                 text = fix_casing(text)          # undo stray capitalisation
                 if not spoken_marks:      # the user sets them by voice
                     text = fix_question_marks(text)
